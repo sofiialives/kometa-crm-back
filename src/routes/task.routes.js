@@ -11,6 +11,5 @@ router.use(authenticate)
 router.get('/', validate(listTasksQuerySchema), taskController.listTasks)
 router.post('/', validate(createTaskSchema), taskController.createTask)
 router.patch('/:id/status', validate(updateTaskStatusSchema), taskController.updateTaskStatus)
-router.delete('/:id', taskController.deleteTask)
 
 export default router

@@ -1,6 +1,10 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 
+/**
+ * Наружу (списки, приглашение, обновление) никогда не отдаём
+ * passwordHash / googleId / resetCodeHash / resetCodeExpires.
+ */
 const PUBLIC_USER_SELECT = {
   id: true,
   name: true,
@@ -15,14 +19,33 @@ const PUBLIC_USER_SELECT = {
   updatedAt: true,
 }
 
-export async function listUsers({ departmentId } = {}) {
+/**
+ * lead всегда видит только свой отдел, даже если попробует передать
+ * чужой departmentId в query — иначе он мог бы вытянуть список
+ * сотрудников любого другого отдела компании через этот же эндпоинт.
+ * admin может фильтровать по любому отделу или смотреть всех.
+ */
+export async function listUsers({ departmentId } = {}, requestingUser) {
+  const where = {}
+  if (requestingUser?.role === 'lead') {
+    where.departmentId = requestingUser.departmentId
+  } else if (departmentId) {
+    where.departmentId = departmentId
+  }
+
   return prisma.user.findMany({
-    where: departmentId ? { departmentId } : {},
+    where,
     orderBy: { createdAt: 'desc' },
     select: PUBLIC_USER_SELECT,
   })
 }
 
+/**
+ * Приглашение: сначала должен существовать отдел (без него не
+ * приглашаем вообще). Роль выбирается для этого отдела, а должность —
+ * из списка должностей, которые в отделе уже завели заранее.
+ * Для lead должность всегда «Начальник отдела» и не зависит от списка.
+ */
 export async function inviteUser({ email, role, position, departmentId }) {
   const exists = await prisma.user.findUnique({ where: { email } })
   if (exists) throw ApiError.conflict('Пользователь с таким email уже приглашён')

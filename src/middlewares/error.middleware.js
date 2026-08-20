@@ -1,5 +1,5 @@
 import { ApiError } from '../utils/ApiError.js'
-import { normalizeError } from '../utils/httpError.js'
+import { normalizeError } from '../utils/httpErrors.js'
 import { env } from '../config/env.js'
 
 export function notFoundHandler(req, res, next) {
