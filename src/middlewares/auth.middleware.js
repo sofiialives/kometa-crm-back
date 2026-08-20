@@ -1,6 +1,6 @@
 import { verifyAccessToken } from '../utils/jwt.js'
 import { ApiError } from '../utils/ApiError.js'
-import { User } from '../models/User.js'
+import { prisma } from '../config/prisma.js'
 import { asyncHandler } from '../utils/asyncHandler.js'
 
 export const authenticate = asyncHandler(async (req, res, next) => {
@@ -15,14 +15,10 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     throw ApiError.unauthorized('Токен недействителен или истёк')
   }
 
-  const user = await User.findById(payload.sub)
+  const user = await prisma.user.findUnique({ where: { id: payload.sub } })
   if (!user || !user.active) throw ApiError.unauthorized('Доступ отозван')
 
-  req.user = {
-    id: user.id,
-    role: user.role,
-    departmentId: user.departmentId ? String(user.departmentId) : null,
-  }
+  req.user = { id: user.id, role: user.role, departmentId: user.departmentId }
   next()
 })
 

@@ -6,8 +6,8 @@ export const listUsers = asyncHandler(async (req, res) => {
   res.json(users)
 })
 
-export const createUser = asyncHandler(async (req, res) => {
-  const user = await userService.createUser(req.body)
+export const inviteUser = asyncHandler(async (req, res) => {
+  const user = await userService.inviteUser(req.body)
   res.status(201).json(user)
 })
 
@@ -17,6 +17,6 @@ export const updateUser = asyncHandler(async (req, res) => {
 })
 
 export const deactivateUser = asyncHandler(async (req, res) => {
-  const user = await userService.deactivateUser(req.params.id)
+  const user = await userService.deactivateUser(req.params.id, req.user.id)
   res.json(user)
 })

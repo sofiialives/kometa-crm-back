@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  admin
+  lead
+  staff
+}
+
+enum UserStatus {
+  invited
+  active
+}
+
+enum WorkStatus {
+  active
+  done
+  archived
+}
+
+enum TaskStatus {
+  today
+  progress
+  done
+}
+
+model User {
+  id               String      @id @default(cuid())
+  name             String      @default("")
+  email            String      @unique
+  passwordHash     String?
+  googleId         String?
+  avatarUrl        String?
+  role             Role        @default(staff)
+  position         String?
+
+  departmentId     String?
+  department       Department? @relation("DepartmentUsers", fields: [departmentId], references: [id])
+
+  status           UserStatus  @default(invited)
+  active           Boolean     @default(true)
+
+  resetCodeHash    String?
+  resetCodeExpires DateTime?
+
+  leadOf           Department? @relation("DepartmentLead")
+  createdWorks     Work[]      @relation("WorkCreatedBy")
+  assignedWorks    Work[]      @relation("WorkAssignees")
+  tasks            Task[]      @relation("TaskOwner")
+
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([departmentId])
+}
+
+model Department {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  positions String[] @default([])
+
+  leadId    String?  @unique
+  lead      User?    @relation("DepartmentLead", fields: [leadId], references: [id])
+
+  users     User[]   @relation("DepartmentUsers")
+  works     Work[]
+  tasks     Task[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Work {
+  id           String     @id @default(cuid())
+  clientName   String
+  title        String
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  createdById  String
+  createdBy    User       @relation("WorkCreatedBy", fields: [createdById], references: [id])
+  assignees    User[]     @relation("WorkAssignees")
+
+  status       WorkStatus @default(active)
+  tasks        Task[]
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([departmentId])
+}
+
+model Task {
+  id           String     @id @default(cuid())
+  title        String
+  deadline     DateTime
+
+  status       TaskStatus @default(today)
+  doneAt       DateTime?
+
+  ownerId      String
+  owner        User       @relation("TaskOwner", fields: [ownerId], references: [id])
+
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+
+  workId       String?
+  work         Work?      @relation(fields: [workId], references: [id])
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([ownerId, status])
+  @@index([departmentId, status])
+}

@@ -1,16 +1,22 @@
-import { Department } from '../models/Department.js'
+import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 
 export async function listDepartments() {
-  return Department.find().populate('leadId', 'name email')
+  return prisma.department.findMany({
+    include: { lead: { select: { id: true, name: true, email: true } } },
+  })
 }
 
-export async function createDepartment({ name, leadId }) {
-  return Department.create({ name, leadId: leadId || null })
+export async function createDepartment({ name, leadId, positions }) {
+  return prisma.department.create({
+    data: { name, leadId: leadId || null, positions: positions || [] },
+  })
 }
 
 export async function updateDepartment(id, patch) {
-  const dep = await Department.findByIdAndUpdate(id, patch, { new: true })
-  if (!dep) throw ApiError.notFound('Отдел не найден')
-  return dep
+  try {
+    return await prisma.department.update({ where: { id }, data: patch })
+  } catch {
+    throw ApiError.notFound('Отдел не найден')
+  }
 }

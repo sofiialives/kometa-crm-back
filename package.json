@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "seed:admin": "node src/scripts/seedAdmin.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@prisma/client": "^5.18.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
@@ -15,12 +19,13 @@
     "express": "^4.19.2",
     "google-auth-library": "^9.11.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.5.0",
     "morgan": "^1.10.0",
     "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.14",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "nodemon": "^3.1.4",
+    "prisma": "^5.18.0"
   }
 }
