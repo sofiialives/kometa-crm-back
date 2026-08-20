@@ -1,6 +1,6 @@
 import { asyncHandler } from '../utils/asyncHandler.js'
 import * as authService from '../services/auth.service.js'
-import { User } from '../models/User.js'
+import { prisma } from '../config/prisma.js'
 
 export const login = asyncHandler(async (req, res) => {
   const result = await authService.loginWithPassword(req.body)
@@ -12,6 +12,16 @@ export const loginGoogle = asyncHandler(async (req, res) => {
   res.json(result)
 })
 
+export const forgotPassword = asyncHandler(async (req, res) => {
+  await authService.requestPasswordReset(req.body.email)
+  res.json({ message: 'Если почта известна системе, код отправлен' })
+})
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const result = await authService.resetPassword(req.body)
+  res.json(result)
+})
+
 export const refresh = asyncHandler(async (req, res) => {
   const token = req.body.refreshToken || req.cookies?.refreshToken
   const result = await authService.refreshTokens(token)
@@ -19,8 +29,12 @@ export const refresh = asyncHandler(async (req, res) => {
 })
 
 export const me = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.id)
-  res.json({ id: user.id, name: user.name, email: user.email, role: user.role, departmentId: user.departmentId })
+  const user = await prisma.user.findUnique({ where: { id: req.user.id } })
+  res.json({
+    id: user.id, name: user.name, email: user.email,
+    role: user.role, position: user.position, departmentId: user.departmentId,
+    status: user.status, avatarUrl: user.avatarUrl,
+  })
 })
 
 export const logout = asyncHandler(async (req, res) => {
