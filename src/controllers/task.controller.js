@@ -15,8 +15,3 @@ export const updateTaskStatus = asyncHandler(async (req, res) => {
   const task = await taskService.updateTaskStatus(req.params.id, req.body.status, req.user)
   res.json(task)
 })
-
-export const deleteTask = asyncHandler(async (req, res) => {
-  await taskService.deleteTask(req.params.id, req.user)
-  res.status(204).send()
-})

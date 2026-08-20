@@ -100,6 +100,7 @@ model Work {
 model Task {
   id           String     @id @default(cuid())
   title        String
+  description  String?
   deadline     DateTime
 
   status       TaskStatus @default(today)
@@ -108,8 +109,8 @@ model Task {
   ownerId      String
   owner        User       @relation("TaskOwner", fields: [ownerId], references: [id])
 
-  departmentId String
-  department   Department @relation(fields: [departmentId], references: [id])
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
 
   workId       String?
   work         Work?      @relation(fields: [workId], references: [id])

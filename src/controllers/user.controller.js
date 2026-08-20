@@ -2,7 +2,7 @@ import { asyncHandler } from '../utils/asyncHandler.js'
 import * as userService from '../services/user.service.js'
 
 export const listUsers = asyncHandler(async (req, res) => {
-  const users = await userService.listUsers({ departmentId: req.query.departmentId })
+  const users = await userService.listUsers({ departmentId: req.query.departmentId }, req.user)
   res.json(users)
 })
 

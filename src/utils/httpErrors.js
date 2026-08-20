@@ -2,6 +2,14 @@ import { Prisma } from '@prisma/client'
 import jwt from 'jsonwebtoken'
 import { ApiError } from './ApiError.js'
 
+/**
+ * Единая точка, где «сырые» ошибки библиотек превращаются в понятные
+ * ApiError с человеческим текстом. Подключена в middlewares/error.middleware.js,
+ * поэтому работает для всего приложения сразу — сервисам не нужно оборачивать
+ * try/catch вручную под каждую операцию с базой или токеном.
+ *
+ * Чтобы научить хелпер новой ошибке — просто добавь ветку сюда.
+ */
 export function normalizeError(err) {
   if (err instanceof ApiError) return err
 
