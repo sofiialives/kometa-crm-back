@@ -28,3 +28,23 @@ export async function updateDepartment(id, patch) {
     throw ApiError.notFound('Отдел не найден')
   }
 }
+
+export async function deleteDepartment(id) {
+  const [memberCount, workCount] = await Promise.all([
+    prisma.user.count({ where: { departmentId: id, active: true } }),
+    prisma.work.count({ where: { departmentId: id } }),
+  ])
+
+  if (memberCount > 0) {
+    throw ApiError.badRequest('В отделе ещё есть сотрудники — переведите их в другой отдел или увольте, прежде чем удалять отдел')
+  }
+  if (workCount > 0) {
+    throw ApiError.badRequest('В отделе ещё есть работы — удалите или перенесите их, прежде чем удалять отдел')
+  }
+
+  try {
+    await prisma.department.delete({ where: { id } })
+  } catch {
+    throw ApiError.notFound('Отдел не найден')
+  }
+}

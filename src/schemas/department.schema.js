@@ -19,3 +19,7 @@ export const updateDepartmentSchema = z.object({
     positions: positionsArray.optional(),
   }),
 })
+
+export const departmentIdParamSchema = z.object({
+  params: z.object({ id: objectId }),
+})

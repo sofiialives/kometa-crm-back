@@ -12,3 +12,8 @@ export const createDepartment = asyncHandler(async (req, res) => {
 export const updateDepartment = asyncHandler(async (req, res) => {
   res.json(await departmentService.updateDepartment(req.params.id, req.body))
 })
+
+export const deleteDepartment = asyncHandler(async (req, res) => {
+  await departmentService.deleteDepartment(req.params.id)
+  res.status(204).send()
+})
