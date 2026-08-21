@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import { prisma } from '../config/prisma.js'
 
-const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL || 'admin@kometa.web3'
+const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL || 'yan993870@gmail.com'
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD || 'admin'
 
 async function run() {

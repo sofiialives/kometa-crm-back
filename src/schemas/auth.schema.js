@@ -33,3 +33,9 @@ export const resetPasswordSchema = z.object({
     newPassword: z.string().min(4),
   }),
 })
+
+export const updateMeSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(1).max(80),
+  }),
+})
