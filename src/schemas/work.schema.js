@@ -18,3 +18,7 @@ export const updateWorkSchema = z.object({
     status: z.enum(['active', 'done', 'archived']).optional(),
   }),
 })
+
+export const workIdParamSchema = z.object({
+  params: z.object({ id: objectId }),
+})

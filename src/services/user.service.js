@@ -25,8 +25,14 @@ const PUBLIC_USER_SELECT = {
  * сотрудников любого другого отдела компании через этот же эндпоинт.
  * admin может фильтровать по любому отделу или смотреть всех.
  */
+/**
+ * Уволенные (active: false) не возвращаются вообще — они должны
+ * исчезать из CRM, а не просто помечаться бейджем. История их задач
+ * не страдает: Task.owner подтягивается отдельным relation-запросом
+ * прямо на самой задаче, а не через этот список.
+ */
 export async function listUsers({ departmentId } = {}, requestingUser) {
-  const where = {}
+  const where = { active: true }
   if (requestingUser?.role === 'lead') {
     where.departmentId = requestingUser.departmentId
   } else if (departmentId) {
@@ -82,9 +88,33 @@ export async function inviteUser({ email, role, position, departmentId }) {
   })
 }
 
+/**
+ * При смене отдела/должности (перевод сотрудника через MoveUserModal)
+ * должность обязана входить в список должностей ЦЕЛЕВОГО отдела —
+ * та же проверка, что и при приглашении, иначе можно было бы сохранить
+ * произвольную строку в обход списка должностей.
+ */
 export async function updateUser(id, patch) {
   const data = { ...patch }
-  if (data.role === 'lead') data.position = 'Начальник отдела'
+
+  if (data.role === 'lead') {
+    data.position = 'Начальник отдела'
+  } else if (data.position !== undefined || data.departmentId !== undefined) {
+    const current = await prisma.user.findUnique({ where: { id } })
+    if (!current) throw ApiError.notFound('Пользователь не найден')
+
+    const targetDepartmentId = data.departmentId !== undefined ? data.departmentId : current.departmentId
+    const targetRole = data.role || current.role
+
+    if (targetRole !== 'lead' && data.position) {
+      if (!targetDepartmentId) throw ApiError.badRequest('Нельзя назначить должность без отдела')
+      const department = await prisma.department.findUnique({ where: { id: targetDepartmentId } })
+      if (!department) throw ApiError.badRequest('Отдел не найден')
+      if (!department.positions.includes(data.position)) {
+        throw ApiError.badRequest('Такой должности нет в списке этого отдела')
+      }
+    }
+  }
 
   try {
     return await prisma.user.update({ where: { id }, data, select: PUBLIC_USER_SELECT })

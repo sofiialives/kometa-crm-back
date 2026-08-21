@@ -37,6 +37,24 @@ export const me = asyncHandler(async (req, res) => {
   })
 })
 
+/**
+ * Единственное, что человек может поменять сам себе без прав админа —
+ * собственное имя. После первого входа бэк ставит только первую букву
+ * почты вместо имени, и без этого эндпоинта её нечем заменить —
+ * обычный PATCH /users/:id закрыт для всех, кроме админа.
+ */
+export const updateMe = asyncHandler(async (req, res) => {
+  const user = await prisma.user.update({
+    where: { id: req.user.id },
+    data: { name: req.body.name },
+  })
+  res.json({
+    id: user.id, name: user.name, email: user.email,
+    role: user.role, position: user.position, departmentId: user.departmentId,
+    status: user.status, avatarUrl: user.avatarUrl,
+  })
+})
+
 export const logout = asyncHandler(async (req, res) => {
   res.status(204).send()
 })

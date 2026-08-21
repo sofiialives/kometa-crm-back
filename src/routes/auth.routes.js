@@ -3,7 +3,7 @@ import { validate } from '../middlewares/validate.middleware.js'
 import { authenticate } from '../middlewares/auth.middleware.js'
 import {
   loginSchema, googleLoginSchema, refreshSchema,
-  forgotPasswordSchema, resetPasswordSchema,
+  forgotPasswordSchema, resetPasswordSchema, updateMeSchema,
 } from '../schemas/auth.schema.js'
 import * as authController from '../controllers/auth.controller.js'
 
@@ -16,5 +16,6 @@ router.post('/reset-password', validate(resetPasswordSchema), authController.res
 router.post('/refresh', validate(refreshSchema), authController.refresh)
 router.post('/logout', authController.logout)
 router.get('/me', authenticate, authController.me)
+router.patch('/me', authenticate, validate(updateMeSchema), authController.updateMe)
 
 export default router
