@@ -37,6 +37,7 @@ model User {
   passwordHash     String?
   googleId         String?
   avatarUrl        String?
+  avatarColor      String?
   role             Role        @default(staff)
   position         String?
 

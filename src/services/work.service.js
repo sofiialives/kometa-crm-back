@@ -2,13 +2,33 @@ import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 
 const WORK_INCLUDE = {
-  assignees: { select: { id: true, name: true, avatarUrl: true } },
+  assignees: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } },
   createdBy: { select: { id: true, name: true } },
 }
 
+/**
+ * lead и admin видят весь отдел (или всё, для admin), рядовой сотрудник —
+ * только те работы, где сам в исполнителях или у него там есть задача.
+ * Без этого staff мог получить полный список работ отдела прямо
+ * в ответе API, даже если интерфейс этого не показывал.
+ */
 export async function listWorksVisibleTo(user) {
-  const where = user.role === 'admin' ? {} : user.departmentId ? { departmentId: user.departmentId } : { id: '__none__' }
-  return prisma.work.findMany({ where, include: WORK_INCLUDE })
+  if (user.role === 'admin') {
+    return prisma.work.findMany({ include: WORK_INCLUDE })
+  }
+  if (!user.departmentId) return []
+
+  if (user.role === 'lead') {
+    return prisma.work.findMany({ where: { departmentId: user.departmentId }, include: WORK_INCLUDE })
+  }
+
+  return prisma.work.findMany({
+    where: {
+      departmentId: user.departmentId,
+      OR: [{ assignees: { some: { id: user.id } } }, { tasks: { some: { ownerId: user.id } } }],
+    },
+    include: WORK_INCLUDE,
+  })
 }
 
 export async function createWork({ clientName, title, departmentId, assignees, createdBy }) {
@@ -40,11 +60,6 @@ export async function updateWork(id, patch, user) {
   })
 }
 
-/**
- * Задачи работы не удаляем вместе с ней — отвязываем (workId: null),
- * чтобы у сотрудника не пропадала история того, что он делал, даже
- * если саму работу закрыли или удалили по ошибке в названии клиента.
- */
 export async function deleteWork(id, user) {
   const work = await prisma.work.findUnique({ where: { id } })
   if (!work) throw ApiError.notFound('Работа не найдена')

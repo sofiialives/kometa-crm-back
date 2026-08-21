@@ -54,15 +54,13 @@ export async function loginWithGoogle({ idToken }) {
   if (!user.googleId) patch.googleId = payload.sub
 
   if (user.status !== 'active') {
-    // Первый настоящий вход: имя-заглушку (первая буква почты) меняем
-    // на реальные имя и фото из Google.
+    // Только первый настоящий вход: имя-заглушку (первая буква почты)
+    // меняем на реальные имя и фото из Google. Дальше это уже личный
+    // выбор человека — если он потом уберёт фото или поставит цвет
+    // в настройках, повторный вход через Google не должен это стирать.
     patch.status = 'active'
     if (payload.name) patch.name = payload.name
     if (payload.picture) patch.avatarUrl = payload.picture
-  } else if (!user.avatarUrl && payload.picture) {
-    // Уже активен (например, первый вход был по паролю) — просто
-    // подтягиваем фото, если его ещё не было, имя не трогаем.
-    patch.avatarUrl = payload.picture
   }
 
   const updated = Object.keys(patch).length
@@ -138,6 +136,7 @@ function issueTokens(user) {
     departmentId: user.departmentId,
     status: user.status,
     avatarUrl: user.avatarUrl ?? null,
+    avatarColor: user.avatarColor ?? null,
   }
   return {
     user: publicUser,

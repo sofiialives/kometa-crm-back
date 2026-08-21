@@ -15,6 +15,7 @@ const PUBLIC_USER_SELECT = {
   status: true,
   active: true,
   avatarUrl: true,
+  avatarColor: true,
   createdAt: true,
   updatedAt: true,
 }

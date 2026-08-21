@@ -1,7 +1,7 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 
-const LEAD_SELECT = { id: true, name: true, email: true, avatarUrl: true, position: true }
+const LEAD_SELECT = { id: true, name: true, email: true, avatarUrl: true, avatarColor: true, position: true }
 
 export async function listDepartments() {
   return prisma.department.findMany({

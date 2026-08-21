@@ -35,7 +35,18 @@ export const resetPasswordSchema = z.object({
 })
 
 export const updateMeSchema = z.object({
+  body: z
+    .object({
+      name: z.string().trim().min(1).max(80).optional(),
+      avatarUrl: z.string().max(2_000_000).nullable().optional(),
+      avatarColor: z.string().trim().max(20).nullable().optional(),
+    })
+    .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
+})
+
+export const changePasswordSchema = z.object({
   body: z.object({
-    name: z.string().trim().min(1).max(80),
+    currentPassword: z.string().optional(),
+    newPassword: z.string().min(4),
   }),
 })

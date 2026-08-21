@@ -10,7 +10,9 @@ export function createApp() {
   const app = express()
 
   app.use(cors({ origin: env.clientUrl, credentials: true }))
-  app.use(express.json())
+  // Дефолтный лимит express.json() — 100kb, туда не влезет фото аватарки
+  // в виде base64 (храним прямо в avatarUrl, без внешнего хранилища файлов).
+  app.use(express.json({ limit: '3mb' }))
   app.use(cookieParser())
   app.use(morgan(env.nodeEnv === 'development' ? 'dev' : 'combined'))
 

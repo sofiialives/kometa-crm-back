@@ -1,7 +1,7 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 
-const OWNER_INCLUDE = { owner: { select: { id: true, name: true, avatarUrl: true } } }
+const OWNER_INCLUDE = { owner: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } } }
 
 export async function listTasksVisibleTo(user, { scope } = {}) {
   if (user.role === 'staff') {
