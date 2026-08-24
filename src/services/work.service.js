@@ -53,6 +53,11 @@ export async function updateWork(id, patch, user) {
   if (!work) throw ApiError.notFound('Работа не найдена')
   if (user.role !== 'admin' && work.departmentId !== user.departmentId) throw ApiError.forbidden()
 
+  if (patch.clientId) {
+    const client = await prisma.client.findUnique({ where: { id: patch.clientId } })
+    if (!client) throw ApiError.badRequest('Клиент не найден — выберите из списка')
+  }
+
   const { assignees, ...rest } = patch
   return prisma.work.update({
     where: { id },

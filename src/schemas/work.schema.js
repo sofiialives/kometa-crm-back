@@ -14,6 +14,7 @@ export const updateWorkSchema = z.object({
   params: z.object({ id: objectId }),
   body: z.object({
     title: z.string().min(1).optional(),
+    clientId: objectId.optional(),
     assignees: z.array(objectId).optional(),
     status: z.enum(['active', 'done', 'archived']).optional(),
   }),
