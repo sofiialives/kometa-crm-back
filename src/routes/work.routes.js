@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { validate } from '../middlewares/validate.middleware.js'
 import { authenticate, authorize } from '../middlewares/auth.middleware.js'
-import { createWorkSchema, updateWorkSchema, workIdParamSchema, deleteClientSchema } from '../schemas/work.schema.js'
+import { createWorkSchema, updateWorkSchema, workIdParamSchema } from '../schemas/work.schema.js'
 import * as workController from '../controllers/work.controller.js'
 
 const router = Router()
@@ -11,7 +11,6 @@ router.use(authenticate)
 router.get('/', workController.listWorks)
 router.post('/', authorize('admin', 'lead'), validate(createWorkSchema), workController.createWork)
 router.patch('/:id', authorize('admin', 'lead'), validate(updateWorkSchema), workController.updateWork)
-router.delete('/client/:clientName', authorize('admin'), validate(deleteClientSchema), workController.deleteClient)
 router.delete('/:id', authorize('admin', 'lead'), validate(workIdParamSchema), workController.deleteWork)
 
 export default router

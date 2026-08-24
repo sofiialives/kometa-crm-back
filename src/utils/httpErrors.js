@@ -18,7 +18,9 @@ export function normalizeError(err) {
   }
 
   if (err instanceof Prisma.PrismaClientValidationError) {
-    return ApiError.badRequest('Некорректные данные для запроса к базе')
+    return ApiError.badRequest('Некорректные данные для запроса к базе', {
+      prismaMessage: cleanPrismaMessage(err.message),
+    })
   }
 
   if (err instanceof Prisma.PrismaClientInitializationError) {
@@ -46,5 +48,17 @@ const PRISMA_CODE_MESSAGES = {
 function fromPrismaKnownError(err) {
   const message = PRISMA_CODE_MESSAGES[err.code] || `Ошибка базы данных (${err.code})`
   const status = err.code === 'P2025' ? 404 : err.code === 'P2002' ? 409 : 400
-  return new ApiError(status, message, { prismaCode: err.code })
+  return new ApiError(status, message, { prismaCode: err.code, prismaMessage: cleanPrismaMessage(err.message) })
+}
+
+/**
+ * Сообщения PrismaClientValidationError — это огромный отформатированный
+ * блок с ASCII-стрелками на несуществующее/неверное поле. Вытаскиваем
+ * последнюю непустую строку — там обычно и есть суть ("Argument `x` is
+ * missing", "Unknown argument `y`" и т.п.) — чтобы не заваливать ответ
+ * портянкой текста.
+ */
+function cleanPrismaMessage(message) {
+  const lines = message.split('\n').map((l) => l.trim()).filter(Boolean)
+  return lines[lines.length - 1] || message
 }

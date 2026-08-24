@@ -2,6 +2,7 @@ import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 
 const WORK_INCLUDE = {
+  client: { select: { id: true, name: true } },
   assignees: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } },
   createdBy: { select: { id: true, name: true } },
 }
@@ -31,10 +32,13 @@ export async function listWorksVisibleTo(user) {
   })
 }
 
-export async function createWork({ clientName, title, departmentId, assignees, createdBy }) {
+export async function createWork({ clientId, title, departmentId, assignees, createdBy }) {
+  const client = await prisma.client.findUnique({ where: { id: clientId } })
+  if (!client) throw ApiError.badRequest('Клиент не найден — выберите из списка')
+
   return prisma.work.create({
     data: {
-      clientName,
+      clientId,
       title,
       departmentId,
       createdById: createdBy,
@@ -67,24 +71,4 @@ export async function deleteWork(id, user) {
 
   await prisma.task.updateMany({ where: { workId: id }, data: { workId: null } })
   await prisma.work.delete({ where: { id } })
-}
-
-/**
- * Клиент как отдельная сущность в базе не хранится — это просто
- * повторяющееся clientName внутри Work. «Удалить клиента» значит удалить
- * все его работы разом (тем же способом, что deleteWork — задачи не
- * удаляются, а отвязываются). Доступно только админу, не lead: клиент
- * может иметь работы в разных отделах одновременно.
- */
-export async function deleteClient(clientName, user) {
-  if (user.role !== 'admin') throw ApiError.forbidden('Удалять клиентов может только админ')
-
-  const works = await prisma.work.findMany({ where: { clientName } })
-  if (works.length === 0) throw ApiError.notFound('Клиент не найден')
-
-  const workIds = works.map((w) => w.id)
-  await prisma.task.updateMany({ where: { workId: { in: workIds } }, data: { workId: null } })
-  await prisma.work.deleteMany({ where: { id: { in: workIds } } })
-
-  return { deletedWorks: workIds.length }
 }

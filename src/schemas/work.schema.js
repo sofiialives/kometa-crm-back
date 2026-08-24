@@ -3,7 +3,7 @@ import { objectId } from './common.js'
 
 export const createWorkSchema = z.object({
   body: z.object({
-    clientName: z.string().min(1),
+    clientId: objectId,
     title: z.string().min(1),
     departmentId: objectId,
     assignees: z.array(objectId).default([]),
@@ -21,8 +21,4 @@ export const updateWorkSchema = z.object({
 
 export const workIdParamSchema = z.object({
   params: z.object({ id: objectId }),
-})
-
-export const deleteClientSchema = z.object({
-  params: z.object({ clientName: z.string().min(1) }),
 })

@@ -9,6 +9,7 @@ export function notFoundHandler(req, res, next) {
 export function errorHandler(err, req, res, next) {
   const normalized = normalizeError(err)
   const status = normalized instanceof ApiError ? normalized.status : 500
+  const wasRaw = !(err instanceof ApiError) // пришло из Prisma/JWT/т.п., не наш осознанный throw
 
   const message =
     normalized instanceof ApiError
@@ -17,7 +18,13 @@ export function errorHandler(err, req, res, next) {
         ? err.message || 'Внутренняя ошибка сервера'
         : 'Внутренняя ошибка сервера'
 
-  if (status === 500) console.error(err)
+  // 500 — всегда в консоль. Но и "сырые" ошибки, которые мы на лету
+  // превратили в 400/404 и т.п., тоже стоит видеть в терминале в dev —
+  // иначе единственный след останется в morgan-логе одной строкой без
+  // деталей, и разбираться придётся вслепую.
+  if (status === 500 || (wasRaw && env.nodeEnv === 'development')) {
+    console.error(err)
+  }
 
   res.status(status).json({
     error: {

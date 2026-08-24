@@ -83,9 +83,17 @@ model Department {
   updatedAt DateTime @updatedAt
 }
 
+model Client {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  works     Work[]
+}
+
 model Work {
   id           String     @id @default(cuid())
-  clientName   String
+  clientId     String
+  client       Client     @relation(fields: [clientId], references: [id])
   title        String
 
   departmentId String
@@ -102,6 +110,7 @@ model Work {
   updatedAt    DateTime   @updatedAt
 
   @@index([departmentId])
+  @@index([clientId])
 }
 
 model Task {
