@@ -18,3 +18,8 @@ export const deleteWork = asyncHandler(async (req, res) => {
   await workService.deleteWork(req.params.id, req.user)
   res.status(204).send()
 })
+
+export const deleteClient = asyncHandler(async (req, res) => {
+  const result = await workService.deleteClient(req.params.clientName, req.user)
+  res.json(result)
+})

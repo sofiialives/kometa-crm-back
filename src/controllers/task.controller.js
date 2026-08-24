@@ -2,13 +2,18 @@ import { asyncHandler } from '../utils/asyncHandler.js'
 import * as taskService from '../services/task.service.js'
 
 export const listTasks = asyncHandler(async (req, res) => {
-  const tasks = await taskService.listTasksVisibleTo(req.user, { scope: req.query.scope })
+  const tasks = await taskService.listTasksVisibleTo(req.user, {
+    scope: req.query.scope,
+    standalone: req.query.standalone,
+  })
   res.json(tasks.map((t) => ({ ...t, overdue: taskService.isOverdue(t) })))
 })
 
 export const createTask = asyncHandler(async (req, res) => {
-  const task = await taskService.createTask({ ...req.body, user: req.user })
-  res.status(201).json(task)
+  // createTask всегда возвращает массив — даже когда задача одна (себе):
+  // так фронту не нужно разбирать два разных формата ответа.
+  const tasks = await taskService.createTask({ ...req.body, user: req.user })
+  res.status(201).json(tasks)
 })
 
 export const updateTaskStatus = asyncHandler(async (req, res) => {

@@ -7,7 +7,10 @@ export const env = {
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET || 'dev-access-secret',
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret',
   accessTokenTtl: '15m',
-  refreshTokenTtl: '30d',
+  // "Никогда" в вечном смысле для JWT технически не бывает (иначе украденный
+  // токен нельзя было бы обесценить), но 400 дней — это фактически "выходишь
+  // только по кнопке «Выйти»" для внутреннего инструмента команды.
+  refreshTokenTtl: '400d',
 
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',

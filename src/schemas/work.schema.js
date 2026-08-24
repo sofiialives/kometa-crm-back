@@ -22,3 +22,7 @@ export const updateWorkSchema = z.object({
 export const workIdParamSchema = z.object({
   params: z.object({ id: objectId }),
 })
+
+export const deleteClientSchema = z.object({
+  params: z.object({ clientName: z.string().min(1) }),
+})

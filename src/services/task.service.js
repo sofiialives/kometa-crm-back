@@ -3,40 +3,61 @@ import { ApiError } from '../utils/ApiError.js'
 
 const OWNER_INCLUDE = { owner: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } } }
 
-export async function listTasksVisibleTo(user, { scope } = {}) {
+/**
+ * standalone: true — только задачи без привязки к работе из Иерархии.
+ * Личная доска «Задачи» всегда просит именно так: то, что придумали
+ * в Иерархии, туда не должно долетать никогда, даже себе.
+ */
+export async function listTasksVisibleTo(user, { scope, standalone } = {}) {
+  const workFilter = standalone === 'true' ? { workId: null } : {}
+
   if (user.role === 'staff') {
-    return prisma.task.findMany({ where: { ownerId: user.id }, orderBy: { deadline: 'asc' }, include: OWNER_INCLUDE })
+    return prisma.task.findMany({
+      where: { ownerId: user.id, ...workFilter },
+      orderBy: { deadline: 'asc' },
+      include: OWNER_INCLUDE,
+    })
   }
   if (user.role === 'lead') {
     return prisma.task.findMany({
-      where: { departmentId: user.departmentId },
+      where: { departmentId: user.departmentId, ...workFilter },
       orderBy: { deadline: 'asc' },
       include: OWNER_INCLUDE,
     })
   }
 
   if (scope === 'mine') {
-    return prisma.task.findMany({ where: { ownerId: user.id }, orderBy: { deadline: 'asc' }, include: OWNER_INCLUDE })
-  }
-  if (scope === 'department') {
     return prisma.task.findMany({
-      where: { departmentId: user.departmentId },
+      where: { ownerId: user.id, ...workFilter },
       orderBy: { deadline: 'asc' },
       include: OWNER_INCLUDE,
     })
   }
-  return prisma.task.findMany({ orderBy: { deadline: 'asc' }, include: OWNER_INCLUDE })
+  if (scope === 'department') {
+    return prisma.task.findMany({
+      where: { departmentId: user.departmentId, ...workFilter },
+      orderBy: { deadline: 'asc' },
+      include: OWNER_INCLUDE,
+    })
+  }
+  return prisma.task.findMany({ where: workFilter, orderBy: { deadline: 'asc' }, include: OWNER_INCLUDE })
 }
 
 /**
  * Обычно каждый пишет задачи только себе (доска «Задачи» так и делает —
- * ownerId с фронта не приходит вообще). Но в Иерархии главный отдела или
- * админ прикрепляют задачу конкретному исполнителю работы — для этого
- * ownerId можно передать явно, с проверками: staff назначать не может
- * вообще, lead — только своему отделу, admin — кому угодно.
- * departmentId у задачи в этом случае берётся от ОТДЕЛА ВЛАДЕЛЬЦА,
- * не от того, кто создаёт — иначе lead-фильтр видимости не найдёт
- * задачу у самого исполнителя.
+ * ownerIds с фронта не приходит вообще). Но в Иерархии главный отдела
+ * или админ прикрепляют задачу сразу нескольким исполнителям работы —
+ * ownerIds можно передать массивом, с проверками: staff назначать не
+ * может вообще, lead — только своему отделу, admin — кому угодно.
+ *
+ * На каждого исполнителя создаётся отдельная строка задачи (не одна
+ * общая на всех) — так у каждого своя независимая колонка/статус/готово,
+ * и правило «статус меняет только сам владелец» не ломается на общей
+ * задаче с непонятно чьим прогрессом.
+ *
+ * departmentId у задачи берётся от ОТДЕЛА ВЛАДЕЛЬЦА, не от того, кто
+ * создаёт — иначе lead-фильтр видимости не найдёт задачу у самого
+ * исполнителя.
  *
  * Задачи с workId (то есть созданные из Иерархии) пишут только lead
  * и admin — даже себе. Сотрудник добавляет себе задачи только через
@@ -44,51 +65,63 @@ export async function listTasksVisibleTo(user, { scope } = {}) {
  * создания вообще, и на уровне API это тоже запрещено, а не только
  * спрятано в интерфейсе.
  */
-export async function createTask({ title, description, deadline, workId, ownerId, user }) {
+export async function createTask({ title, description, deadline, workId, ownerIds, priority, user }) {
   if (workId && user.role === 'staff') {
     throw ApiError.forbidden('Задачи по работам создаёт только главный отдела или админ')
   }
-  if (workId && user.role === 'admin' && (!ownerId || ownerId === user.id)) {
+
+  const ids = ownerIds && ownerIds.length > 0 ? [...new Set(ownerIds)] : [user.id]
+
+  if (workId && user.role === 'admin' && ids.includes(user.id)) {
     throw ApiError.badRequest('Админ не может назначить задачу по работе на себя — выберите сотрудника')
   }
 
-  let finalOwnerId = user.id
-  let departmentId = user.departmentId ?? null
+  const targets = []
+  for (const id of ids) {
+    if (id === user.id) {
+      targets.push({ ownerId: user.id, departmentId: user.departmentId ?? null })
+      continue
+    }
 
-  if (ownerId && ownerId !== user.id) {
     if (user.role === 'staff') {
       throw ApiError.forbidden('Сотрудник может создавать задачи только себе')
     }
 
-    const owner = await prisma.user.findUnique({ where: { id: ownerId } })
+    const owner = await prisma.user.findUnique({ where: { id } })
     if (!owner || !owner.active) throw ApiError.badRequest('Сотрудник не найден')
 
     if (user.role === 'lead' && owner.departmentId !== user.departmentId) {
       throw ApiError.forbidden('Можно назначать задачи только сотрудникам своего отдела')
     }
 
-    finalOwnerId = ownerId
-    departmentId = owner.departmentId
+    targets.push({ ownerId: id, departmentId: owner.departmentId })
   }
 
-  return prisma.task.create({
-    data: {
-      title,
-      description: description || null,
-      deadline,
-      workId: workId || null,
-      ownerId: finalOwnerId,
-      departmentId,
-    },
-    include: OWNER_INCLUDE,
-  })
+  const created = await prisma.$transaction(
+    targets.map((t) =>
+      prisma.task.create({
+        data: {
+          title,
+          description: description || null,
+          deadline,
+          priority: priority || 'medium',
+          workId: workId || null,
+          ownerId: t.ownerId,
+          departmentId: t.departmentId,
+        },
+        include: OWNER_INCLUDE,
+      }),
+    ),
+  )
+
+  return created
 }
 
 /**
- * Название и описание правят только те, кто управляет отделом задачи —
- * lead своего отдела или admin. Сам автор (staff) текст своей задачи
- * менять по-прежнему не может — это осталось только у руководителей,
- * и относится в первую очередь к задачам из Иерархии.
+ * Название, описание и приоритет правят только те, кто управляет
+ * отделом задачи — lead своего отдела или admin. Сам автор (staff)
+ * текст своей задачи менять по-прежнему не может — это осталось только
+ * у руководителей, и относится в первую очередь к задачам из Иерархии.
  */
 export async function editTask(id, patch, user) {
   const task = await prisma.task.findUnique({ where: { id } })
@@ -102,16 +135,12 @@ export async function editTask(id, patch, user) {
     data: {
       ...(patch.title !== undefined ? { title: patch.title } : {}),
       ...(patch.description !== undefined ? { description: patch.description || null } : {}),
+      ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
     },
     include: OWNER_INCLUDE,
   })
 }
 
-/**
- * Разрешено только менять статус (перетаскивание по колонкам).
- * Готово — финальный статус: обратно в работу вернуть нельзя, даже
- * прямым запросом к API в обход интерфейса.
- */
 /**
  * Статус меняет только сам автор задачи. Admin и lead видят чужие
  * задачи (весь отдел / всё), но переставлять их по колонкам не могут —
