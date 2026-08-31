@@ -4,12 +4,20 @@ import { ApiError } from '../utils/ApiError.js'
 const OWNER_INCLUDE = { owner: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } } }
 
 /**
- * standalone: true — только задачи без привязки к работе из Иерархии.
- * Личная доска «Задачи» всегда просит именно так: то, что придумали
- * в Иерархии, туда не должно долетать никогда, даже себе.
+ * standalone: true — только личные задачи (origin='personal'), от живых
+ * (active) сотрудников. Раньше фильтровали по workId:null, но это поле
+ * специально обнуляется при удалении работы/клиента — и задача из
+ * Иерархии после такого удаления начинала выглядеть как личная и
+ * протекала в Задачник. origin ставится один раз при создании и больше
+ * никогда не трогается, так что на него можно полагаться всегда.
+ *
+ * owner.active:true — задачи уволенных сотрудников не должны мозолить
+ * глаза в чужом Задачнике по вкладкам отдела. В Иерархии/Админке они
+ * по-прежнему видны — это разные фильтры и разная задача (там нужна
+ * история, а не текучка на сегодня).
  */
 export async function listTasksVisibleTo(user, { scope, standalone } = {}) {
-  const workFilter = standalone === 'true' ? { workId: null } : {}
+  const workFilter = standalone === 'true' ? { origin: 'personal', owner: { active: true } } : {}
 
   if (user.role === 'staff') {
     return prisma.task.findMany({
@@ -106,6 +114,9 @@ export async function createTask({ title, description, deadline, workId, ownerId
           deadline,
           priority: priority || 'medium',
           workId: workId || null,
+          // Ставится один раз при создании и больше никогда не меняется —
+          // даже если workId потом обнулят при удалении работы/клиента.
+          origin: workId ? 'hierarchy' : 'personal',
           ownerId: t.ownerId,
           departmentId: t.departmentId,
         },

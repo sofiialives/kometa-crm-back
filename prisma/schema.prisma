@@ -36,6 +36,11 @@ enum TaskPriority {
   high
 }
 
+enum TaskOrigin {
+  personal
+  hierarchy
+}
+
 model User {
   id               String      @id @default(cuid())
   name             String      @default("")
@@ -121,6 +126,13 @@ model Task {
 
   status       TaskStatus @default(today)
   priority     TaskPriority @default(medium)
+  // Проставляется ОДИН РАЗ при создании и больше никогда не меняется —
+  // даже когда work.service.js/client.service.js обнуляют workId при
+  // удалении работы/клиента (это делается специально, чтобы не терять
+  // историю задач). Без этого поля задача из Иерархии после удаления её
+  // работы становится неотличима от обычной личной и протекает в
+  // Задачник — ровно так и произошло на бою.
+  origin       TaskOrigin @default(personal)
   doneAt       DateTime?
 
   ownerId      String
