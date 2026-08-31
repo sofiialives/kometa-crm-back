@@ -65,6 +65,7 @@ model User {
   createdWorks     Work[]      @relation("WorkCreatedBy")
   assignedWorks    Work[]      @relation("WorkAssignees")
   tasks            Task[]      @relation("TaskOwner")
+  taskStat         UserTaskStat?
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -116,6 +117,14 @@ model Work {
 
   @@index([departmentId])
   @@index([clientId])
+}
+
+model UserTaskStat {
+  userId       String   @id
+  user         User     @relation(fields: [userId], references: [id])
+  doneCount    Int      @default(0)
+  overdueCount Int      @default(0)
+  updatedAt    DateTime @updatedAt
 }
 
 model Task {
