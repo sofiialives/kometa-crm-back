@@ -130,3 +130,13 @@ export async function deactivateUser(id, currentUserId) {
   }
   return updateUser(id, { active: false, departmentId: null, role: 'staff', position: null })
 }
+
+/**
+ * Копилка, которую ночная чистка Задачника (clearFinishedTasks.job.js)
+ * пополняет перед тем, как удалить готовые/просроченные задачи. Отдаём
+ * как есть — сколько накопилось у кого. Сегодняшние ещё не удалённые
+ * задачи сюда не входят, их фронт досчитывает сам из текущего списка.
+ */
+export async function listTaskStats() {
+  return prisma.userTaskStat.findMany()
+}

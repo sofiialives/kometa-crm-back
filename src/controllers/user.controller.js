@@ -20,3 +20,7 @@ export const deactivateUser = asyncHandler(async (req, res) => {
   const user = await userService.deactivateUser(req.params.id, req.user.id)
   res.json(user)
 })
+
+export const listTaskStats = asyncHandler(async (req, res) => {
+  res.json(await userService.listTaskStats())
+})

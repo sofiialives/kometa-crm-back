@@ -15,6 +15,12 @@ async function bumpStat(field, tasks) {
 }
 
 export function scheduleClearFinishedTasks() {
+  // timezone: 'Europe/Moscow' — без этого node-cron берёт часовой пояс
+  // СЕРВЕРА (на Render это обычно UTC), а не Москвы. "0 0 * * *" без
+  // явного пояса срабатывал в полночь по UTC — то есть в 3 часа ночи
+  // по Москве, хотя весь остальной интерфейс показывает время как МСК.
+  const TZ = { timezone: 'Europe/Moscow' }
+
   cron.schedule('0 0 * * *', async () => {
     const doneTasks = await prisma.task.findMany({
       where: { status: 'done', origin: 'personal', owner: { role: { not: 'admin' } } },
@@ -26,7 +32,7 @@ export function scheduleClearFinishedTasks() {
       where: { status: 'done', origin: 'personal', owner: { role: { not: 'admin' } } },
     })
     console.log('[cron] удалено выполненных задач за день:', res.count)
-  })
+  }, TZ)
 
   cron.schedule('0 0 * * *', async () => {
     const overdueTasks = await prisma.task.findMany({
@@ -49,5 +55,5 @@ export function scheduleClearFinishedTasks() {
       },
     })
     console.log('[cron] удалено просроченных незакрытых задач:', res.count)
-  })
+  }, TZ)
 }
