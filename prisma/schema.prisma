@@ -65,6 +65,7 @@ model User {
   createdWorks     Work[]      @relation("WorkCreatedBy")
   assignedWorks    Work[]      @relation("WorkAssignees")
   tasks            Task[]      @relation("TaskOwner")
+  calls            Call[]      @relation("CallOwner")
   taskStat         UserTaskStat?
 
   createdAt        DateTime    @default(now())
@@ -84,6 +85,7 @@ model Department {
   users     User[]   @relation("DepartmentUsers")
   works     Work[]
   tasks     Task[]
+  calls     Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -158,4 +160,35 @@ model Task {
 
   @@index([ownerId, status])
   @@index([departmentId, status])
+}
+
+// Звонок в календаре. Живёт рядом с Task, но намеренно отдельной моделью:
+// у звонка нет колонок/статусов доски, а есть только момент времени, и
+// смешивать их в одну таблицу значило бы тащить в задачи лишние поля.
+//
+// Прошедшие звонки удаляет ночная уборка (clearPastCalls.job.js) — по той
+// же логике, что и просроченные задачи. Отдельного поля «прошёл» нет
+// специально: это не состояние, а сравнение scheduledAt с текущим
+// временем, и хранить его значило бы держать в базе то, что протухает
+// каждую минуту.
+model Call {
+  id           String      @id @default(cuid())
+  title        String
+  note         String?
+  scheduledAt  DateTime
+
+  ownerId      String
+  owner        User        @relation("CallOwner", fields: [ownerId], references: [id])
+
+  // Берётся от отдела владельца в момент создания — по нему главный видит
+  // свой отдел, а админ группирует «Все звонки». У админа отдела нет,
+  // поэтому поле необязательное.
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@index([ownerId, scheduledAt])
+  @@index([departmentId, scheduledAt])
 }

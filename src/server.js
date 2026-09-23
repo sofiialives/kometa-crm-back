@@ -2,10 +2,12 @@ import { createApp } from './app.js'
 import { connectDb } from './config/db.js'
 import { env } from './config/env.js'
 import { scheduleClearFinishedTasks } from './jobs/clearFinishedTasks.job.js'
+import { scheduleClearPastCalls } from './jobs/clearPastCalls.job.js'
 
 async function bootstrap() {
   await connectDb()
   scheduleClearFinishedTasks()
+  scheduleClearPastCalls()
 
   const app = createApp()
   app.listen(env.port, () => {
