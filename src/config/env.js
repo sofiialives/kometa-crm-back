@@ -23,6 +23,14 @@ export const env = {
   // бот — переопределяется переменной, код трогать не нужно.
   telegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || 'kometa_agent_bot',
 
+  // Токен бота напоминаний. Пока не задан, бот просто не запускается —
+  // остальной сервер работает как обычно. Так локальная разработка и
+  // любое окружение без токена не падают на старте.
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+
+  // За сколько минут до звонка предупреждать.
+  remindBeforeMin: Number(process.env.REMIND_BEFORE_MIN) || 15,
+
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT) || 587,
