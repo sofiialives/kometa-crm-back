@@ -16,6 +16,10 @@ export const env = {
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
   nodeEnv: process.env.NODE_ENV || 'development',
 
+  // Имя бота напоминаний — нужно, чтобы собрать ссылку вида
+  // t.me/<бот>?start=<код>. Не секрет: его и так видно в телеграме.
+  telegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || '',
+
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT) || 587,

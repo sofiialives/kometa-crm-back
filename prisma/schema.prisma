@@ -67,6 +67,7 @@ model User {
   tasks            Task[]      @relation("TaskOwner")
   calls            Call[]      @relation("CallOwner")
   callsJoined      Call[]      @relation("CallParticipants")
+  telegram         TelegramLink?
   taskStat         UserTaskStat?
 
   createdAt        DateTime    @default(now())
@@ -198,4 +199,30 @@ model Call {
 
   @@index([ownerId, scheduledAt])
   @@index([departmentId, scheduledAt])
+}
+
+// Связка сотрудника с его телеграмом. Нужна боту напоминаний: телеграм
+// отдаёт ему только @ник и id чата, а общего признака с CRM у них нет,
+// поэтому связь один раз устанавливается через кнопку в настройках.
+//
+// Как это работает: человек жмёт «Подключить телеграм», CRM кладёт сюда
+// одноразовый код, человек открывает по ссылке бота и нажимает Start,
+// бот находит строку по коду и вписывает chatId. Подделать нельзя —
+// код выдаётся тому, кто уже вошёл в CRM под собой.
+//
+// Пишет в эту таблицу и CRM (код), и бот (chatId). Это единственное
+// место, где бот что-то меняет: во всём остальном он только читает.
+model TelegramLink {
+  userId        String    @id
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Живёт минуты и гаснет после использования, поэтому обнуляемый.
+  code          String?   @unique
+  codeExpiresAt DateTime?
+
+  chatId        String?
+  username      String?
+  linkedAt      DateTime?
+
+  updatedAt     DateTime  @updatedAt
 }
