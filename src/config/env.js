@@ -18,7 +18,10 @@ export const env = {
 
   // Имя бота напоминаний — нужно, чтобы собрать ссылку вида
   // t.me/<бот>?start=<код>. Не секрет: его и так видно в телеграме.
-  telegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || '',
+  // Значение по умолчанию — чтобы кнопка в настройках заработала сразу
+  // после выката, без отдельного похода в переменные окружения. Сменится
+  // бот — переопределяется переменной, код трогать не нужно.
+  telegramBotUsername: process.env.TELEGRAM_BOT_USERNAME || 'kometa_agent_bot',
 
   smtp: {
     host: process.env.SMTP_HOST || '',
