@@ -29,5 +29,8 @@
   "devDependencies": {
     "nodemon": "^3.1.4",
     "prisma": "^5.18.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }
