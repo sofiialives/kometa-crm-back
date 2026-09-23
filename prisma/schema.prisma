@@ -66,6 +66,7 @@ model User {
   assignedWorks    Work[]      @relation("WorkAssignees")
   tasks            Task[]      @relation("TaskOwner")
   calls            Call[]      @relation("CallOwner")
+  callsJoined      Call[]      @relation("CallParticipants")
   taskStat         UserTaskStat?
 
   createdAt        DateTime    @default(now())
@@ -177,8 +178,14 @@ model Call {
   note         String?
   scheduledAt  DateTime
 
+  // Организатор. Он в контакте с клиентом, поэтому только он меняет
+  // время и состав — участники карточку видят, но не трогают.
   ownerId      String
   owner        User        @relation("CallOwner", fields: [ownerId], references: [id])
+
+  // Остальные, кого позвали на звонок. Карточка одна на всех и
+  // показывается в календаре у каждого — как приглашение в календаре.
+  participants User[]      @relation("CallParticipants")
 
   // Берётся от отдела владельца в момент создания — по нему главный видит
   // свой отдел, а админ группирует «Все звонки». У админа отдела нет,

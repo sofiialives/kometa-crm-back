@@ -2,7 +2,7 @@ import { asyncHandler } from '../utils/asyncHandler.js'
 import * as callService from '../services/call.service.js'
 
 export const listCalls = asyncHandler(async (req, res) => {
-  const calls = await callService.listCallsVisibleTo(req.user, { scope: req.query.scope })
+  const calls = await callService.listCallsVisibleTo(req.user, { scope: req.query.scope, departmentId: req.query.departmentId })
   res.json(calls)
 })
 
