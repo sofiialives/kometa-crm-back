@@ -24,6 +24,13 @@ services:
         value: admin
       - key: GOOGLE_CLIENT_ID
         sync: false
+      # Токен бота напоминаний от @BotFather. Задаётся в панели Render,
+      # в репозиторий не попадает. Пока не задан — бот не запускается,
+      # остальной сервер работает как обычно.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_USERNAME
+        value: kometa_agent_bot
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
