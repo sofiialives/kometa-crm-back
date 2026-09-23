@@ -10,6 +10,7 @@ router.use(authenticate)
 
 router.get('/', authorize('admin', 'lead'), userController.listUsers)
 router.get('/task-stats', authorize('admin'), userController.listTaskStats)
+router.get('/directory', userController.listDirectory)
 router.post('/', authorize('admin'), validate(inviteUserSchema), userController.inviteUser)
 router.patch('/:id', authorize('admin'), validate(updateUserSchema), userController.updateUser)
 router.post('/:id/deactivate', authorize('admin'), validate(userIdParamSchema), userController.deactivateUser)

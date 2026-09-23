@@ -140,3 +140,29 @@ export async function deactivateUser(id, currentUserId) {
 export async function listTaskStats() {
   return prisma.userTaskStat.findMany()
 }
+
+/**
+ * Короткий справочник сотрудников для выбора участников звонка.
+ *
+ * Отдельно от listUsers намеренно. Тот отдаёт почты, роли и статусы и
+ * закрыт за authorize('admin','lead'), а главному вдобавок показывает
+ * только его отдел. Для звонков нужно обратное: любой вошедший должен
+ * видеть всех, потому что позвать на созвон можно кого угодно — но
+ * видеть при этом только имя, аватар и отдел, без личных данных.
+ */
+const DIRECTORY_SELECT = {
+  id: true,
+  name: true,
+  avatarUrl: true,
+  avatarColor: true,
+  departmentId: true,
+  department: { select: { id: true, name: true } },
+}
+
+export async function listDirectory() {
+  return prisma.user.findMany({
+    where: { active: true },
+    orderBy: [{ name: 'asc' }],
+    select: DIRECTORY_SELECT,
+  })
+}
