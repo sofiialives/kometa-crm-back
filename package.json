@@ -2,6 +2,9 @@
   "name": "kometa-crm-backend",
   "private": true,
   "version": "0.1.0",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
@@ -13,6 +16,7 @@
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1139.0",
     "@prisma/client": "^5.18.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
@@ -22,8 +26,10 @@
     "google-auth-library": "^9.11.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "multer": "^2.4.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.14",
+    "unpdf": "^1.8.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
