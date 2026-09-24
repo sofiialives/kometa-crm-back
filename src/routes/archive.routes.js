@@ -22,6 +22,10 @@ router.use(authenticate)
 const multipart = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: env.maxReportBytes, files: 1, fields: 10 },
+  // Имена файлов у нас русские, а multer по умолчанию читает их как
+  // latin1 — «Отчёт.pdf» превращался в «ÐÑÑÑÑ.pdf» и таким и сохранялся
+  // в базу. Браузеры отправляют имя в UTF-8, ему и верим.
+  defParamCharset: 'utf8',
   fileFilter: (req, file, cb) => {
     if (file.mimetype !== 'application/pdf') {
       return cb(ApiError.badRequest('Принимаются только PDF'))
