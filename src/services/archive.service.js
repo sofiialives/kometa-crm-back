@@ -85,17 +85,55 @@ function assertCanChangeService(user, service) {
  * не привязан ни к какому отделу, и без этого правила руководителю было бы
  * негде завести ему первую услугу.
  */
-export async function listArchiveClients(user, { departmentId, q } = {}) {
+export async function listArchiveClients(user, { departmentId, q, serviceTitle } = {}) {
   const dept = resolveDepartment(user, departmentId)
 
-  const where = {}
-  if (dept) {
-    where.OR = [
-      { services: { some: { departmentId: dept } } },
-      { services: { none: {} } },
-    ]
+  const and = []
+  // Выбранная услуга сужает и список клиентов: иначе фильтр в одном
+  // режиме работал бы, а в другом молча ничего не делал.
+  if (serviceTitle) {
+    and.push({ services: { some: { ...(dept ? { departmentId: dept } : {}), title: serviceTitle } } })
   }
-  if (q) where.client = { name: { contains: q, mode: 'insensitive' } }
+  if (dept) {
+    and.push({
+      OR: [
+        { services: { some: { departmentId: dept } } },
+        { services: { none: {} } },
+      ],
+    })
+  }
+
+  /**
+   * Поиск ищет не только по имени клиента.
+   *
+   * Раньше искал — и это сбивало: человек вводил название услуги, ничего
+   * не находил и решал, что поиск сломан. Хуже того, только что заведённая
+   * услуга не находилась вообще нигде: во втором режиме ищутся отчёты, а
+   * их под ней ещё нет.
+   *
+   * Вложенные условия ограничены тем же отделом, что и вся выборка, иначе
+   * совпадение в чужом отделе вытащило бы клиента с пустой карточкой.
+   */
+  if (q) {
+    const like = { contains: q, mode: 'insensitive' }
+    const inDept = dept ? { departmentId: dept } : {}
+    and.push({
+      OR: [
+        { client: { name: like } },
+        { services: { some: { ...inDept, title: like } } },
+        {
+          services: {
+            some: {
+              ...inDept,
+              reports: { some: { OR: [{ fileName: like }, { textContent: like }] } },
+            },
+          },
+        },
+      ],
+    })
+  }
+
+  const where = and.length ? { AND: and } : {}
 
   const rows = await prisma.archiveClient.findMany({
     where,
@@ -287,13 +325,17 @@ export async function deleteService(user, id) {
 // ---------------------------------------------------------------------------
 
 /** Поиск по отчётам — второй режим вкладки, «найти нужный», а не «открыть клиента». */
-export async function listReports(user, { departmentId, clientId, serviceId, authorId, from, to, q, limit = 30, offset = 0 } = {}) {
+export async function listReports(user, { departmentId, clientId, serviceId, serviceTitle, authorId, from, to, q, limit = 30, offset = 0 } = {}) {
   const dept = resolveDepartment(user, departmentId)
 
   const serviceWhere = {}
   if (dept) serviceWhere.departmentId = dept
   if (clientId) serviceWhere.archiveClient = { clientId }
   if (serviceId) serviceWhere.id = serviceId
+  // Фильтр по услуге — по названию, а не по id: одна и та же услуга
+  // заводится под разными клиентами отдельными записями, и выбор «Мини-апп»
+  // должен показывать её у всех клиентов сразу.
+  if (serviceTitle) serviceWhere.title = serviceTitle
 
   const where = { service: serviceWhere }
   if (authorId) where.authorId = authorId
@@ -337,6 +379,24 @@ export async function listReports(user, { departmentId, clientId, serviceId, aut
   ])
 
   return { items, total }
+}
+
+/**
+ * Названия услуг для выпадающего списка фильтра.
+ *
+ * Берём из самих услуг, а не из отчётов: только что заведённая услуга ещё
+ * без отчётов, но в фильтре она должна быть — иначе её не найти.
+ */
+export async function listServiceTitles(user, departmentId) {
+  const dept = resolveDepartment(user, departmentId)
+
+  const rows = await prisma.archiveService.findMany({
+    where: dept ? { departmentId: dept } : {},
+    select: { title: true },
+    distinct: ['title'],
+  })
+
+  return rows.map((r) => r.title).sort((a, b) => a.localeCompare(b, 'ru'))
 }
 
 /**

@@ -9,6 +9,7 @@ export const listArchiveClientsSchema = z.object({
   query: z.object({
     departmentId: optional(objectId),
     q: optional(z.string().trim().max(200)),
+    serviceTitle: optional(z.string().trim().max(200)),
   }),
 })
 
@@ -40,6 +41,9 @@ export const listReportsQuerySchema = z.object({
     departmentId: optional(objectId),
     clientId: optional(objectId),
     serviceId: optional(objectId),
+    // Фильтр по названию услуги: они пишутся руками, и одна и та же
+    // услуга под разными клиентами — это разные записи.
+    serviceTitle: optional(z.string().trim().max(200)),
     authorId: optional(objectId),
     from: optional(z.coerce.date()),
     to: optional(z.coerce.date()),
@@ -54,6 +58,8 @@ export const listReportsQuerySchema = z.object({
 export const listReportAuthorsSchema = z.object({
   query: z.object({ departmentId: optional(objectId) }),
 })
+
+export const listServiceTitlesSchema = listReportAuthorsSchema
 
 export const uploadReportSchema = z.object({
   body: z.object({
