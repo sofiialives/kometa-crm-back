@@ -49,11 +49,28 @@ function resolveDepartment(user, requested) {
   return user.departmentId
 }
 
-/** Заводить услуги может админ везде, руководитель — у себя. */
-function assertCanManageServices(user, departmentId) {
+/**
+ * Завести услугу может любой сотрудник — в своём отделе. Так решил
+ * заказчик: за ним остаются только клиенты, всё остальное ребята делают
+ * сами, не дожидаясь руководителя.
+ */
+function assertCanCreateService(user, departmentId) {
   if (user.role === 'admin') return
-  if (user.role === 'lead' && user.departmentId === departmentId) return
-  throw ApiError.forbidden('Заводить и менять услуги может руководитель отдела или админ')
+  if (!user.departmentId) throw ApiError.forbidden('Вы не привязаны к отделу, поэтому архив недоступен')
+  if (user.departmentId !== departmentId) throw ApiError.forbidden('Завести услугу можно только в своём отделе')
+}
+
+/**
+ * А вот менять и удалять — уже не любой. Под услугой лежат чужие отчёты,
+ * и переименование меняет то, что видят остальные. Поэтому только тот,
+ * кто её завёл, руководитель отдела или админ — то же правило, что и у
+ * самих отчётов.
+ */
+function assertCanChangeService(user, service) {
+  if (user.role === 'admin') return
+  if (service.createdById === user.id) return
+  if (user.role === 'lead' && user.departmentId === service.departmentId) return
+  throw ApiError.forbidden('Менять услугу может тот, кто её завёл, руководитель отдела или админ')
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +233,7 @@ export async function removeArchiveClient(user, id) {
 // ---------------------------------------------------------------------------
 
 export async function createService(user, { archiveClientId, departmentId, title }) {
-  assertCanManageServices(user, departmentId)
+  assertCanCreateService(user, departmentId)
 
   const [archiveClient, department] = await Promise.all([
     prisma.archiveClient.findUnique({ where: { id: archiveClientId } }),
@@ -234,7 +251,7 @@ export async function createService(user, { archiveClientId, departmentId, title
 export async function editService(user, id, { title }) {
   const service = await prisma.archiveService.findUnique({ where: { id } })
   if (!service) throw ApiError.notFound('Услуга не найдена')
-  assertCanManageServices(user, service.departmentId)
+  assertCanChangeService(user, service)
 
   return prisma.archiveService.update({
     where: { id },
@@ -249,11 +266,11 @@ export async function deleteService(user, id) {
     include: { reports: { select: { fileKey: true } } },
   })
   if (!service) throw ApiError.notFound('Услуга не найдена')
-  assertCanManageServices(user, service.departmentId)
+  assertCanChangeService(user, service)
 
-  // Удалить услугу вместе с отчётами может только админ. Руководителю
+  // Удалить услугу вместе с отчётами может только админ. Остальным
   // оставлена возможность исправить опечатку и убрать лишнее, но потеря
-  // накопленной истории — не его уровень.
+  // накопленной истории — не их уровень.
   if (service.reports.length > 0 && user.role !== 'admin') {
     throw ApiError.badRequest(
       `Под услугой уже ${reportsWord(service.reports.length)} — удалить её может только админ`,
