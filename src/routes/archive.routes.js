@@ -6,7 +6,8 @@ import { ApiError } from '../utils/ApiError.js'
 import { env } from '../config/env.js'
 import {
   addArchiveClientSchema, archiveIdParamSchema, createServiceSchema, editServiceSchema,
-  listArchiveClientsSchema, listReportAuthorsSchema, listReportsQuerySchema, uploadReportSchema,
+  listArchiveClientsSchema, listReportAuthorsSchema, listReportsQuerySchema,
+  listServiceTitlesSchema, uploadReportSchema,
 } from '../schemas/archive.schema.js'
 import * as archiveController from '../controllers/archive.controller.js'
 
@@ -58,6 +59,9 @@ router.post('/clients', validate(addArchiveClientSchema), archiveController.addC
 router.delete('/clients/:id', validate(archiveIdParamSchema), archiveController.removeClient)
 
 // Услуги
+// Список названий — для выпадающего фильтра. Отдельно от POST на том же
+// пути: это справочник, а не создание.
+router.get('/services', validate(listServiceTitlesSchema), archiveController.listServiceTitles)
 router.post('/services', validate(createServiceSchema), archiveController.createService)
 router.patch('/services/:id', validate(editServiceSchema), archiveController.editService)
 router.delete('/services/:id', validate(archiveIdParamSchema), archiveController.deleteService)

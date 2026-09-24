@@ -38,6 +38,10 @@ export const listAuthors = asyncHandler(async (req, res) => {
   res.json(await archiveService.listReportAuthors(req.user, req.query.departmentId))
 })
 
+export const listServiceTitles = asyncHandler(async (req, res) => {
+  res.json(await archiveService.listServiceTitles(req.user, req.query.departmentId))
+})
+
 export const uploadReport = asyncHandler(async (req, res) => {
   if (!req.file) throw ApiError.badRequest('Файл отчёта не приложен')
   res.status(201).json(await archiveService.uploadReport(req.user, { ...req.body, file: req.file }))
