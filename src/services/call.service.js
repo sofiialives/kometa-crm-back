@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
+import { notifyCancelled, notifyInvited, notifyRemoved, notifyTimeChanged } from '../bot/invites.js'
 
 // departmentId у каждого человека нужен фронту: звонок относится сразу ко
 // всем отделам, чьи люди в нём участвуют, и по вкладкам он раскладывается
@@ -102,7 +103,7 @@ async function normalizeParticipants(participantIds, ownerId) {
 export async function createCall({ title, note, scheduledAt, participantIds, user }) {
   const ids = await normalizeParticipants(participantIds, user.id)
 
-  return prisma.call.create({
+  const call = await prisma.call.create({
     data: {
       title,
       note: note || null,
@@ -113,6 +114,13 @@ export async function createCall({ title, note, scheduledAt, participantIds, use
     },
     include: CALL_INCLUDE,
   })
+
+  // Позванные узнают о звонке сразу, а не за пятнадцать минут до начала:
+  // в этом и была просьба заказчика. Отправка ничего не ждёт и ничего не
+  // ломает — звонок уже создан.
+  notifyInvited(call, ids)
+
+  return call
 }
 
 /**
@@ -129,7 +137,10 @@ function assertOrganizer(call, user) {
 }
 
 export async function editCall(id, patch, user) {
-  const call = await prisma.call.findUnique({ where: { id } })
+  const call = await prisma.call.findUnique({
+    where: { id },
+    include: { participants: { select: { id: true } } },
+  })
   if (!call) throw ApiError.notFound('Звонок не найден')
   assertOrganizer(call, user)
 
@@ -137,7 +148,11 @@ export async function editCall(id, patch, user) {
     ? null
     : await normalizeParticipants(patch.participantIds, call.ownerId)
 
-  return prisma.call.update({
+  const was = call.participants.map((p) => p.id)
+  const timeMoved = patch.scheduledAt !== undefined
+    && new Date(patch.scheduledAt).getTime() !== call.scheduledAt.getTime()
+
+  const updated = await prisma.call.update({
     where: { id },
     data: {
       ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -149,12 +164,32 @@ export async function editCall(id, patch, user) {
     },
     include: CALL_INCLUDE,
   })
+
+  // Позвали сейчас — приглашение. Сняли — предупреждение, чтобы человек
+  // не готовился к звонку, которого от него уже не ждут. Тем, кто был в
+  // звонке и остался, второй раз не пишем.
+  const invited = ids ? ids.filter((pid) => !was.includes(pid)) : []
+  if (ids) {
+    notifyInvited(updated, invited)
+    notifyRemoved(updated, was.filter((pid) => !ids.includes(pid)))
+  }
+
+  // Перенос — отдельным сообщением тем, кто был в звонке до правки. Без
+  // него приглашение начинает врать: человек помнит старое время.
+  if (timeMoved) notifyTimeChanged(updated, call.scheduledAt, invited)
+
+  return updated
 }
 
 export async function deleteCall(id, user) {
-  const call = await prisma.call.findUnique({ where: { id } })
+  const call = await prisma.call.findUnique({ where: { id }, include: CALL_INCLUDE })
   if (!call) throw ApiError.notFound('Звонок не найден')
   assertOrganizer(call, user)
 
   await prisma.call.delete({ where: { id } })
+
+  // Только при осознанном удалении. Ночная уборка прошедших звонков
+  // ходит в базу напрямую (clearPastCalls.job.js) и сюда не заглядывает,
+  // поэтому «звонок отменили» по утрам никому не прилетит.
+  notifyCancelled(call)
 }
