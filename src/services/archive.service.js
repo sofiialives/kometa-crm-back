@@ -6,6 +6,15 @@ import { deleteObject, getObjectStream, putObject } from '../utils/storage.js'
 
 const PERSON = { id: true, name: true, avatarUrl: true, avatarColor: true }
 
+/** «1 отчёт», «3 отчёта», «5 отчётов» — иначе сообщения выглядят неряшливо. */
+function reportsWord(n) {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return `${n} отчёт`
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} отчёта`
+  return `${n} отчётов`
+}
+
 // Текста из PDF хватает и столько: это не содержимое для показа, а только
 // сырьё для поиска. Потолок защищает базу от отчёта на тысячу страниц.
 const MAX_TEXT_CHARS = 200_000
@@ -247,7 +256,7 @@ export async function deleteService(user, id) {
   // накопленной истории — не его уровень.
   if (service.reports.length > 0 && user.role !== 'admin') {
     throw ApiError.badRequest(
-      `Под услугой уже ${service.reports.length} отчёт(ов) — удалить её может только админ`,
+      `Под услугой уже ${reportsWord(service.reports.length)} — удалить её может только админ`,
     )
   }
 
