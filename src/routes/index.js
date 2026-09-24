@@ -7,6 +7,7 @@ import taskRoutes from './task.routes.js'
 import clientRoutes from './client.routes.js'
 import callRoutes from './call.routes.js'
 import telegramRoutes from './telegram.routes.js'
+import archiveRoutes from './archive.routes.js'
 
 const router = Router()
 
@@ -18,5 +19,6 @@ router.use('/tasks', taskRoutes)
 router.use('/clients', clientRoutes)
 router.use('/calls', callRoutes)
 router.use('/telegram', telegramRoutes)
+router.use('/archive', archiveRoutes)
 
 export default router

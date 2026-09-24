@@ -68,6 +68,10 @@ model User {
   calls            Call[]      @relation("CallOwner")
   callsJoined      Call[]      @relation("CallParticipants")
   telegram         TelegramLink?
+
+  archiveClients   ArchiveClient[]  @relation("ArchiveClientAddedBy")
+  archiveServices  ArchiveService[] @relation("ArchiveServiceCreatedBy")
+  archiveReports   ArchiveReport[]  @relation("ArchiveReportAuthor")
   taskStat         UserTaskStat?
 
   createdAt        DateTime    @default(now())
@@ -88,6 +92,7 @@ model Department {
   works     Work[]
   tasks     Task[]
   calls     Call[]
+  archiveServices ArchiveService[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -98,6 +103,13 @@ model Client {
   name      String   @unique
   createdAt DateTime @default(now())
   works     Work[]
+
+  // Карточка этого клиента в Архиве, если его туда заносили. Связь
+  // обязательная со стороны архива и без onDelete, то есть Restrict:
+  // удалить клиента, по которому есть архив, база не даст. Это сделано
+  // специально — архив переживает операционные данные, ради этого он и
+  // существует. Понятное сообщение вместо ошибки базы даёт client.service.js.
+  archive   ArchiveClient?
 }
 
 model Work {
@@ -225,4 +237,109 @@ model TelegramLink {
   linkedAt      DateTime?
 
   updatedAt     DateTime  @updatedAt
+}
+
+// ============================================================================
+// Архив отчётов по клиентам.
+//
+// Отчёт здесь — это PDF-файл, а не текст в базе: специалист делает отчёт у
+// себя и заливает готовым. Поэтому полей с содержанием нет вовсе, зато есть
+// вытащенный из файла текст — только для поиска.
+//
+// Сам файл лежит в объектном хранилище (Cloudflare R2), в базе только запись
+// о нём. Отдаётся файл через наш API с проверкой отдела, а не по прямой
+// ссылке из хранилища.
+//
+// Почему не переиспользовали Work: работы удаляются каскадом вместе с
+// клиентом (client.service.js) и живут на доске Иерархии. Архив должен
+// переживать удаление рабочих данных и не засорять экраны команды старыми
+// записями, которые заносят задним числом.
+// ============================================================================
+
+// Клиент, занесённый в архив. Отдельная запись, а не просто группировка по
+// услугам: «занести клиента в архив» — это отдельное действие, и клиент
+// может лежать в архиве ещё без единой услуги.
+model ArchiveClient {
+  id        String   @id @default(cuid())
+
+  clientId  String   @unique
+  client    Client   @relation(fields: [clientId], references: [id])
+
+  addedById String
+  addedBy   User     @relation("ArchiveClientAddedBy", fields: [addedById], references: [id])
+
+  services  ArchiveService[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Услуга, которой занимались для клиента. Название пишут руками каждый раз —
+// так решил заказчик, предупреждённый о том, что «Таргет» и «таргетинг»
+// станут разными строками.
+//
+// Отдел живёт здесь, а не на клиенте: одного клиента ведут несколько отделов,
+// и карточка клиента показывается во вкладке каждого из них со своими
+// услугами.
+model ArchiveService {
+  id              String        @id @default(cuid())
+
+  archiveClientId String
+  archiveClient   ArchiveClient @relation(fields: [archiveClientId], references: [id], onDelete: Cascade)
+
+  departmentId    String
+  department      Department    @relation(fields: [departmentId], references: [id])
+
+  title           String
+
+  createdById     String
+  createdBy       User          @relation("ArchiveServiceCreatedBy", fields: [createdById], references: [id])
+
+  reports         ArchiveReport[]
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([departmentId])
+  @@index([archiveClientId])
+}
+
+// Сам отчёт. Заголовка нет специально: в списке показывается имя файла,
+// как его назвал автор.
+model ArchiveReport {
+  id          String         @id @default(cuid())
+
+  serviceId   String
+  service     ArchiveService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  // Автор связан без onDelete, то есть Restrict. Сотрудников в CRM и так не
+  // удаляют, а деактивируют — но если когда-нибудь начнут, архив обязан
+  // помнить, кто это писал.
+  authorId    String
+  author      User           @relation("ArchiveReportAuthor", fields: [authorId], references: [id])
+
+  // Ключ объекта в хранилище. Уникальный, чтобы одна запись базы не могла
+  // указывать на тот же файл, что и другая: удаление одной унесло бы файл
+  // у обеих.
+  fileKey     String         @unique
+  fileName    String
+  fileSize    Int
+
+  // Когда работа была сделана. Необязательного тут нет: поле подставляется
+  // сегодняшним числом, но его можно поменять — иначе старые отчёты,
+  // которые зальют при наполнении архива, все получат дату загрузки и
+  // фильтр по периоду окажется бесполезен.
+  workedAt    DateTime
+
+  // Текст, вытащенный из PDF при загрузке. Нужен только для поиска и
+  // пользователю нигде не показывается. Пусто, если залили скан или
+  // картинку — такой отчёт найдётся по клиенту, услуге и дате, но не по
+  // словам внутри.
+  textContent String?
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([serviceId, workedAt])
+  @@index([authorId])
 }

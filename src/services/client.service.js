@@ -34,10 +34,23 @@ export async function updateClient(id, name) {
  * Удаление клиента сносит разом все его работы (во всех отделах) — их
  * задачи не теряются, а отвязываются, как и при удалении одной работы
  * напрямую из Иерархии.
+ *
+ * А вот архив так не сносится. Если у клиента есть карточка в Архиве,
+ * удаление отклоняется: одно нажатие здесь унесло бы всю накопленную по
+ * нему историю отчётов — ровно то, ради чего архив и заводили. То же
+ * запрещено и на уровне базы (внешний ключ RESTRICT), здесь — понятное
+ * сообщение вместо ошибки Postgres.
  */
 export async function deleteClient(id) {
   const client = await prisma.client.findUnique({ where: { id } })
   if (!client) throw ApiError.notFound('Клиент не найден')
+
+  const inArchive = await prisma.archiveClient.findUnique({ where: { clientId: id } })
+  if (inArchive) {
+    throw ApiError.badRequest(
+      'Клиент есть в Архиве — сначала уберите его оттуда, иначе пропадут все отчёты по нему',
+    )
+  }
 
   const works = await prisma.work.findMany({ where: { clientId: id } })
   const workIds = works.map((w) => w.id)

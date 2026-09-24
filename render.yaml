@@ -31,6 +31,19 @@ services:
         sync: false
       - key: TELEGRAM_BOT_USERNAME
         value: kometa_agent_bot
+      # Хранилище файлов Архива — Cloudflare R2. Ключи задаются в панели
+      # Render и в репозиторий не попадают. Пока не заданы, вкладка Архива
+      # работает на чтение, а загрузка отвечает понятной ошибкой.
+      # Имя бакета не секрет, поэтому лежит здесь.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: kometa-archive
+
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

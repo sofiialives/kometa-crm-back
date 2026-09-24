@@ -30,9 +30,10 @@ export async function updateDepartment(id, patch) {
 }
 
 export async function deleteDepartment(id) {
-  const [memberCount, workCount] = await Promise.all([
+  const [memberCount, workCount, archiveCount] = await Promise.all([
     prisma.user.count({ where: { departmentId: id, active: true } }),
     prisma.work.count({ where: { departmentId: id } }),
+    prisma.archiveService.count({ where: { departmentId: id } }),
   ])
 
   if (memberCount > 0) {
@@ -40,6 +41,11 @@ export async function deleteDepartment(id) {
   }
   if (workCount > 0) {
     throw ApiError.badRequest('В отделе ещё есть работы — удалите или перенесите их, прежде чем удалять отдел')
+  }
+  // Без этой проверки удаление упало бы ошибкой внешнего ключа из базы:
+  // услуги архива держат отдел так же, как работы.
+  if (archiveCount > 0) {
+    throw ApiError.badRequest('В Архиве есть услуги этого отдела — удалите их, прежде чем удалять отдел')
   }
 
   try {
