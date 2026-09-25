@@ -52,6 +52,15 @@ export async function deleteClient(id) {
     )
   }
 
+  // То же и с Доской клиентов: там по нему ведётся финансовый учёт, и одно
+  // нажатие здесь унесло бы всю выручку и расходы за все месяцы.
+  const onBoard = await prisma.boardClient.findUnique({ where: { clientId: id } })
+  if (onBoard) {
+    throw ApiError.badRequest(
+      'Клиент есть на Доске клиентов — сначала уберите его оттуда, иначе пропадёт весь учёт по нему',
+    )
+  }
+
   const works = await prisma.work.findMany({ where: { clientId: id } })
   const workIds = works.map((w) => w.id)
 

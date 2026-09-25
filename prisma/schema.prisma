@@ -41,6 +41,14 @@ enum TaskOrigin {
   hierarchy
 }
 
+// Клиент на Доске: либо с нами работает, либо ушёл. Это текущее состояние,
+// а не вычисление по выбранному месяцу: заказчик прямо сказал, что клиент
+// без платежа в месяце «уже будет во вкладке ушёл висеть».
+enum BoardClientStatus {
+  active
+  left
+}
+
 model User {
   id               String      @id @default(cuid())
   name             String      @default("")
@@ -69,6 +77,7 @@ model User {
   callsJoined      Call[]      @relation("CallParticipants")
   telegram         TelegramLink?
 
+  boardClients     BoardClient[]    @relation("BoardClientAddedBy")
   archiveClients   ArchiveClient[]  @relation("ArchiveClientAddedBy")
   archiveServices  ArchiveService[] @relation("ArchiveServiceCreatedBy")
   archiveReports   ArchiveReport[]  @relation("ArchiveReportAuthor")
@@ -110,6 +119,11 @@ model Client {
   // специально — архив переживает операционные данные, ради этого он и
   // существует. Понятное сообщение вместо ошибки базы даёт client.service.js.
   archive   ArchiveClient?
+
+  // Карточка этого клиента на Доске клиентов, если его туда заносили.
+  // Связь без onDelete, то есть Restrict: удалить клиента, по которому
+  // ведётся финансовый учёт, база не даст.
+  board     BoardClient?
 }
 
 model Work {
@@ -342,4 +356,92 @@ model ArchiveReport {
 
   @@index([serviceId, workedAt])
   @@index([authorId])
+}
+
+// ============================================================================
+// Доска клиентов — финансовый учёт агентства.
+//
+// Видит её только админ: это выручка, расходы и прибыль всего агентства.
+//
+// Главное в устройстве: услуга относится к КОНКРЕТНОМУ МЕСЯЦУ, а не к
+// клиенту вообще. Заказчик заносит суммы вручную помесячно — «за октябрь
+// взяли амбассадорскую программу и ведение телеграм-канала». Без привязки
+// к месяцу переключение месяцев на доске ничего бы не меняло, а весь смысл
+// доски именно в нём.
+//
+// Деньги храним в центах целым числом. Доллары с копейками в JavaScript
+// складываются с ошибкой, и на суммах агентства это вылезло бы в отчётах.
+// ============================================================================
+
+model BoardClient {
+  id          String            @id @default(cuid())
+
+  clientId    String            @unique
+  client      Client            @relation(fields: [clientId], references: [id])
+
+  // Телефон, телеграм или почта — что укажет руководитель. Одной строкой:
+  // разбивать по видам связи незачем, читает её человек.
+  contact     String?
+
+  status      BoardClientStatus @default(active)
+
+  // С какого числа клиент у нас. Отдельно от createdAt: клиента заносят на
+  // доску задним числом, а «сколько дней с нами» должно считаться от начала
+  // работы, а не от момента занесения.
+  startedAt   DateTime
+
+  leftAt      DateTime?
+  leftReason  String?
+
+  addedById   String
+  addedBy     User              @relation("BoardClientAddedBy", fields: [addedById], references: [id])
+
+  services    BoardService[]
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([status])
+}
+
+// Услуга, оказанная клиенту в конкретном месяце, с выручкой по ней.
+model BoardService {
+  id            String         @id @default(cuid())
+
+  boardClientId String
+  boardClient   BoardClient    @relation(fields: [boardClientId], references: [id], onDelete: Cascade)
+
+  title         String
+
+  // Первое число месяца, к которому относится услуга. Дата, а не пара
+  // чисел «год и месяц»: режим произвольного периода сравнивает диапазоны,
+  // и с датой это обычное сравнение, а не арифметика в запросе.
+  month         DateTime
+
+  revenueCents  Int
+
+  expenses      BoardExpense[]
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([boardClientId, month])
+  @@index([month])
+}
+
+// Расход по услуге. Их бывает несколько на одну услугу, и у каждого своё
+// назначение: «копирайтер», «дизайнер», «подписка».
+model BoardExpense {
+  id          String       @id @default(cuid())
+
+  serviceId   String
+  service     BoardService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  title       String
+  amountCents Int
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([serviceId])
 }
