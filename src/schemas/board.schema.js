@@ -18,12 +18,16 @@ const expenses = z
  */
 export const boardQuery = z
   .object({
-    mode: z.enum(['month', 'all', 'period']).default('month'),
+    mode: z.enum(['month', 'last', 'all', 'period']).default('month'),
     month: optional(z.coerce.date()),
+    // Сколько последних месяцев считать: 3, 6 или 12. Верхняя граница
+    // щедрая — вдруг когда-нибудь понадобится «три года».
+    months: optional(z.coerce.number().int().min(1).max(60)),
     from: optional(z.coerce.date()),
     to: optional(z.coerce.date()),
   })
   .refine((q) => q.mode !== 'month' || q.month, { message: 'Не выбран месяц', path: ['month'] })
+  .refine((q) => q.mode !== 'last' || q.months, { message: 'Не задано число месяцев', path: ['months'] })
   .refine((q) => q.mode !== 'period' || q.from || q.to, { message: 'Не задан период', path: ['from'] })
   .refine((q) => !q.from || !q.to || q.from <= q.to, { message: 'Начало периода позже конца', path: ['to'] })
 

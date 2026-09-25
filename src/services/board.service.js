@@ -42,13 +42,23 @@ function monthStart(value) {
  * Следствие: данные помесячные, половинок месяца не бывает. «С 15 сентября»
  * сентябрь уже не захватит — его первое число осталось позади.
  */
-export function resolveRange({ mode, month, from, to }) {
+export function resolveRange({ mode, month, months, from, to }) {
   if (mode === 'all') return null
 
   if (mode === 'month') {
     const start = monthStart(month)
     const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1))
     return { gte: start, lt: end }
+  }
+
+  // Скользящее окно: «последние три месяца» — это июль, август и сентябрь,
+  // когда на дворе сентябрь. Считаем от сегодняшнего дня, а не от того,
+  // когда ссылку открыли в прошлый раз: иначе «последний год» однажды
+  // окажется позапрошлым.
+  if (mode === 'last') {
+    const now = new Date()
+    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1))
+    return { gte: start, lte: now }
   }
 
   const range = {}
