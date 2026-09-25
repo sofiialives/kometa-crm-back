@@ -19,6 +19,9 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // никогда не даёт 0.30000000000000004.
 const toCents = (dollars) => Math.round(Number(dollars) * 100)
 
+const expenseRows = (expenses) =>
+  (expenses || []).map((e) => ({ title: e.title.trim(), amountCents: toCents(e.amount) }))
+
 /** Первое число месяца по UTC — к нему привязана каждая услуга. */
 function monthStart(value) {
   const d = new Date(value)
@@ -181,7 +184,7 @@ export async function getCard(user, id, query) {
 // Клиенты
 // ---------------------------------------------------------------------------
 
-export async function addClient(user, { clientId, clientName, contact, startedAt }) {
+export async function addClient(user, { clientId, clientName, contact, startedAt, services }) {
   assertAdmin(user)
 
   let id = clientId
@@ -203,6 +206,22 @@ export async function addClient(user, { clientId, clientName, contact, startedAt
         contact: contact || null,
         startedAt: startedAt || new Date(),
         addedById: user.id,
+        // Услуги можно завести сразу в форме — так и описано в задании:
+        // «нажали на кнопочку новый клиент, у нас прямо большой лист,
+        // который нужно заполнить». Заводить клиента, а потом отдельно
+        // ходить за услугами — лишний шаг там, где его не просили.
+        ...(services?.length
+          ? {
+            services: {
+              create: services.map((s) => ({
+                title: s.title.trim(),
+                month: monthStart(s.month),
+                revenueCents: toCents(s.revenue),
+                expenses: { create: expenseRows(s.expenses) },
+              })),
+            },
+          }
+          : {}),
       },
       include: { client: { select: { id: true, name: true } } },
     })
@@ -275,9 +294,6 @@ export async function removeClient(user, id) {
 // ---------------------------------------------------------------------------
 // Услуги
 // ---------------------------------------------------------------------------
-
-const expenseRows = (expenses) =>
-  (expenses || []).map((e) => ({ title: e.title.trim(), amountCents: toCents(e.amount) }))
 
 /**
  * Услуга за месяц. Расходы приходят и сохраняются вместе с ней: в форме это

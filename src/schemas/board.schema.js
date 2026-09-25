@@ -8,6 +8,10 @@ const optional = (schema) => z.preprocess((v) => (v === '' ? undefined : v), sch
 // случайно вставленной строки на двадцать цифр.
 const money = z.coerce.number().finite().min(0).max(1_000_000_000)
 
+const expenses = z
+  .array(z.object({ title: z.string().trim().min(1, 'У расхода должно быть название').max(200), amount: money }))
+  .max(30)
+
 /**
  * Режим просмотра. Для «месяца» дата обязательна, иначе непонятно, какой
  * месяц показывать; для «за всё время» никаких дат не нужно вовсе.
@@ -40,6 +44,16 @@ export const addClientSchema = z.object({
       clientName: optional(z.string().trim().min(1).max(200)),
       contact: optional(z.string().trim().max(300)),
       startedAt: optional(z.coerce.date()),
+      // Услуги заводятся прямо в форме создания — так описано в задании.
+      services: z
+        .array(z.object({
+          title: z.string().trim().min(1, 'Укажите название услуги').max(200),
+          month: z.coerce.date(),
+          revenue: money,
+          expenses: expenses.optional(),
+        }))
+        .max(20)
+        .optional(),
     })
     .refine((b) => b.clientId || b.clientName, {
       message: 'Выберите клиента или укажите название',
@@ -65,10 +79,6 @@ export const leaveSchema = z.object({
     leftAt: optional(z.coerce.date()),
   }),
 })
-
-const expenses = z
-  .array(z.object({ title: z.string().trim().min(1, 'У расхода должно быть название').max(200), amount: money }))
-  .max(30)
 
 export const addServiceSchema = z.object({
   body: z.object({
