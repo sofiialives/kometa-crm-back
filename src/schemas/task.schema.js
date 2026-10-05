@@ -8,6 +8,9 @@ export const createTaskSchema = z.object({
     title: z.string().trim().min(1),
     description: z.string().trim().max(2000).optional(),
     deadline: z.coerce.date(),
+    // Во сколько человек садится за задачу. В форме «Задача на день» поле
+    // обязательное, но здесь нет: задачи из Иерархии его не передают.
+    startAt: z.coerce.date().optional(),
     workId: objectId.nullable().optional(),
     // Несколько человек на одну задачу — только для Иерархии (lead/admin).
     // Если не передан вообще — задача автору, как и раньше.

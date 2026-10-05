@@ -71,6 +71,7 @@ const SERVICE_SELECT = {
   id: true,
   title: true,
   month: true,
+  paidAt: true,
   revenueCents: true,
   expenses: { select: { id: true, title: true, amountCents: true }, orderBy: { createdAt: 'asc' } },
 }
@@ -226,6 +227,7 @@ export async function addClient(user, { clientId, clientName, contact, startedAt
               create: services.map((s) => ({
                 title: s.title.trim(),
                 month: monthStart(s.month),
+                paidAt: s.paidAt || null,
                 revenueCents: toCents(s.revenue),
                 expenses: { create: expenseRows(s.expenses) },
               })),
@@ -310,7 +312,7 @@ export async function removeClient(user, id) {
  * один блок, и отдельные ручки на каждую строку расхода только добавили бы
  * запросов там, где хватает одного.
  */
-export async function addService(user, { boardClientId, title, month, revenue, expenses }) {
+export async function addService(user, { boardClientId, title, month, paidAt, revenue, expenses }) {
   assertAdmin(user)
   if (!(await prisma.boardClient.findUnique({ where: { id: boardClientId } }))) {
     throw ApiError.notFound('Клиент на доске не найден')
@@ -321,6 +323,7 @@ export async function addService(user, { boardClientId, title, month, revenue, e
       boardClientId,
       title: title.trim(),
       month: monthStart(month),
+      paidAt: paidAt || null,
       revenueCents: toCents(revenue),
       expenses: { create: expenseRows(expenses) },
     },
@@ -328,7 +331,7 @@ export async function addService(user, { boardClientId, title, month, revenue, e
   })
 }
 
-export async function editService(user, id, { title, month, revenue, expenses }) {
+export async function editService(user, id, { title, month, paidAt, revenue, expenses }) {
   assertAdmin(user)
   const service = await prisma.boardService.findUnique({ where: { id } })
   if (!service) throw ApiError.notFound('Услуга не найдена')
@@ -344,6 +347,7 @@ export async function editService(user, id, { title, month, revenue, expenses })
       data: {
         ...(title !== undefined ? { title: title.trim() } : {}),
         ...(month !== undefined ? { month: monthStart(month) } : {}),
+        ...(paidAt !== undefined ? { paidAt } : {}),
         ...(revenue !== undefined ? { revenueCents: toCents(revenue) } : {}),
         ...(expenses !== undefined ? { expenses: { create: expenseRows(expenses) } } : {}),
       },
