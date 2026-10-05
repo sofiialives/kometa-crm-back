@@ -53,6 +53,7 @@ export const addClientSchema = z.object({
         .array(z.object({
           title: z.string().trim().min(1, 'Укажите название услуги').max(200),
           month: z.coerce.date(),
+          paidAt: optional(z.coerce.date()),
           revenue: money,
           expenses: expenses.optional(),
         }))
@@ -89,6 +90,9 @@ export const addServiceSchema = z.object({
     boardClientId: objectId,
     title: z.string().trim().min(1, 'Укажите название услуги').max(200),
     month: z.coerce.date(),
+    // День оплаты. В форме обязателен, здесь нет: услуги, заведённые до
+    // появления поля, правятся по частям и свою дату получат отдельно.
+    paidAt: optional(z.coerce.date()),
     revenue: money,
     expenses: expenses.optional(),
   }),
@@ -100,6 +104,7 @@ export const editServiceSchema = z.object({
     .object({
       title: z.string().trim().min(1).max(200).optional(),
       month: z.coerce.date().optional(),
+      paidAt: optional(z.coerce.date()),
       revenue: money.optional(),
       expenses: expenses.optional(),
     })

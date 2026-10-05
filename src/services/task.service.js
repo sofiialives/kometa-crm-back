@@ -73,7 +73,7 @@ export async function listTasksVisibleTo(user, { scope, standalone } = {}) {
  * создания вообще, и на уровне API это тоже запрещено, а не только
  * спрятано в интерфейсе.
  */
-export async function createTask({ title, description, deadline, workId, ownerIds, priority, user }) {
+export async function createTask({ title, description, deadline, startAt, workId, ownerIds, priority, user }) {
   if (workId && user.role === 'staff') {
     throw ApiError.forbidden('Задачи по работам создаёт только главный отдела или админ')
   }
@@ -112,6 +112,7 @@ export async function createTask({ title, description, deadline, workId, ownerId
           title,
           description: description || null,
           deadline,
+          startAt: startAt || null,
           priority: priority || 'medium',
           workId: workId || null,
           // Ставится один раз при создании и больше никогда не меняется —
