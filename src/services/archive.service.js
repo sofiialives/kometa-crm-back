@@ -94,14 +94,14 @@ export async function listArchiveClients(user, { departmentId, q, serviceTitle }
   if (serviceTitle) {
     and.push({ services: { some: { ...(dept ? { departmentId: dept } : {}), title: serviceTitle } } })
   }
-  if (dept) {
-    and.push({
-      OR: [
-        { services: { some: { departmentId: dept } } },
-        { services: { none: {} } },
-      ],
-    })
-  }
+  // Отдел здесь намеренно НЕ сужает список клиентов — сужаются только их
+  // услуги и отчёты (см. ниже). Раньше клиент, которым занимался другой
+  // отдел, из списка пропадал, и получался тупик: не виден, но и занести
+  // нельзя — запись в архиве одна на клиента, и вторая не создаётся.
+  // Руководитель видел «Архив пуст» и «Этот клиент уже в архиве» разом.
+  //
+  // Закрытыми остаются отчёты — именно так и просил заказчик. Имя клиента
+  // секретом не было и раньше: клиента без услуг список показывал всем.
 
   /**
    * Поиск ищет не только по имени клиента.
@@ -210,15 +210,11 @@ export async function getArchiveClient(user, id) {
 
   if (!user.departmentId) throw ApiError.forbidden('Вы не привязаны к отделу, поэтому архив недоступен')
 
-  const mine = row.services.filter((s) => s.departmentId === user.departmentId)
-  // Клиента без единой услуги видно всем: только так руководитель может
-  // завести ему первую. А вот клиент, которым занимались только другие
-  // отделы, для этого сотрудника не существует.
-  if (row.services.length > 0 && mine.length === 0) {
-    throw ApiError.notFound('Клиент в архиве не найден')
-  }
-
-  return { ...row, services: mine }
+  // Карточка открывается всегда, но с услугами только своего отдела —
+  // чужие отчёты не видно. Прятать карточку целиком нельзя: клиент мог
+  // попасть в архив через другой отдел, и тогда завести ему свою первую
+  // услугу стало бы невозможно.
+  return { ...row, services: row.services.filter((s) => s.departmentId === user.departmentId) }
 }
 
 export async function addArchiveClient(user, clientId) {
@@ -229,13 +225,30 @@ export async function addArchiveClient(user, clientId) {
   const client = await prisma.client.findUnique({ where: { id: clientId } })
   if (!client) throw ApiError.notFound('Клиент не найден')
 
+  // Запись в архиве одна на клиента, а отделов несколько. Второй отдел,
+  // заносящий того же клиента, не ошибается — он просто хочет получить
+  // карточку, чтобы завести в ней свою услугу. Поэтому отдаём имеющуюся
+  // запись, а не отказ.
+  const existing = await prisma.archiveClient.findUnique({
+    where: { clientId },
+    include: { client: { select: { id: true, name: true } } },
+  })
+  if (existing) return existing
+
   try {
     return await prisma.archiveClient.create({
       data: { clientId, addedById: user.id },
       include: { client: { select: { id: true, name: true } } },
     })
   } catch (e) {
-    if (e.code === 'P2002') throw ApiError.conflict('Этот клиент уже в архиве')
+    // Гонка: двое занесли одного клиента одновременно. Победил чужой
+    // запрос — значит карточка уже есть, и это по-прежнему не ошибка.
+    if (e.code === 'P2002') {
+      return prisma.archiveClient.findUnique({
+        where: { clientId },
+        include: { client: { select: { id: true, name: true } } },
+      })
+    }
     throw e
   }
 }
