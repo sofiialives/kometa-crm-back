@@ -11,16 +11,40 @@ export async function listClients() {
   return prisma.client.findMany({ orderBy: { name: 'asc' } })
 }
 
+/**
+ * Клиент с таким же именем, не глядя на регистр.
+ *
+ * Уникальность имени в базе регистрозависимая, то есть «Ozon» и «ozon» для
+ * неё разные строки. Для человека это один и тот же клиент, и разъехавшись
+ * на два, он потом разъезжается всюду: на доске, в архиве, в работах.
+ * Поэтому сверяемся сами, а не полагаемся на базу.
+ */
+function findByName(name, exceptId) {
+  return prisma.client.findFirst({
+    where: {
+      name: { equals: name, mode: 'insensitive' },
+      ...(exceptId ? { id: { not: exceptId } } : {}),
+    },
+  })
+}
+
 export async function createClient(name) {
+  const twin = await findByName(name)
+  if (twin) throw ApiError.conflict(`Клиент «${twin.name}» уже есть`)
+
   try {
     return await prisma.client.create({ data: { name } })
   } catch (e) {
+    // Гонка: одинаковое имя завели дважды одновременно.
     if (e.code === 'P2002') throw ApiError.conflict('Клиент с таким именем уже есть')
     throw e
   }
 }
 
 export async function updateClient(id, name) {
+  const twin = await findByName(name, id)
+  if (twin) throw ApiError.conflict(`Клиент «${twin.name}» уже есть`)
+
   try {
     return await prisma.client.update({ where: { id }, data: { name } })
   } catch (e) {

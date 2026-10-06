@@ -204,7 +204,11 @@ export async function addClient(user, { clientId, clientName, contact, startedAt
     // этом остаётся один на всю CRM — отдельной базы клиентов у доски нет.
     const name = String(clientName || '').trim()
     if (!name) throw ApiError.badRequest('Выберите клиента или укажите название')
-    const existing = await prisma.client.findUnique({ where: { name } })
+    // Ищем без оглядки на регистр: «ozon» рядом с «Ozon» — это не новый
+    // клиент, а тот же самый, набранный иначе.
+    const existing = await prisma.client.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+    })
     id = existing ? existing.id : (await prisma.client.create({ data: { name } })).id
   } else if (!(await prisma.client.findUnique({ where: { id } }))) {
     throw ApiError.notFound('Клиент не найден')
