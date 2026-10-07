@@ -47,7 +47,7 @@ async function run() {
       for (const c of group) {
         const where = []
         if (c._count.works) where.push(`работ: ${c._count.works}`)
-        if (c.archive) where.push('есть в архиве')
+        if (c.archive.length) where.push(`в архиве: ${c.archive.length} отд.`)
         if (c.board) where.push('есть на доске')
         console.log(`  «${c.name}»  ${where.length ? '— ' + where.join(', ') : '— нигде не используется'}`)
       }

@@ -69,7 +69,8 @@ export async function deleteClient(id) {
   const client = await prisma.client.findUnique({ where: { id } })
   if (!client) throw ApiError.notFound('Клиент не найден')
 
-  const inArchive = await prisma.archiveClient.findUnique({ where: { clientId: id } })
+  // Записей у клиента столько, сколько отделов его вели, — хватит любой.
+  const inArchive = await prisma.archiveClient.findFirst({ where: { clientId: id } })
   if (inArchive) {
     throw ApiError.badRequest(
       'Клиент есть в Архиве — сначала уберите его оттуда, иначе пропадут все отчёты по нему',

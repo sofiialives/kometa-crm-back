@@ -94,14 +94,12 @@ export async function listArchiveClients(user, { departmentId, q, serviceTitle }
   if (serviceTitle) {
     and.push({ services: { some: { ...(dept ? { departmentId: dept } : {}), title: serviceTitle } } })
   }
-  // Отдел здесь намеренно НЕ сужает список клиентов — сужаются только их
-  // услуги и отчёты (см. ниже). Раньше клиент, которым занимался другой
-  // отдел, из списка пропадал, и получался тупик: не виден, но и занести
-  // нельзя — запись в архиве одна на клиента, и вторая не создаётся.
-  // Руководитель видел «Архив пуст» и «Этот клиент уже в архиве» разом.
-  //
-  // Закрытыми остаются отчёты — именно так и просил заказчик. Имя клиента
-  // секретом не было и раньше: клиента без услуг список показывал всем.
+  // На вкладке отдела — только записи этого отдела. Записи без отдела
+  // остались от правки, до которой архив был общим; их видит один админ,
+  // чтобы разложить или убрать. Показывать их отделам нельзя: заказчик
+  // ровно на это и жаловался — чужие карточки «Пока пусто» на своей вкладке.
+  if (dept) and.push({ departmentId: dept })
+  else if (user.role !== 'admin') and.push({ departmentId: { not: null } })
 
   /**
    * Поиск ищет не только по имени клиента.
@@ -210,14 +208,16 @@ export async function getArchiveClient(user, id) {
 
   if (!user.departmentId) throw ApiError.forbidden('Вы не привязаны к отделу, поэтому архив недоступен')
 
-  // Карточка открывается всегда, но с услугами только своего отдела —
-  // чужие отчёты не видно. Прятать карточку целиком нельзя: клиент мог
-  // попасть в архив через другой отдел, и тогда завести ему свою первую
-  // услугу стало бы невозможно.
+  // Чужая запись для сотрудника не существует — у его отдела своя. Запись
+  // без отдела тоже: её разбирает админ.
+  if (row.departmentId !== user.departmentId) {
+    throw ApiError.notFound('Клиент в архиве не найден')
+  }
+
   return { ...row, services: row.services.filter((s) => s.departmentId === user.departmentId) }
 }
 
-export async function addArchiveClient(user, clientId) {
+export async function addArchiveClient(user, clientId, departmentId) {
   if (!['admin', 'lead'].includes(user.role)) {
     throw ApiError.forbidden('Заносить клиентов в архив может руководитель или админ')
   }
@@ -225,27 +225,43 @@ export async function addArchiveClient(user, clientId) {
   const client = await prisma.client.findUnique({ where: { id: clientId } })
   if (!client) throw ApiError.notFound('Клиент не найден')
 
-  // Запись в архиве одна на клиента, а отделов несколько. Второй отдел,
-  // заносящий того же клиента, не ошибается — он просто хочет получить
-  // карточку, чтобы завести в ней свою услугу. Поэтому отдаём имеющуюся
-  // запись, а не отказ.
-  const existing = await prisma.archiveClient.findUnique({
-    where: { clientId },
+  // В чей архив заносим. Сотруднику — только в свой, админ называет отдел
+  // сам: это вкладка, на которой он стоит.
+  //
+  // Отдел обязателен всем, и админу тоже. Иначе вышла бы запись без отдела,
+  // а такая торчит пустой карточкой на всех вкладках сразу — ровно то, на
+  // что жаловался заказчик.
+  const dept = user.role === 'admin' ? departmentId : user.departmentId
+  if (!dept) {
+    throw user.role === 'admin'
+      ? ApiError.badRequest('Выберите отдел — архив у каждого свой')
+      : ApiError.forbidden('Вы не привязаны к отделу, поэтому архив недоступен')
+  }
+  if (user.role !== 'admin' && departmentId && departmentId !== dept) {
+    throw ApiError.forbidden('Заносить можно только в архив своего отдела')
+  }
+  if (!(await prisma.department.findUnique({ where: { id: dept } }))) {
+    throw ApiError.notFound('Отдел не найден')
+  }
+
+  // Повторное занесение в тот же отдел — не ошибка: человек хочет получить
+  // карточку, а не создать вторую. Отдаём ту, что есть.
+  const existing = await prisma.archiveClient.findFirst({
+    where: { clientId, departmentId: dept },
     include: { client: { select: { id: true, name: true } } },
   })
   if (existing) return existing
 
   try {
     return await prisma.archiveClient.create({
-      data: { clientId, addedById: user.id },
+      data: { clientId, departmentId: dept, addedById: user.id },
       include: { client: { select: { id: true, name: true } } },
     })
   } catch (e) {
-    // Гонка: двое занесли одного клиента одновременно. Победил чужой
-    // запрос — значит карточка уже есть, и это по-прежнему не ошибка.
+    // Гонка: двое занесли одного клиента в один отдел одновременно.
     if (e.code === 'P2002') {
-      return prisma.archiveClient.findUnique({
-        where: { clientId },
+      return prisma.archiveClient.findFirst({
+        where: { clientId, departmentId: dept },
         include: { client: { select: { id: true, name: true } } },
       })
     }
@@ -284,18 +300,28 @@ export async function removeArchiveClient(user, id) {
 // ---------------------------------------------------------------------------
 
 export async function createService(user, { archiveClientId, departmentId, title }) {
-  assertCanCreateService(user, departmentId)
-
-  const [archiveClient, department] = await Promise.all([
-    prisma.archiveClient.findUnique({ where: { id: archiveClientId } }),
-    prisma.department.findUnique({ where: { id: departmentId } }),
-  ])
+  const archiveClient = await prisma.archiveClient.findUnique({ where: { id: archiveClientId } })
   if (!archiveClient) throw ApiError.notFound('Клиент в архиве не найден')
-  if (!department) throw ApiError.notFound('Отдел не найден')
 
-  return prisma.archiveService.create({
-    data: { archiveClientId, departmentId, title, createdById: user.id },
-    include: { department: { select: { id: true, name: true } }, createdBy: { select: PERSON } },
+  // Отдел берём у самой записи, а не из запроса: услуга не может оказаться
+  // в чужом архиве, даже если её туда попросили положить. У заготовки без
+  // отдела его ещё нет — тогда берём названный, и заготовка достаётся ему.
+  const dept = archiveClient.departmentId || departmentId
+  if (!dept) throw ApiError.badRequest('Укажите отдел')
+  assertCanCreateService(user, dept)
+
+  if (!(await prisma.department.findUnique({ where: { id: dept } }))) {
+    throw ApiError.notFound('Отдел не найден')
+  }
+
+  return prisma.$transaction(async (tx) => {
+    if (!archiveClient.departmentId) {
+      await tx.archiveClient.update({ where: { id: archiveClientId }, data: { departmentId: dept } })
+    }
+    return tx.archiveService.create({
+      data: { archiveClientId, departmentId: dept, title, createdById: user.id },
+      include: { department: { select: { id: true, name: true } }, createdBy: { select: PERSON } },
+    })
   })
 }
 

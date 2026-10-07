@@ -11,7 +11,7 @@ export const getClient = asyncHandler(async (req, res) => {
 })
 
 export const addClient = asyncHandler(async (req, res) => {
-  res.status(201).json(await archiveService.addArchiveClient(req.user, req.body.clientId))
+  res.status(201).json(await archiveService.addArchiveClient(req.user, req.body.clientId, req.body.departmentId))
 })
 
 export const removeClient = asyncHandler(async (req, res) => {
