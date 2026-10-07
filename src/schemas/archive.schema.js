@@ -18,13 +18,18 @@ export const archiveIdParamSchema = z.object({
 })
 
 export const addArchiveClientSchema = z.object({
-  body: z.object({ clientId: objectId }),
+  // Отдел — это вкладка, на которой стоит человек. Сотруднику он всё равно
+  // подставится свой, а админ может не называть его вовсе: тогда выйдет
+  // заготовка, которую заберёт первый отдел, заведший в ней услугу.
+  body: z.object({ clientId: objectId, departmentId: objectId.optional() }),
 })
 
 export const createServiceSchema = z.object({
   body: z.object({
     archiveClientId: objectId,
-    departmentId: objectId,
+    // Нужен только для заготовки без отдела: у обычной записи отдел берётся
+    // у неё самой, чтобы услуга не легла в чужой архив.
+    departmentId: objectId.optional(),
     // Название пишут руками каждый раз — так решил заказчик, зная, что
     // «Таргет» и «таргетинг» станут разными строками в фильтре.
     title: z.string().trim().min(1, 'Название услуги обязательно').max(200),

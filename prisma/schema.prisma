@@ -102,6 +102,7 @@ model Department {
   tasks     Task[]
   calls     Call[]
   archiveServices ArchiveService[]
+  archiveClients  ArchiveClient[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -118,7 +119,8 @@ model Client {
   // удалить клиента, по которому есть архив, база не даст. Это сделано
   // специально — архив переживает операционные данные, ради этого он и
   // существует. Понятное сообщение вместо ошибки базы даёт client.service.js.
-  archive   ArchiveClient?
+  // Записей может быть несколько — по одной на отдел, который вёл клиента.
+  archive   ArchiveClient[]
 
   // Карточка этого клиента на Доске клиентов, если его туда заносили.
   // Связь без onDelete, то есть Restrict: удалить клиента, по которому
@@ -282,8 +284,20 @@ model TelegramLink {
 model ArchiveClient {
   id        String   @id @default(cuid())
 
-  clientId  String   @unique
+  clientId  String
   client    Client   @relation(fields: [clientId], references: [id])
+
+  // Архив у каждого отдела свой: на вкладке отдела должны быть его клиенты,
+  // его услуги и его отчёты — и больше ничего. Пока отдела у записи не было,
+  // она была одна на клиента, и два отдела дрались за неё: один заносил
+  // клиента, у второго тот же клиент либо пропадал из списка, либо не
+  // заносился вовсе.
+  //
+  // Необязательное поле — ради записей, заведённых до этой правки админом,
+  // у которого своего отдела нет. Такая запись — пустая заготовка: её видно
+  // всем отделам, и первый, кто заведёт в ней услугу, забирает её себе.
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
 
   addedById String
   addedBy   User     @relation("ArchiveClientAddedBy", fields: [addedById], references: [id])
@@ -292,6 +306,10 @@ model ArchiveClient {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Один клиент может лежать в архиве нескольких отделов, но в своём — один раз.
+  @@unique([clientId, departmentId])
+  @@index([departmentId])
 }
 
 // Услуга, которой занимались для клиента. Название пишут руками каждый раз —
