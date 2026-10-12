@@ -38,9 +38,21 @@ export async function openMonth(now = new Date()) {
  * записей, а штрафы за пропущенные ночи ложатся каждый своими сутками.
  */
 export async function catchUpMotivation(now = new Date()) {
-  const month = await openMonth(now)
-  const { charged } = await chargeOverdue(now)
-  return { ...month, charged }
+  // Шаги независимы: сбой стартовых сумм не должен оставить без штрафов, и
+  // наоборот.
+  let created = 0
+  let charged = 0
+  try {
+    created = (await openMonth(now)).created
+  } catch (e) {
+    console.error('[мотивация] стартовые суммы при запуске не легли:', e.message)
+  }
+  try {
+    charged = (await chargeOverdue(now)).charged
+  } catch (e) {
+    console.error('[мотивация] штрафы при запуске не легли:', e.message)
+  }
+  return { created, charged }
 }
 
 export function scheduleOpenMotivationMonth() {

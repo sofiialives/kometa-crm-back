@@ -440,8 +440,17 @@ export async function updateGeneral(actor, patch) {
     if (patch[key] !== undefined) data[key] = patch[key]
   }
   // Дата включения автобаллов приходит днём «ГГГГ-ММ-ДД» и хранится
-  // московской полуночью этого дня. null — выключить.
+  // московской полуночью этого дня. null — выключить. Задним числом не
+  // включаем: по уже прошедшим ночам разом легли бы штрафы. Уже
+  // сохранённую дату можно прислать снова — она могла давно пройти.
   if (patch.autoTasksFrom !== undefined) {
+    if (patch.autoTasksFrom !== null) {
+      const stored = (await getSettingsRow()).autoTasksFrom
+      const unchanged = stored && dayKeyOf(stored) === patch.autoTasksFrom
+      if (!unchanged && patch.autoTasksFrom < dayKeyOf(new Date())) {
+        throw ApiError.badRequest('Автобаллы включаются не раньше сегодняшнего дня')
+      }
+    }
     data.autoTasksFrom = patch.autoTasksFrom === null ? null : mskDateStart(patch.autoTasksFrom)
   }
   const row = await prisma.motivationSettings.upsert({

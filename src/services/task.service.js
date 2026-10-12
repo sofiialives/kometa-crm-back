@@ -171,9 +171,12 @@ export async function updateTaskStatus(id, status, user) {
     throw ApiError.forbidden('Менять статус можно только у своих задач')
   }
 
+  // Повторное «Готово» у уже закрытой задачи время закрытия не сдвигает:
+  // иначе задача, закрытая в срок, задним числом выглядела бы опоздавшей.
+  const doneAt = status === 'done' ? (task.status === 'done' && task.doneAt ? task.doneAt : new Date()) : null
   const updated = await prisma.task.update({
     where: { id },
-    data: { status, doneAt: status === 'done' ? new Date() : null },
+    data: { status, doneAt },
     include: OWNER_INCLUDE,
   })
   await syncTaskStatus(task, updated)

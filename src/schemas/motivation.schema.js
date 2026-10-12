@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { objectId } from './common.js'
+import { isRealDayKey } from '../services/motivation/taskRules.js'
 
 /**
  * Проверка запросов вкладки «Мотивация». Здесь — форма данных: типы,
@@ -219,7 +220,7 @@ export const generalSettingsSchema = z.object({
       autoTasksFrom: z
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в виде ГГГГ-ММ-ДД')
-        .refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)), 'Такой даты нет')
+        .refine(isRealDayKey, 'Такой даты нет')
         .nullable()
         .optional(),
     })

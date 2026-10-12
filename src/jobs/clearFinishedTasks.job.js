@@ -38,33 +38,30 @@ export function scheduleClearFinishedTasks() {
   cron.schedule('0 0 * * *', async () => {
     // Сначала штрафы мотивации за просрочку, потом уборка: личная задача
     // штрафуется один раз, и после удаления её уже не за что было бы
-    // оштрафовать. Сбой штрафов уборку не останавливает.
+    // оштрафовать. Задачи, штраф по которым не записался, этой ночью не
+    // удаляем — следующая ночь попробует снова. Не записалось вообще ничего
+    // (например, база недоступна) — уборку просроченных откладываем целиком.
+    let keep = []
     try {
-      const { charged } = await chargeOverdue(new Date())
+      const { charged, failed } = await chargeOverdue(new Date())
+      keep = failed
       if (charged) console.log('[cron] штрафов мотивации за просрочку:', charged)
     } catch (e) {
-      console.error('[cron] штрафы мотивации не записались', e)
+      console.error('[cron] штрафы мотивации не записались, уборка просроченных отложена', e)
+      return
     }
 
-    const overdueTasks = await prisma.task.findMany({
-      where: {
-        status: { not: 'done' },
-        deadline: { lt: new Date() },
-        origin: 'personal',
-        owner: { role: { not: 'admin' } },
-      },
-      select: { ownerId: true },
-    })
+    const where = {
+      status: { not: 'done' },
+      deadline: { lt: new Date() },
+      origin: 'personal',
+      owner: { role: { not: 'admin' } },
+      ...(keep.length ? { id: { notIn: keep } } : {}),
+    }
+    const overdueTasks = await prisma.task.findMany({ where, select: { ownerId: true } })
     await bumpStat('overdueCount', overdueTasks)
 
-    const res = await prisma.task.deleteMany({
-      where: {
-        status: { not: 'done' },
-        deadline: { lt: new Date() },
-        origin: 'personal',
-        owner: { role: { not: 'admin' } },
-      },
-    })
+    const res = await prisma.task.deleteMany({ where })
     console.log('[cron] удалено просроченных незакрытых задач:', res.count)
   }, TZ)
 }
