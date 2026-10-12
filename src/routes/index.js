@@ -9,6 +9,7 @@ import callRoutes from './call.routes.js'
 import telegramRoutes from './telegram.routes.js'
 import archiveRoutes from './archive.routes.js'
 import boardRoutes from './board.routes.js'
+import motivationRoutes from './motivation.routes.js'
 
 const router = Router()
 
@@ -22,5 +23,6 @@ router.use('/calls', callRoutes)
 router.use('/telegram', telegramRoutes)
 router.use('/archive', archiveRoutes)
 router.use('/board', boardRoutes)
+router.use('/motivation', motivationRoutes)
 
 export default router
