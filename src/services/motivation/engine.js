@@ -49,6 +49,13 @@
  *      оставить уровень дороже, чем он стоит при новом банке: зафиксированные
  *      суммы срезаются до банк × доля. Иначе высший уровень мог бы стоить
  *      меньше низшего.
+ *
+ *   7. Ноль долларов — это не фиксация, а «ждём денег». Если уровень вышел на
+ *      ноль (банк пуст, или в нём пара долларов и доля округлилась до нуля,
+ *      или админ списал ошибочное пополнение целиком), он фиксируется
+ *      следующим пополнением, как по правилу 2. Иначе одно ошибочное
+ *      пополнение и его списание навсегда оставили бы пройденные уровни
+ *      по нулям.
  */
 
 export const POINTS_MIN = 0
@@ -190,6 +197,11 @@ export function replayPrize({ levels, bankEntries = [], events = [] }) {
   const fixed = scale.map(() => null)
 
   const floating = (i) => levelAmount(bankCents, scale[i].percent)
+  // Правило 7: ноль не фиксируем — уровень ждёт денег.
+  const lock = (i) => {
+    const value = floating(i)
+    return value > 0 ? value : null
+  }
 
   for (const item of buildTimeline(bankEntries, events)) {
     if (item.type === 'bank') {
@@ -200,13 +212,16 @@ export function replayPrize({ levels, bankEntries = [], events = [] }) {
         // Правило 2: уровни, пройденные при пустом банке, ждали денег —
         // фиксируем их первым же пополнением.
         for (let i = 0; i < reached; i += 1) {
-          if (i !== lastIndex && fixed[i] === null) fixed[i] = floating(i)
+          if (i !== lastIndex && fixed[i] === null) fixed[i] = lock(i)
         }
       } else if (amount < 0) {
         // Правило 6: после списания уровень не может стоить больше, чем при
         // новом банке.
         for (let i = 0; i < fixed.length; i += 1) {
-          if (fixed[i] !== null) fixed[i] = Math.min(fixed[i], floating(i))
+          if (fixed[i] !== null) {
+            const capped = Math.min(fixed[i], floating(i))
+            fixed[i] = capped > 0 ? capped : null
+          }
         }
       }
       continue
@@ -220,7 +235,7 @@ export function replayPrize({ levels, bankEntries = [], events = [] }) {
       // Правило 1: вышел на новые уровни — их суммы фиксируются по
       // текущему банку. При пустом банке фиксировать нечего (правило 2).
       for (let i = reached; i < now; i += 1) {
-        fixed[i] = i !== lastIndex && bankCents > 0 ? floating(i) : null
+        fixed[i] = i !== lastIndex ? lock(i) : null
       }
     } else if (now < reached) {
       // Правило 4: упал ниже — уровни выше снова плавают.
@@ -236,8 +251,9 @@ export function replayPrize({ levels, bankEntries = [], events = [] }) {
       position: i + 1,
       threshold: l.threshold,
       percent: l.percent,
-      // Правило 3: последний уровень — весь банк, всегда.
-      amountCents: isLast ? roundToDollar(bankCents) : isFixed ? fixed[i] : floating(i),
+      // Правило 3: последний уровень — весь банк, всегда и ровно: без
+      // округления, иначе при банке 10,50 $ вершина платила бы 11 $.
+      amountCents: isLast ? bankCents : isFixed ? fixed[i] : floating(i),
       reached: i < reached,
       fixed: isFixed,
     }

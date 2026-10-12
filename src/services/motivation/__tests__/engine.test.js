@@ -318,3 +318,39 @@ describe('проверка шкалы', () => {
     assert.ok(validateWorkLevels([{ title: ' ', minPoints: 0 }]).some((e) => e.includes('название')))
   })
 })
+
+describe('ноль долларов — не фиксация', () => {
+  test('ошибочное пополнение списали целиком — уровни ждут следующего пополнения', () => {
+    // 45 баллов при пустом банке, ошибочные 100 $, их списание, потом 200 $.
+    const r = replayPrize({
+      levels: SCALE,
+      bankEntries: [bank(10, 100), bank(20, -100), bank(30, 200)],
+      events: [ev(5, 45)],
+    })
+    assert.deepEqual(amounts(r), [30, 60, 100, 150, 200])
+    assert.equal(dollars(r.earnedCents), 60)
+  })
+
+  test('в банке пара долларов, доля округлилась до нуля — уровень не застывает на нуле', () => {
+    const r = replayPrize({
+      levels: SCALE,
+      bankEntries: [bank(0, 2), bank(30, 198)],
+      events: [ev(10, 25)],
+    })
+    // Первый уровень пройден при банке 2 $: 15% — это 0 $. Фиксируется он
+    // пополнением до 200 $, то есть на 30 $.
+    assert.equal(dollars(r.levels[0].amountCents), 30)
+    assert.equal(dollars(r.earnedCents), 30)
+  })
+})
+
+describe('вершина без округления', () => {
+  test('последний уровень — ровно весь банк, с центами', () => {
+    const r = replayPrize({
+      levels: SCALE,
+      bankEntries: [{ id: 'b', occurredAt: at(0), amountCents: 1050 }],
+      events: [ev(5, 100)],
+    })
+    assert.equal(r.earnedCents, 1050)
+  })
+})
