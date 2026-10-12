@@ -1,7 +1,8 @@
 import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
 import { computeMonth } from './engine.js'
-import { currentMonthKey, isMonthKey, monthKeyOf, referenceMoment } from './month.js'
+import { currentMonthKey, dayKeyOf, isMonthKey, monthKeyOf, referenceMoment } from './month.js'
+import { autoActiveAt } from './taskRules.js'
 import { assertCanView, assertParticipant, canManage, loadEmployee } from './access.js'
 import { assignmentAt, getGlobalScale, getSettingsRow, getWorkLevels, scaleOf, usesCustomScale, workLevelsOf } from './profiles.js'
 import { availableMonths, ensureStartBank, loadJournals } from './journal.js'
@@ -161,6 +162,10 @@ export async function getConditions(actor, userId, now = new Date()) {
       overduePenaltyCap: settings.overduePenaltyCap,
       personalTaskDailyCap: settings.personalTaskDailyCap,
       startBankCents: profile?.startBankCents ?? 0,
+      // Автобаллы за задачи: с какого дня и работают ли уже. Без этого
+      // человек видел бы «+2 за задачу в срок» и не понимал, почему их нет.
+      autoTasksFrom: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
+      autoTasksOn: autoActiveAt(settings.autoTasksFrom, now),
     },
     month: monthKeyOf(now),
   }

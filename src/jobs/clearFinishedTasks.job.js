@@ -1,5 +1,6 @@
 import cron from 'node-cron'
 import { prisma } from '../config/prisma.js'
+import { chargeOverdue } from '../services/motivation/autoTasks.service.js'
 
 async function bumpStat(field, tasks) {
   const byUser = {}
@@ -35,6 +36,16 @@ export function scheduleClearFinishedTasks() {
   }, TZ)
 
   cron.schedule('0 0 * * *', async () => {
+    // Сначала штрафы мотивации за просрочку, потом уборка: личная задача
+    // штрафуется один раз, и после удаления её уже не за что было бы
+    // оштрафовать. Сбой штрафов уборку не останавливает.
+    try {
+      const { charged } = await chargeOverdue(new Date())
+      if (charged) console.log('[cron] штрафов мотивации за просрочку:', charged)
+    } catch (e) {
+      console.error('[cron] штрафы мотивации не записались', e)
+    }
+
     const overdueTasks = await prisma.task.findMany({
       where: {
         status: { not: 'done' },

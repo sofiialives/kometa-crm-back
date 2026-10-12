@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS = {
   personalTaskDailyCap: 2,
   notifyBank: true,
   notifyPoints: true,
+  autoTasksFrom: null,
 }
 
 export async function getSettingsRow(db = prisma) {

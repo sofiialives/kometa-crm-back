@@ -216,6 +216,12 @@ export const generalSettingsSchema = z.object({
       personalTaskDailyCap: z.coerce.number().int().min(0).max(100).optional(),
       notifyBank: z.boolean().optional(),
       notifyPoints: z.boolean().optional(),
+      autoTasksFrom: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в виде ГГГГ-ММ-ДД')
+        .refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)), 'Такой даты нет')
+        .nullable()
+        .optional(),
     })
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })

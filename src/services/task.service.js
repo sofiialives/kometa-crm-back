@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
+import { syncTaskStatus } from './motivation/autoTasks.service.js'
 
 const OWNER_INCLUDE = { owner: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } } }
 
@@ -158,6 +159,9 @@ export async function editTask(id, patch, user) {
  * задачи (весь отдел / всё), но переставлять их по колонкам не могут —
  * каждый отвечает только за свою доску. Готово не финально: можно
  * перетащить обратно, если ошиблись.
+ *
+ * После смены статуса — баллы мотивации: закрыл в срок — баллы, вернул из
+ * «Готово» — баллы снимаются. Сбой там статус задачи не откатывает.
  */
 export async function updateTaskStatus(id, status, user) {
   const task = await prisma.task.findUnique({ where: { id } })
@@ -167,11 +171,13 @@ export async function updateTaskStatus(id, status, user) {
     throw ApiError.forbidden('Менять статус можно только у своих задач')
   }
 
-  return prisma.task.update({
+  const updated = await prisma.task.update({
     where: { id },
     data: { status, doneAt: status === 'done' ? new Date() : null },
     include: OWNER_INCLUDE,
   })
+  await syncTaskStatus(task, updated)
+  return updated
 }
 
 export function isOverdue(task) {
