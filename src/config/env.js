@@ -1,11 +1,30 @@
 import 'dotenv/config'
 
+const nodeEnv = process.env.NODE_ENV || 'development'
+
+// Секрет для подписи токенов входа. В разработке можно не задавать —
+// подставится временное значение. На боевом сервере без него не стартуем:
+// временные значения лежат в открытом коде, и по ним кто угодно подделает
+// токен и войдёт в CRM под любым сотрудником.
+function jwtSecret(name, devFallback) {
+  const value = process.env[name]
+  if (value) return value
+  if (nodeEnv === 'production') {
+    throw new Error(
+      `Не задана переменная окружения ${name}. На боевом сервере она обязательна: ` +
+        'без неё токены входа подписывались бы общеизвестным ключом. ' +
+        'Задайте её в панели Render и перезапустите сервис.',
+    )
+  }
+  return devFallback
+}
+
 export const env = {
   port: process.env.PORT || 4000,
   databaseUrl: process.env.DATABASE_URL || '',
 
-  jwtAccessSecret: process.env.JWT_ACCESS_SECRET || 'dev-access-secret',
-  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret',
+  jwtAccessSecret: jwtSecret('JWT_ACCESS_SECRET', 'dev-access-secret'),
+  jwtRefreshSecret: jwtSecret('JWT_REFRESH_SECRET', 'dev-refresh-secret'),
   accessTokenTtl: '15m',
   // "Никогда" в вечном смысле для JWT технически не бывает (иначе украденный
   // токен нельзя было бы обесценить), но 400 дней — это фактически "выходишь
@@ -14,7 +33,7 @@ export const env = {
 
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
 
   // Имя бота напоминаний — нужно, чтобы собрать ссылку вида
   // t.me/<бот>?start=<код>. Не секрет: его и так видно в телеграме.
