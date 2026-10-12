@@ -25,7 +25,7 @@ function resolveMonth(month, now) {
 }
 
 /** Какие отделы смотрит actor. null — все (админ без фильтра). */
-function departmentScope(actor, departmentId) {
+export function departmentScope(actor, departmentId) {
   if (actor.role === 'admin') return departmentId || null
   if (!actor.departmentId) throw ApiError.forbidden('Вы не закреплены ни за одним отделом')
   // Руководителю чужой отдел не открываем, даже если он подставит id руками.

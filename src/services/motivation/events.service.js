@@ -1,6 +1,8 @@
 import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
-import { assertCanManage, assertManager, loadEmployee, loadManagedEmployees } from './access.js'
+import { assertCanCancelInMonth, assertCanManage, assertManager, loadEmployee, loadManagedEmployees } from './access.js'
+import { currentMonthKey, monthKeyOf } from './month.js'
+import { isDuplicate, requestKeyFor } from './dedupe.js'
 import { assignmentAt, assignmentsAt } from './profiles.js'
 import { eventEntry, eventTypeCard, profileCard } from './shape.js'
 
@@ -17,8 +19,8 @@ import { eventEntry, eventTypeCard, profileCard } from './shape.js'
 const PRODUCT_KEY = 'client_product'
 
 const EVENT_INCLUDE = {
-  createdBy: { select: { id: true, name: true, email: true } },
-  cancelledBy: { select: { id: true, name: true, email: true } },
+  createdBy: { select: { id: true, name: true } },
+  cancelledBy: { select: { id: true, name: true } },
 }
 
 // Баллы на одно событие. Шкала — сто баллов на месяц, поэтому больше ста
@@ -62,7 +64,7 @@ export async function manualOptions(actor, userId) {
  * пересчитается. Корректировка — любое число со знаком; по умолчанию одно и
  * то же в обе шкалы, но можно развести, как и у событий профиля.
  */
-export async function addManual(actor, { userId, eventTypeId, prizePoints, levelPoints, comment }) {
+export async function addManual(actor, { userId, eventTypeId, prizePoints, levelPoints, comment, requestKey }) {
   assertManager(actor)
   if (!comment?.trim()) throw ApiError.badRequest('Напишите комментарий: за что баллы')
 
@@ -96,19 +98,27 @@ export async function addManual(actor, { userId, eventTypeId, prizePoints, level
     data = { kind: 'adjustment', title: 'Ручная корректировка', prizePoints: prize, levelPoints: level }
   }
 
-  const event = await prisma.motivationEvent.create({
-    data: {
-      ...data,
-      userId: employee.id,
-      profileId: profile?.id ?? null,
-      mode: 'manual',
-      comment: comment.trim(),
-      occurredAt: new Date(),
-      createdById: actor.id,
-    },
-    include: EVENT_INCLUDE,
-  })
-  return eventEntry(event)
+  const dedupeKey = requestKeyFor(requestKey, employee.id)
+  try {
+    const event = await prisma.motivationEvent.create({
+      data: {
+        ...data,
+        userId: employee.id,
+        profileId: profile?.id ?? null,
+        mode: 'manual',
+        comment: comment.trim(),
+        occurredAt: new Date(),
+        dedupeKey,
+        createdById: actor.id,
+      },
+      include: EVENT_INCLUDE,
+    })
+    return eventEntry(event)
+  } catch (e) {
+    // Повтор того же нажатия — отдаём уже начисленное, второй раз не ставим.
+    if (!isDuplicate(e, requestKey)) throw e
+    return eventEntry(await prisma.motivationEvent.findUnique({ where: { dedupeKey }, include: EVENT_INCLUDE }))
+  }
 }
 
 /**
@@ -120,7 +130,7 @@ export async function addManual(actor, { userId, eventTypeId, prizePoints, level
  * операция отменяется целиком и говорит, у кого именно: иначе одни
  * получили бы баллы, а другие молча нет.
  */
-export async function addProduct(actor, { userIds, clientId, product, comment }) {
+export async function addProduct(actor, { userIds, clientId, product, comment, requestKey }) {
   assertManager(actor)
   const users = await loadManagedEmployees(actor, userIds)
   const title = product?.trim()
@@ -142,29 +152,39 @@ export async function addProduct(actor, { userIds, clientId, product, comment })
   })
 
   const now = new Date()
-  const created = await prisma.$transaction(
-    plan.map(({ user, profile, type }) =>
-      prisma.motivationEvent.create({
-        data: {
-          userId: user.id,
-          profileId: profile.id,
-          eventTypeId: type.id,
-          kind: 'product',
-          mode: 'manual',
-          title: `${type.title}: ${title}`,
-          prizePoints: type.prizePoints,
-          levelPoints: type.levelPoints,
-          clientId: client?.id ?? null,
-          clientName: client?.name ?? null,
-          comment: comment?.trim() || null,
-          occurredAt: now,
-          createdById: actor.id,
-        },
-        include: EVENT_INCLUDE,
-      }),
-    ),
-  )
-  return { events: created.map((e) => eventEntry(e)), count: created.length }
+  try {
+    const created = await prisma.$transaction(
+      plan.map(({ user, profile, type }) =>
+        prisma.motivationEvent.create({
+          data: {
+            userId: user.id,
+            profileId: profile.id,
+            eventTypeId: type.id,
+            kind: 'product',
+            mode: 'manual',
+            title: `${type.title}: ${title}`,
+            prizePoints: type.prizePoints,
+            levelPoints: type.levelPoints,
+            clientId: client?.id ?? null,
+            clientName: client?.name ?? null,
+            comment: comment?.trim() || null,
+            occurredAt: now,
+            dedupeKey: requestKeyFor(requestKey, user.id),
+            createdById: actor.id,
+          },
+          include: EVENT_INCLUDE,
+        }),
+      ),
+    )
+    return { events: created.map((e) => eventEntry(e)), count: created.length, duplicate: false }
+  } catch (e) {
+    if (!isDuplicate(e, requestKey)) throw e
+    const existing = await prisma.motivationEvent.findMany({
+      where: { dedupeKey: { in: users.map((u) => requestKeyFor(requestKey, u.id)) } },
+      include: EVENT_INCLUDE,
+    })
+    return { events: existing.map((x) => eventEntry(x)), count: existing.length, duplicate: true }
+  }
 }
 
 /**
@@ -181,6 +201,7 @@ export async function cancelEvent(actor, id, { reason }) {
 
   const employee = await loadEmployee(event.userId)
   assertCanManage(actor, employee)
+  assertCanCancelInMonth(actor, monthKeyOf(event.occurredAt), currentMonthKey())
   if (event.cancelledAt) throw ApiError.conflict('Событие уже отменено')
 
   // updateMany с условием «ещё не отменено» — защита от двойного клика:

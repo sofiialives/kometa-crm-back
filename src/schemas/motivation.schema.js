@@ -24,6 +24,11 @@ const requiredComment = z.string().trim().min(1, 'Напишите коммен�
 
 const ids = z.array(objectId).min(1, 'Выберите хотя бы одного сотрудника').max(100)
 
+// Ключ формы против повторной отправки: форма придумывает его при открытии
+// (crypto.randomUUID). Необязательный — без него операция просто не защищена
+// от двойного нажатия.
+const requestKey = z.string().uuid('Некорректный ключ запроса')
+
 export const monthQuerySchema = z.object({
   query: z.object({ month: optional(month) }),
 })
@@ -52,6 +57,7 @@ export const topUpSchema = z.object({
       reason: z.enum(['new_client', 'free_budget', 'other']),
       clientId: optional(objectId),
       comment: optional(comment),
+      requestKey: optional(requestKey),
     })
     .refine((b) => b.reason !== 'new_client' || b.clientId, {
       message: 'Выберите клиента, за которого пополняется банк',
@@ -75,6 +81,7 @@ export const manualEventSchema = z.object({
       prizePoints: optional(points),
       levelPoints: optional(points),
       comment: requiredComment,
+      requestKey: optional(requestKey),
     })
     .refine((b) => b.eventTypeId || b.prizePoints !== undefined, {
       message: 'Выберите событие или укажите баллы корректировки',
@@ -88,6 +95,7 @@ export const productSchema = z.object({
     clientId: optional(objectId),
     product: z.string().trim().min(1, 'Укажите продукт').max(200),
     comment: optional(comment),
+    requestKey: optional(requestKey),
   }),
 })
 

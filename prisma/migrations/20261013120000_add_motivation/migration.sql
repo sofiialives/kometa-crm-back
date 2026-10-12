@@ -119,7 +119,7 @@ CREATE TABLE "MotivationBankEntry" (
     "clientName"  TEXT,
     "comment"     TEXT,
     "occurredAt"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "startKey"    TEXT,
+    "dedupeKey"   TEXT,
     "createdById" TEXT,
     "createdAt"   TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "MotivationBankEntry_pkey" PRIMARY KEY ("id")
@@ -179,7 +179,9 @@ CREATE UNIQUE INDEX "MotivationWorkLevel_position_key" ON "MotivationWorkLevel"(
 CREATE INDEX "MotivationAssignment_userId_from_idx" ON "MotivationAssignment"("userId", "from");
 
 -- Обе выборки журналов — «записи сотрудника за месяц».
-CREATE UNIQUE INDEX "MotivationBankEntry_startKey_key" ON "MotivationBankEntry"("startKey");
+-- Ключи повторов: стартовая сумма один раз за месяц, одно нажатие формы —
+-- одна запись на сотрудника, одно автособытие — одно начисление.
+CREATE UNIQUE INDEX "MotivationBankEntry_dedupeKey_key" ON "MotivationBankEntry"("dedupeKey");
 CREATE INDEX "MotivationBankEntry_userId_occurredAt_idx" ON "MotivationBankEntry"("userId", "occurredAt");
 
 CREATE UNIQUE INDEX "MotivationEvent_dedupeKey_key" ON "MotivationEvent"("dedupeKey");

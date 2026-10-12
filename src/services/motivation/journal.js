@@ -9,7 +9,8 @@ import { currentMonthKey, monthKeyOf, monthRange, monthsBetween } from './month.
  * отмена не стирает событие, а оставляет след.
  */
 
-const PERSON = { select: { id: true, name: true, email: true } }
+// Кто сделал или отменил запись: только имя, без почты (см. shape.js → person).
+const PERSON = { select: { id: true, name: true } }
 
 export const BANK_INCLUDE = {
   createdBy: PERSON,
@@ -71,8 +72,8 @@ export async function loadJournalsFor(userIds, monthKey, db = prisma) {
  * Первого числа банк получает стартовую сумму профиля, если админ её задал.
  * Отдельного ночного задания для этого пока нет: запись появляется при
  * первом же обращении к текущему месяцу. Это безопасно делать сколько угодно
- * раз — у стартовой записи уникальный ключ «сотрудник:месяц», и вторая
- * попытка просто не пройдёт.
+ * раз — у стартовой записи уникальный ключ «start:сотрудник:месяц», и
+ * вторая попытка просто не пройдёт.
  *
  * Сумма полагается, только если профиль был назначен к началу месяца.
  * Назначили в середине — стартовая сумма будет со следующего месяца: так
@@ -99,7 +100,7 @@ export async function ensureStartBank(userId, monthKey, assignment, now = new Da
         amountCents: cents,
         comment: `Стартовая сумма профиля «${assignment.profile.title}»`,
         occurredAt: start,
-        startKey: `${userId}:${monthKey}`,
+        dedupeKey: `start:${userId}:${monthKey}`,
       },
     })
     return true

@@ -93,14 +93,32 @@ export function assertCanView(actor, target) {
 export async function loadManagedEmployees(actor, ids) {
   const unique = [...new Set(ids)]
   const users = await prisma.user.findMany({ where: { id: { in: unique } }, select: EMPLOYEE_SELECT })
-  if (users.length !== unique.length) throw ApiError.badRequest('Кого-то из выбранных сотрудников нет в CRM')
 
+  // Сначала — можно ли вообще управлять каждым, и ответ один на «нет такого»,
+  // «не сотрудник» и «чужой отдел». Иначе по разным текстам ошибки
+  // руководитель мог бы перебором узнать роль и статус людей из чужих
+  // отделов. Подробности — только про тех, кем он и так управляет.
+  if (users.length !== unique.length || users.some((u) => !canManage(actor, u))) {
+    throw ApiError.forbidden(MANAGE_DENIED)
+  }
   for (const u of users) {
-    if (!isEmployee(u)) throw ApiError.badRequest(`${u.name || u.email}: банк и баллы есть только у сотрудников`)
     if (!u.active) throw ApiError.badRequest(`${u.name || u.email}: сотрудник отключён`)
-    assertCanManage(actor, u)
   }
   return users
+}
+
+const MANAGE_DENIED = 'Среди выбранных есть люди, мотивацией которых вы не управляете'
+
+/**
+ * Отмена события из прошлого месяца меняет итоги, которые уже посчитаны и,
+ * возможно, выплачены. По заданию задним числом баллы меняет только админ,
+ * поэтому руководитель отменяет события только текущего месяца.
+ */
+export function assertCanCancelInMonth(actor, eventMonthKey, currentMonthKey) {
+  if (actor.role === 'admin') return
+  if (eventMonthKey !== currentMonthKey) {
+    throw ApiError.forbidden('Этот месяц уже закрыт: отменить событие задним числом может только админ')
+  }
 }
 
 export { EMPLOYEE_SELECT }

@@ -4,9 +4,14 @@
  * показывают одни и те же поля одинаково.
  */
 
+/**
+ * Кто сделал запись: только имя. Почту не отдаём — историю видит и сам
+ * сотрудник, а почты руководителей и админа ему знать незачем. Так же
+ * устроен справочник сотрудников CRM: имя, аватар и отдел, без личных данных.
+ */
 export function person(user) {
   if (!user) return null
-  return { id: user.id, name: user.name || user.email, email: user.email }
+  return { id: user.id, name: user.name || 'Без имени' }
 }
 
 export function employeeCard(user) {
