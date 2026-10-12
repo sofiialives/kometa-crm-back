@@ -86,9 +86,13 @@ POST   /api/tasks               (auth)
 PATCH  /api/tasks/:id/status    (auth)
 DELETE /api/tasks/:id           (auth)
 
+/api/motivation/*               вкладка «Мотивация»: банк премии, баллы, профили
+                                должностей. Маршруты и правила — docs/motivation.md
+
 ## Дальше
 
 - Индексы под нагрузку — уже проставлены на User.departmentId, Task.ownerId+status, Task.departmentId+status.
-- Тесты — пока нет, структура позволяет мокать services и тестировать controllers отдельно.
+- Тесты — `npm test` (node:test, без зависимостей). Пока покрыт расчёт мотивации, остальное
+  тестируется по той же схеме: чистая логика отдельным модулем, сервисы вокруг.
 - Если понадобится Postgres/Prisma вместо Mongo — меняются только models/ и запросы в services/,
   остальные слои не трогаем.
