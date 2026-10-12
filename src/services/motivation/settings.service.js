@@ -4,6 +4,8 @@ import { assertAdmin, EMPLOYEE_SELECT, isParticipant, PARTICIPANT_ROLES } from '
 import { validateScale, validateWorkLevels } from './engine.js'
 import { assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_INCLUDE } from './profiles.js'
 import { employeeCard, eventTypeCard } from './shape.js'
+import { dayKeyOf } from './month.js'
+import { mskDateStart } from './taskRules.js'
 
 /**
  * Раздел «Настройки» — только для админа.
@@ -89,6 +91,7 @@ export async function getSettings(actor) {
       personalTaskDailyCap: settings.personalTaskDailyCap,
       notifyBank: settings.notifyBank,
       notifyPoints: settings.notifyPoints,
+      autoTasksFrom: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
     },
     employees: users.map((u) => {
       const a = assignments.get(u.id)
@@ -436,6 +439,20 @@ export async function updateGeneral(actor, patch) {
   for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints']) {
     if (patch[key] !== undefined) data[key] = patch[key]
   }
+  // Дата включения автобаллов приходит днём «ГГГГ-ММ-ДД» и хранится
+  // московской полуночью этого дня. null — выключить. Задним числом не
+  // включаем: по уже прошедшим ночам разом легли бы штрафы. Уже
+  // сохранённую дату можно прислать снова — она могла давно пройти.
+  if (patch.autoTasksFrom !== undefined) {
+    if (patch.autoTasksFrom !== null) {
+      const stored = (await getSettingsRow()).autoTasksFrom
+      const unchanged = stored && dayKeyOf(stored) === patch.autoTasksFrom
+      if (!unchanged && patch.autoTasksFrom < dayKeyOf(new Date())) {
+        throw ApiError.badRequest('Автобаллы включаются не раньше сегодняшнего дня')
+      }
+    }
+    data.autoTasksFrom = patch.autoTasksFrom === null ? null : mskDateStart(patch.autoTasksFrom)
+  }
   const row = await prisma.motivationSettings.upsert({
     where: { id: 'global' },
     create: { id: 'global', ...data },
@@ -446,6 +463,7 @@ export async function updateGeneral(actor, patch) {
     personalTaskDailyCap: row.personalTaskDailyCap,
     notifyBank: row.notifyBank,
     notifyPoints: row.notifyPoints,
+    autoTasksFrom: row.autoTasksFrom ? dayKeyOf(row.autoTasksFrom) : null,
   }
 }
 

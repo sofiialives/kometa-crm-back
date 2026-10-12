@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { objectId } from './common.js'
+import { isRealDayKey } from '../services/motivation/taskRules.js'
 
 /**
  * Проверка запросов вкладки «Мотивация». Здесь — форма данных: типы,
@@ -216,6 +217,12 @@ export const generalSettingsSchema = z.object({
       personalTaskDailyCap: z.coerce.number().int().min(0).max(100).optional(),
       notifyBank: z.boolean().optional(),
       notifyPoints: z.boolean().optional(),
+      autoTasksFrom: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в виде ГГГГ-ММ-ДД')
+        .refine(isRealDayKey, 'Такой даты нет')
+        .nullable()
+        .optional(),
     })
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })

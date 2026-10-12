@@ -3,6 +3,7 @@ import { prisma } from '../config/prisma.js'
 import { currentMonthKey } from '../services/motivation/month.js'
 import { ensureStartBank } from '../services/motivation/journal.js'
 import { PARTICIPANT_ROLES } from '../services/motivation/access.js'
+import { chargeOverdue } from '../services/motivation/autoTasks.service.js'
 
 /**
  * Начало месяца мотивации: в полночь первого числа по Москве каждый
@@ -28,6 +29,30 @@ export async function openMonth(now = new Date()) {
     if (await ensureStartBank(user, monthKey, now)) created += 1
   }
   return { monthKey, created }
+}
+
+/**
+ * Доначислить пропущенное при запуске сервера. На Render сервер может
+ * спать в полночь, и тогда ни уборка со штрафами, ни открытие месяца не
+ * сработают. Оба шага повторять безопасно: дубли отсекаются ключами
+ * записей, а штрафы за пропущенные ночи ложатся каждый своими сутками.
+ */
+export async function catchUpMotivation(now = new Date()) {
+  // Шаги независимы: сбой стартовых сумм не должен оставить без штрафов, и
+  // наоборот.
+  let created = 0
+  let charged = 0
+  try {
+    created = (await openMonth(now)).created
+  } catch (e) {
+    console.error('[мотивация] стартовые суммы при запуске не легли:', e.message)
+  }
+  try {
+    charged = (await chargeOverdue(now)).charged
+  } catch (e) {
+    console.error('[мотивация] штрафы при запуске не легли:', e.message)
+  }
+  return { created, charged }
 }
 
 export function scheduleOpenMotivationMonth() {

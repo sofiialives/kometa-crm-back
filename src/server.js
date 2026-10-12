@@ -3,7 +3,7 @@ import { connectDb } from './config/db.js'
 import { env } from './config/env.js'
 import { scheduleClearFinishedTasks } from './jobs/clearFinishedTasks.job.js'
 import { scheduleClearPastCalls } from './jobs/clearPastCalls.job.js'
-import { scheduleOpenMotivationMonth } from './jobs/openMotivationMonth.job.js'
+import { catchUpMotivation, scheduleOpenMotivationMonth } from './jobs/openMotivationMonth.job.js'
 import { startBot } from './bot/index.js'
 
 async function bootstrap() {
@@ -11,6 +11,12 @@ async function bootstrap() {
   scheduleClearFinishedTasks()
   scheduleClearPastCalls()
   scheduleOpenMotivationMonth()
+  // Не ждём: запуск API не должен зависеть от мотивации.
+  catchUpMotivation()
+    .then(({ created, charged }) => {
+      if (created || charged) console.log(`[мотивация] доначислено при запуске: стартовых сумм ${created}, штрафов ${charged}`)
+    })
+    .catch((e) => console.error('[мотивация] не удалось доначислить при запуске:', e.message))
 
   const app = createApp()
   app.listen(env.port, () => {
