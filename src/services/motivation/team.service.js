@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
 import { computeMonth } from './engine.js'
 import { currentMonthKey, isMonthKey, monthKeyOf, monthsBetween, referenceMoment } from './month.js'
-import { assertManager, EMPLOYEE_ROLE, EMPLOYEE_SELECT } from './access.js'
+import { assertAdmin, assertViewer, EMPLOYEE_SELECT, PARTICIPANT_ROLES } from './access.js'
 import { assignmentsAt, getGlobalScale, getWorkLevels, scaleOf, workLevelsOf } from './profiles.js'
 import { ensureStartBank, loadJournalsFor } from './journal.js'
 import { employeeCard, profileCard } from './shape.js'
@@ -11,7 +11,9 @@ import { employeeCard, profileCard } from './shape.js'
  * Раздел «Команда»: таблица сотрудников с банком, баллами, уровнями и
  * заработанным, а под ней «Всего в банках» и «К выплате сейчас».
  *
- * Руководитель видит свой отдел, админ — всех, с фильтром по отделу.
+ * Руководитель видит сотрудников своего отдела — только смотрит, менять
+ * ничего не может. Владелец видит всех, у кого есть банк, в том числе
+ * руководителей, и фильтрует по отделу.
  * Именно по этой таблице заказчик в конце месяца смотрит, у кого какой
  * уровень, поэтому всё считается тем же расчётом, что и экран сотрудника:
  * цифры в таблице и в карточке человека не могут разойтись.
@@ -36,12 +38,15 @@ export function departmentScope(actor, departmentId) {
 }
 
 export async function getTeam(actor, { month, departmentId } = {}, now = new Date()) {
-  assertManager(actor)
+  assertViewer(actor)
   const monthKey = resolveMonth(month, now)
   const scope = departmentScope(actor, departmentId)
 
+  // Руководителю — сотрудники его отдела; себя он смотрит в «Моей мотивации».
+  // Владельцу — все, у кого есть банк, и руководители тоже.
+  const roles = actor.role === 'admin' ? PARTICIPANT_ROLES : ['staff']
   const users = await prisma.user.findMany({
-    where: { role: EMPLOYEE_ROLE, ...(scope ? { departmentId: scope } : {}) },
+    where: { role: { in: roles }, ...(scope ? { departmentId: scope } : {}) },
     select: EMPLOYEE_SELECT,
     orderBy: [{ name: 'asc' }, { email: 'asc' }],
   })
@@ -124,7 +129,7 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
  * в таблице и так покажет нули.
  */
 export async function teamMonths(actor, now = new Date()) {
-  assertManager(actor)
+  assertViewer(actor)
   const [bank, event, assignment] = await Promise.all([
     prisma.motivationBankEntry.findFirst({ orderBy: { occurredAt: 'asc' }, select: { occurredAt: true } }),
     prisma.motivationEvent.findFirst({ orderBy: { occurredAt: 'asc' }, select: { occurredAt: true } }),
@@ -136,14 +141,10 @@ export async function teamMonths(actor, now = new Date()) {
   return monthsBetween(from, current).reverse()
 }
 
-/** Сотрудники для форм руководителя: кого можно выбрать в «Пополнить банк». */
+/** Кого владелец может выбрать в формах: все активные, у кого есть банк. */
 export async function managedEmployees(actor) {
-  assertManager(actor)
-  const where = { role: EMPLOYEE_ROLE, active: true }
-  if (actor.role === 'lead') {
-    if (!actor.departmentId) return []
-    where.departmentId = actor.departmentId
-  }
+  assertAdmin(actor, 'Начислять может только владелец')
+  const where = { role: { in: PARTICIPANT_ROLES }, active: true }
   const users = await prisma.user.findMany({ where, select: EMPLOYEE_SELECT, orderBy: [{ name: 'asc' }, { email: 'asc' }] })
   const assignments = await assignmentsAt(users.map((u) => u.id))
   return users.map((u) => ({ ...employeeCard(u), profile: profileCard(assignments.get(u.id)?.profile) }))

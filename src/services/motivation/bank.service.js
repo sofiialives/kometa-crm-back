@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
-import { assertAdmin, assertCanManage, assertManager, loadEmployee, loadManagedEmployees } from './access.js'
+import { assertAdmin, assertCanManage, loadEmployee, loadManagedEmployees } from './access.js'
 import { currentMonthKey, monthRange } from './month.js'
 import { loadMonthState } from './overview.service.js'
 import { bankEntry } from './shape.js'
@@ -9,9 +9,9 @@ import { requestKeyFor, isDuplicate } from './dedupe.js'
 /**
  * Пополнение и списание банка.
  *
- * Пополняют руководитель (свой отдел) и админ (всех). Уменьшить банк может
- * только админ, отдельной операцией «Списание из банка» с обязательным
- * комментарием — например, когда пополнили по ошибке. Записи журнала не
+ * И то и другое делает только владелец: он пополняет банк и сотрудникам, и
+ * руководителям. Уменьшить банк можно отдельной операцией «Списание из
+ * банка» с обязательным комментарием — например, когда пополнили по ошибке. Записи журнала не
  * удаляются и не правятся: ошибка исправляется новой записью, и в истории
  * видно и ошибку, и исправление.
  */
@@ -38,7 +38,7 @@ async function resolveClient(clientId) {
  * в задании — сотрудников выбирают нескольких, сумму вводят одну.
  */
 export async function topUp(actor, { userIds, amount, reason, clientId, comment, requestKey }) {
-  assertManager(actor)
+  assertAdmin(actor, 'Пополнять банк может только владелец')
   const cents = toCents(amount)
   if (!(cents > 0)) throw ApiError.badRequest('Сумма пополнения должна быть больше нуля')
   if (reason === 'new_client' && !clientId) throw ApiError.badRequest('Выберите клиента, за которого пополняется банк')
@@ -87,7 +87,7 @@ export async function topUp(actor, { userIds, amount, reason, clientId, comment,
  * сейчас лежит в банке текущего месяца: в минус банк не уходит.
  */
 export async function writeOff(actor, { userId, amount, comment }) {
-  assertAdmin(actor)
+  assertAdmin(actor, 'Списывать из банка может только владелец')
   const cents = toCents(amount)
   if (!(cents > 0)) throw ApiError.badRequest('Сумма списания должна быть больше нуля')
   if (!comment?.trim()) throw ApiError.badRequest('Напишите, почему списываете: это останется в истории банка')

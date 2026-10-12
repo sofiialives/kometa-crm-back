@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
-import { assertAdmin, EMPLOYEE_ROLE, EMPLOYEE_SELECT } from './access.js'
+import { assertAdmin, EMPLOYEE_SELECT, isParticipant, PARTICIPANT_ROLES } from './access.js'
 import { validateScale, validateWorkLevels } from './engine.js'
 import { assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_INCLUDE } from './profiles.js'
 import { employeeCard, eventTypeCard } from './shape.js'
@@ -44,7 +44,7 @@ function profileView(profile, usage) {
 async function profileUsage() {
   const [current, events] = await Promise.all([
     assignmentsAt(
-      (await prisma.user.findMany({ where: { role: EMPLOYEE_ROLE }, select: { id: true } })).map((u) => u.id),
+      (await prisma.user.findMany({ where: { role: { in: PARTICIPANT_ROLES } }, select: { id: true } })).map((u) => u.id),
     ),
     prisma.motivationEvent.groupBy({ by: ['profileId'], _count: { _all: true } }),
   ])
@@ -65,7 +65,7 @@ async function profileUsage() {
 
 /** Всё содержимое «Настроек» одним ответом: экран небольшой, грузится целиком. */
 export async function getSettings(actor) {
-  assertAdmin(actor)
+  assertAdmin(actor, 'Настройки мотивации меняет только владелец')
   const [profiles, globalScale, workLevels, settings, usage, users] = await Promise.all([
     prisma.motivationProfile.findMany({ include: PROFILE_INCLUDE, orderBy: { title: 'asc' } }),
     getGlobalScale(),
@@ -73,7 +73,7 @@ export async function getSettings(actor) {
     getSettingsRow(),
     profileUsage(),
     prisma.user.findMany({
-      where: { role: EMPLOYEE_ROLE },
+      where: { role: { in: PARTICIPANT_ROLES } },
       select: EMPLOYEE_SELECT,
       orderBy: [{ active: 'desc' }, { name: 'asc' }],
     }),
@@ -457,8 +457,8 @@ export async function updateGeneral(actor, patch) {
 export async function assignProfile(actor, userId, profileId) {
   assertAdmin(actor)
   const user = await prisma.user.findUnique({ where: { id: userId }, select: EMPLOYEE_SELECT })
-  if (!user || user.role !== EMPLOYEE_ROLE) {
-    throw ApiError.badRequest('Профиль назначается только сотрудникам: у руководителей и админа нет банка и баллов')
+  if (!user || !isParticipant(user)) {
+    throw ApiError.badRequest('Профиль назначается сотрудникам и руководителям: у владельца нет банка и баллов')
   }
   await loadProfile(profileId)
 

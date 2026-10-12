@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
 import { computeMonth } from './engine.js'
 import { currentMonthKey, isMonthKey, monthKeyOf, referenceMoment } from './month.js'
-import { assertCanView, assertEmployee, canManage, loadEmployee } from './access.js'
+import { assertCanView, assertParticipant, canManage, loadEmployee } from './access.js'
 import { assignmentAt, getGlobalScale, getSettingsRow, getWorkLevels, scaleOf, usesCustomScale, workLevelsOf } from './profiles.js'
 import { availableMonths, ensureStartBank, loadJournals } from './journal.js'
 import { bankEntry, employeeCard, eventEntry, eventTypeCard, newestFirst, profileCard } from './shape.js'
@@ -117,18 +117,17 @@ export async function getOverview(actor, userId, month, now = new Date()) {
     history,
     unseen: isSelf ? { bankCents: unseenBankCents, events: unseenEvents } : null,
     permissions: {
+      // Всё это — только владелец. Руководитель и сам сотрудник смотрят.
       canManage: canManageEmployee,
-      canWriteOff: actor.role === 'admin',
-      // Отменять события руководитель может только в текущем месяце:
-      // прошлые уже посчитаны, их задним числом меняет только админ.
-      canCancel: canManageEmployee && (isCurrent || actor.role === 'admin'),
+      canWriteOff: canManageEmployee,
+      canCancel: canManageEmployee,
     },
   }
 }
 
-/** Свой экран сотрудника. У руководителя и админа банка нет. */
+/** Свой экран сотрудника или руководителя. У владельца банка нет. */
 export async function getMyOverview(actor, month, now = new Date()) {
-  assertEmployee(actor)
+  assertParticipant(actor)
   return getOverview(actor, actor.id, month, now)
 }
 
@@ -168,7 +167,7 @@ export async function getConditions(actor, userId, now = new Date()) {
 }
 
 export async function getMyConditions(actor, now = new Date()) {
-  assertEmployee(actor)
+  assertParticipant(actor)
   return getConditions(actor, actor.id, now)
 }
 
@@ -182,7 +181,7 @@ export async function getMyConditions(actor, now = new Date()) {
  * ставим, и назад она не откатывается.
  */
 export async function markSeen(actor, { bankUntil, eventsUntil } = {}, now = new Date()) {
-  assertEmployee(actor)
+  assertParticipant(actor)
   const clamp = (d) => (d && new Date(d).getTime() < now.getTime() ? new Date(d) : now)
   const current = await prisma.motivationSeen.findUnique({ where: { userId: actor.id } })
   const later = (a, b) => (!b || a.getTime() > new Date(b).getTime() ? a : new Date(b))

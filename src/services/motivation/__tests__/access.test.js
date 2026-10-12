@@ -1,90 +1,104 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  assertAdmin, assertCanCancelInMonth, assertCanView, assertEmployee, assertManager, canManage, isEmployee, isManager,
+  assertAdmin, assertCanManage, assertCanView, assertParticipant, assertViewer, canManage, canView, isParticipant, isViewer,
 } from '../access.js'
 import { departmentScope } from '../team.service.js'
 import { isDuplicate, requestKeyFor } from '../dedupe.js'
 
-// Модель доступа вкладки: сотрудник видит себя, руководитель управляет своим
-// отделом, админ — всеми. Банк и баллы есть только у сотрудников.
+// Модель доступа вкладки, как её решил заказчик:
+// - банк и баллы есть у сотрудников и руководителей, нет только у владельца;
+// - менять деньги и баллы может только владелец — всем, у кого есть банк;
+// - руководитель видит сотрудников своего отдела и себя, но ничего не меняет.
 
-const admin = { id: 'a', role: 'admin', departmentId: null }
+const owner = { id: 'a', role: 'admin', departmentId: null }
 const leadDesign = { id: 'l1', role: 'lead', departmentId: 'design' }
+const leadDesign2 = { id: 'l3', role: 'lead', departmentId: 'design' }
 const leadNoDept = { id: 'l0', role: 'lead', departmentId: null }
+const leadDev = { id: 'l2', role: 'lead', departmentId: 'dev' }
 const nick = { id: 's1', role: 'staff', departmentId: 'design' }
 const roman = { id: 's2', role: 'staff', departmentId: 'design' }
 const igor = { id: 's3', role: 'staff', departmentId: 'dev' }
-const leadDev = { id: 'l2', role: 'lead', departmentId: 'dev' }
 
 const forbids = (fn, status = 403) => assert.throws(fn, (e) => e.status === status)
 
-describe('роли', () => {
-  test('банк и баллы — только у сотрудников', () => {
-    assert.equal(isEmployee(nick), true)
-    assert.equal(isEmployee(leadDesign), false)
-    assert.equal(isEmployee(admin), false)
-    assert.doesNotThrow(() => assertEmployee(nick))
-    forbids(() => assertEmployee(leadDesign))
-    forbids(() => assertEmployee(admin))
+describe('у кого есть банк', () => {
+  test('у сотрудника и руководителя есть, у владельца нет', () => {
+    assert.equal(isParticipant(nick), true)
+    assert.equal(isParticipant(leadDesign), true)
+    assert.equal(isParticipant(owner), false)
+    assert.doesNotThrow(() => assertParticipant(nick))
+    assert.doesNotThrow(() => assertParticipant(leadDesign))
+    forbids(() => assertParticipant(owner))
   })
 
-  test('руководитель и админ — управляющие, сотрудник нет', () => {
-    assert.equal(isManager(admin), true)
-    assert.equal(isManager(leadDesign), true)
-    assert.equal(isManager(nick), false)
-    forbids(() => assertManager(nick))
+  test('«Команду» смотрят руководитель и владелец', () => {
+    assert.equal(isViewer(owner), true)
+    assert.equal(isViewer(leadDesign), true)
+    assert.equal(isViewer(nick), false)
+    forbids(() => assertViewer(nick))
   })
 
-  test('настройки — только админ', () => {
-    assert.doesNotThrow(() => assertAdmin(admin))
+  test('настройки и начисления — только владелец', () => {
+    assert.doesNotThrow(() => assertAdmin(owner))
     forbids(() => assertAdmin(leadDesign))
     forbids(() => assertAdmin(nick))
   })
 })
 
-describe('кем можно управлять', () => {
-  test('админ управляет любым сотрудником', () => {
-    assert.equal(canManage(admin, nick), true)
-    assert.equal(canManage(admin, igor), true)
+describe('кто управляет деньгами и баллами', () => {
+  test('владелец — и сотрудниками, и руководителями', () => {
+    assert.equal(canManage(owner, nick), true)
+    assert.equal(canManage(owner, igor), true)
+    assert.equal(canManage(owner, leadDesign), true)
   })
 
-  test('руководитель — только своим отделом', () => {
-    assert.equal(canManage(leadDesign, nick), true)
-    assert.equal(canManage(leadDesign, igor), false)
-    assert.equal(canManage(leadDev, igor), true)
+  test('себе владелец ничего не начисляет: у него нет банка', () => {
+    assert.equal(canManage(owner, owner), false)
   })
 
-  test('руководитель без отдела не управляет никем', () => {
-    assert.equal(canManage(leadNoDept, { ...nick, departmentId: null }), false)
+  test('руководитель не начисляет даже своему отделу и себе', () => {
+    assert.equal(canManage(leadDesign, nick), false)
+    assert.equal(canManage(leadDesign, leadDesign), false)
+    forbids(() => assertCanManage(leadDesign, nick))
   })
 
-  test('руководителем и админом управлять нельзя: у них нет банка', () => {
-    assert.equal(canManage(admin, leadDesign), false)
-    assert.equal(canManage(leadDesign, { ...leadDev, departmentId: 'design' }), false)
-  })
-
-  test('сотрудник не управляет даже коллегой из своего отдела', () => {
+  test('сотрудник не управляет никем', () => {
     assert.equal(canManage(nick, roman), false)
+    assert.equal(canManage(nick, nick), false)
   })
 })
 
 describe('кто кого видит', () => {
-  test('сотрудник видит себя', () => {
+  test('каждый видит себя — и сотрудник, и руководитель', () => {
     assert.doesNotThrow(() => assertCanView(nick, nick))
+    assert.doesNotThrow(() => assertCanView(leadDesign, leadDesign))
   })
 
   test('сотрудник не видит коллегу — ответ как на несуществующего', () => {
     forbids(() => assertCanView(nick, roman), 404)
   })
 
-  test('руководитель видит своих и не видит чужой отдел', () => {
-    assert.doesNotThrow(() => assertCanView(leadDesign, nick))
-    forbids(() => assertCanView(leadDesign, igor), 404)
+  test('руководитель видит сотрудников своего отдела', () => {
+    assert.equal(canView(leadDesign, nick), true)
+    assert.equal(canView(leadDesign, roman), true)
   })
 
-  test('админ видит всех сотрудников', () => {
-    assert.doesNotThrow(() => assertCanView(admin, igor))
+  test('руководитель не видит чужой отдел и других руководителей', () => {
+    forbids(() => assertCanView(leadDesign, igor), 404)
+    assert.equal(canView(leadDesign, leadDev), false)
+    assert.equal(canView(leadDesign, leadDesign2), false)
+  })
+
+  test('руководитель без отдела видит только себя', () => {
+    assert.equal(canView(leadNoDept, { ...nick, departmentId: null }), false)
+    assert.equal(canView(leadNoDept, leadNoDept), true)
+  })
+
+  test('владелец видит всех, у кого есть банк', () => {
+    assert.equal(canView(owner, igor), true)
+    assert.equal(canView(owner, leadDev), true)
+    assert.equal(canView(owner, owner), false)
   })
 })
 
@@ -102,28 +116,14 @@ describe('таблица команды', () => {
     forbids(() => departmentScope(leadNoDept, undefined))
   })
 
-  test('админ без фильтра видит всех, с фильтром — выбранный отдел', () => {
-    assert.equal(departmentScope(admin, undefined), null)
-    assert.equal(departmentScope(admin, 'dev'), 'dev')
-  })
-})
-
-describe('отмена событий по месяцам', () => {
-  test('руководитель отменяет события текущего месяца', () => {
-    assert.doesNotThrow(() => assertCanCancelInMonth(leadDesign, '2026-11', '2026-11'))
-  })
-
-  test('прошлый месяц руководитель не трогает', () => {
-    forbids(() => assertCanCancelInMonth(leadDesign, '2026-10', '2026-11'))
-  })
-
-  test('админ может отменить и в прошлом месяце', () => {
-    assert.doesNotThrow(() => assertCanCancelInMonth(admin, '2026-10', '2026-11'))
+  test('владелец без фильтра видит всех, с фильтром — выбранный отдел', () => {
+    assert.equal(departmentScope(owner, undefined), null)
+    assert.equal(departmentScope(owner, 'dev'), 'dev')
   })
 })
 
 describe('защита от повторной отправки', () => {
-  test('ключ свой у каждого сотрудника в одном запросе', () => {
+  test('ключ свой у каждого человека в одном запросе', () => {
     assert.equal(requestKeyFor('k1', 's1'), 'request:k1:s1')
     assert.notEqual(requestKeyFor('k1', 's1'), requestKeyFor('k1', 's2'))
   })

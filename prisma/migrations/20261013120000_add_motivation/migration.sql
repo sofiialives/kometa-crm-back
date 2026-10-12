@@ -285,10 +285,15 @@ INSERT INTO "MotivationWorkLevel" ("id", "position", "title", "minPoints", "hint
     ('mwork_4', 4, 'Отлично', 80,
      'Вы в лучшей зоне месяца. Держите темп', (now() AT TIME ZONE 'UTC'));
 
+-- Три профиля из задания и четвёртый для руководителей отделов: заказчик
+-- решил, что руководитель получает премию по той же системе, что и его
+-- люди. Его условия в задании не расписаны — здесь основа, которую
+-- владелец подгонит сам.
 INSERT INTO "MotivationProfile" ("id", "title", "updatedAt") VALUES
     ('mprof_developer', 'Разработчик', (now() AT TIME ZONE 'UTC')),
     ('mprof_designer', 'Дизайнер', (now() AT TIME ZONE 'UTC')),
-    ('mprof_targeting', 'Таргетолог', (now() AT TIME ZONE 'UTC'));
+    ('mprof_targeting', 'Таргетолог', (now() AT TIME ZONE 'UTC')),
+    ('mprof_lead', 'Руководитель отдела', (now() AT TIME ZONE 'UTC'));
 
 -- События профилей. По задачам у каждого профиля одно автособытие «в срок»:
 -- типов задач в CRM нет, и система не отличит макет от отчёта, поэтому у
@@ -300,7 +305,7 @@ INSERT INTO "MotivationProfile" ("id", "title", "updatedAt") VALUES
 --   • просроченная личная задача — штраф один раз: ночная уборка CRM её
 --     удаляет, и «каждого следующего дня» у неё просто не бывает;
 --   • «Был на созвоне» — заказчик сказал на созвоне, что баллы будут и за
---     это. Отмечает руководитель: CRM знает, кого позвали, но не знает,
+--     это. Отмечает владелец: CRM знает, кого позвали, но не знает,
 --     кто пришёл.
 INSERT INTO "MotivationEventType"
     ("id", "profileId", "title", "example", "prizePoints", "levelPoints", "mode", "autoRule", "systemKey", "position", "updatedAt")
@@ -314,11 +319,11 @@ VALUES
     ('mevt_dev_personal_overdue', 'mprof_developer', 'Личная задача просрочена',
      'Личная задача не закрыта к дедлайну: штраф один раз', -2, -2, 'auto', 'personal_task_overdue', NULL, 4, (now() AT TIME ZONE 'UTC')),
     ('mevt_dev_rework', 'mprof_developer', 'Задача возвращена на доработку из-за ошибки разработчика',
-     'Руководитель вернул задачу: сделано не так, как договорились', -3, -3, 'manual', NULL, NULL, 5, (now() AT TIME ZONE 'UTC')),
+     'Задачу вернули на доработку: сделано не так, как договорились', -3, -3, 'manual', NULL, NULL, 5, (now() AT TIME ZONE 'UTC')),
     ('mevt_dev_release', 'mprof_developer', 'Релиз прошёл 7 дней без критических ошибок',
      'Неделю после выкладки не было ни одной критичной ошибки', 3, 3, 'manual', NULL, NULL, 6, (now() AT TIME ZONE 'UTC')),
     ('mevt_dev_call', 'mprof_developer', 'Был на созвоне',
-     'Руководитель отметил, что вы были на созвоне с командой или клиентом', 1, 1, 'manual', NULL, NULL, 7, (now() AT TIME ZONE 'UTC')),
+     'Отмечено, что вы были на созвоне с командой или клиентом', 1, 1, 'manual', NULL, NULL, 7, (now() AT TIME ZONE 'UTC')),
     ('mevt_dev_product', 'mprof_developer', 'Клиент купил дополнительный продукт',
      'Клиент, с которым вы работали, заказал у агентства ещё одну услугу', 10, 10, 'manual', NULL, 'client_product', 8, (now() AT TIME ZONE 'UTC')),
 
@@ -335,7 +340,7 @@ VALUES
     ('mevt_des_rounds', 'mprof_designer', 'Больше двух кругов правок по вине дизайнера',
      'Макет переделывали третий раз из-за ошибок в самом макете', -2, -2, 'manual', NULL, NULL, 6, (now() AT TIME ZONE 'UTC')),
     ('mevt_des_call', 'mprof_designer', 'Был на созвоне',
-     'Руководитель отметил, что вы были на созвоне с командой или клиентом', 1, 1, 'manual', NULL, NULL, 7, (now() AT TIME ZONE 'UTC')),
+     'Отмечено, что вы были на созвоне с командой или клиентом', 1, 1, 'manual', NULL, NULL, 7, (now() AT TIME ZONE 'UTC')),
     ('mevt_des_product', 'mprof_designer', 'Клиент купил дополнительный продукт',
      'Клиент, с которым вы работали, заказал у агентства ещё одну услугу', 10, 10, 'manual', NULL, 'client_product', 8, (now() AT TIME ZONE 'UTC')),
 
@@ -350,13 +355,26 @@ VALUES
     ('mevt_trg_goal', 'mprof_targeting', 'Цель кампании за месяц выполнена',
      'Кампания набрала то количество заявок или продаж, о котором договорились', 5, 5, 'manual', NULL, NULL, 5, (now() AT TIME ZONE 'UTC')),
     ('mevt_trg_call', 'mprof_targeting', 'Был на созвоне',
-     'Руководитель отметил, что вы были на созвоне с командой или клиентом', 1, 1, 'manual', NULL, NULL, 6, (now() AT TIME ZONE 'UTC')),
+     'Отмечено, что вы были на созвоне с командой или клиентом', 1, 1, 'manual', NULL, NULL, 6, (now() AT TIME ZONE 'UTC')),
     ('mevt_trg_product', 'mprof_targeting', 'Клиент купил дополнительный продукт',
-     'Клиент, с которым вы работали, заказал у агентства ещё одну услугу', 10, 10, 'manual', NULL, 'client_product', 7, (now() AT TIME ZONE 'UTC'));
+     'Клиент, с которым вы работали, заказал у агентства ещё одну услугу', 10, 10, 'manual', NULL, 'client_product', 7, (now() AT TIME ZONE 'UTC')),
+
+    ('mevt_lead_on_time', 'mprof_lead', 'Задача из Иерархии закрыта в срок',
+     'Ваша задача из Иерархии закрыта до дедлайна', 2, 2, 'auto', 'task_on_time', NULL, 1, (now() AT TIME ZONE 'UTC')),
+    ('mevt_lead_personal_on_time', 'mprof_lead', 'Личная задача закрыта в срок',
+     'Задача, которую вы поставили себе сами, закрыта до дедлайна', 1, 1, 'auto', 'personal_task_on_time', NULL, 2, (now() AT TIME ZONE 'UTC')),
+    ('mevt_lead_overdue', 'mprof_lead', 'Просрочка дедлайна',
+     'Ваша задача из Иерархии не закрыта к дедлайну: штраф за каждый день просрочки', -2, -2, 'auto', 'task_overdue', NULL, 3, (now() AT TIME ZONE 'UTC')),
+    ('mevt_lead_personal_overdue', 'mprof_lead', 'Личная задача просрочена',
+     'Личная задача не закрыта к дедлайну: штраф один раз', -2, -2, 'auto', 'personal_task_overdue', NULL, 4, (now() AT TIME ZONE 'UTC')),
+    ('mevt_lead_call', 'mprof_lead', 'Провёл созвон с клиентом или командой',
+     'Владелец отметил созвон, который вы провели', 1, 1, 'manual', NULL, NULL, 5, (now() AT TIME ZONE 'UTC')),
+    ('mevt_lead_product', 'mprof_lead', 'Клиент купил дополнительный продукт',
+     'Клиент вашего отдела заказал у агентства ещё одну услугу', 10, 10, 'manual', NULL, 'client_product', 6, (now() AT TIME ZONE 'UTC'));
 
 -- Профили тем, у кого должность понятна по названию. Остальных назначит
--- админ во вкладке. Банк и баллы бывают только у рядовых сотрудников, так
--- что руководители и админ сюда не попадают.
+-- владелец во вкладке. У самого владельца (админа) банка нет — сюда он не
+-- попадает.
 --
 -- Ищем по куску слова без первой буквы: «изайн», «азраб», «аргет». Регистр
 -- кириллицы в сравнении зависит от локали базы, а без первой буквы его и
@@ -376,3 +394,9 @@ FROM "User" u
 WHERE u."role" = 'staff'
   AND u."active" = true
   AND (u."position" LIKE '%изайн%' OR u."position" LIKE '%азраб%' OR u."position" LIKE '%аргет%');
+
+-- Руководителям отделов — их профиль, независимо от названия должности.
+INSERT INTO "MotivationAssignment" ("id", "userId", "profileId", "from", "createdAt")
+SELECT 'masg_' || u."id", u."id", 'mprof_lead', (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC')
+FROM "User" u
+WHERE u."role" = 'lead' AND u."active" = true;

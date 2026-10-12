@@ -19,6 +19,9 @@ export function employeeCard(user) {
     id: user.id,
     name: user.name || user.email,
     email: user.email,
+    // Роль нужна, чтобы в таблице владельца руководители отличались от
+    // сотрудников: банк есть у тех и у других.
+    role: user.role,
     position: user.position,
     active: user.active,
     avatarUrl: user.avatarUrl,

@@ -5,7 +5,7 @@ import * as bank from '../services/motivation/bank.service.js'
 import * as events from '../services/motivation/events.service.js'
 import * as settings from '../services/motivation/settings.service.js'
 
-// ---- Сотрудник про себя ----------------------------------------------------
+// ---- Про себя: сотрудник и руководитель ------------------------------------
 
 export const getMine = asyncHandler(async (req, res) => {
   res.json(await overview.getMyOverview(req.user, req.query.month))
@@ -19,7 +19,7 @@ export const markSeen = asyncHandler(async (req, res) => {
   res.json(await overview.markSeen(req.user, req.body))
 })
 
-// ---- Руководитель и админ --------------------------------------------------
+// ---- Команда: руководитель смотрит, владелец начисляет ---------------------
 
 export const getTeam = asyncHandler(async (req, res) => {
   res.json(await team.getTeam(req.user, req.query))
@@ -65,7 +65,7 @@ export const cancelEvent = asyncHandler(async (req, res) => {
   res.json(await events.cancelEvent(req.user, req.params.id, req.body))
 })
 
-// ---- Настройки (админ) -----------------------------------------------------
+// ---- Настройки (владелец) --------------------------------------------------
 
 export const getSettings = asyncHandler(async (req, res) => {
   res.json(await settings.getSettings(req.user))

@@ -4,36 +4,43 @@ import { ApiError } from '../../utils/ApiError.js'
 /**
  * Кто кого видит и кому что можно во вкладке «Мотивация».
  *
- * Банк и баллы есть только у рядовых сотрудников: у руководителей отделов и
- * у админа их нет, так решил заказчик. Руководитель ведёт свой отдел, админ
- * — всех. Сотрудник видит только себя.
+ * Банк и баллы есть у сотрудников и у руководителей отделов: руководитель
+ * получает премию по той же системе и следит за своими уровнями. Нет их
+ * только у владельца (админа) — он начисляет другим, а себе незачем.
+ *
+ * Менять что-либо может только владелец: пополнять и списывать банк,
+ * ставить и отменять баллы, отмечать покупку продукта, править настройки.
+ * Руководитель свой отдел только видит — сколько премии у его людей и на
+ * каком они уровне. Так решил заказчик, это строже, чем в первом задании.
  *
  * Каждая проверка делается на сервере, при каждом запросе. Скрытая кнопка
  * на фронте ничего не защищает: в задании прямо сказано, что чужой банк не
  * должен открываться ни на экране, ни прямой ссылкой, ни запросом.
  */
 
-export const EMPLOYEE_ROLE = 'staff'
+// Роли, у которых есть банк и баллы.
+export const PARTICIPANT_ROLES = ['staff', 'lead']
 
-export function isEmployee(user) {
-  return user?.role === EMPLOYEE_ROLE
+export function isParticipant(user) {
+  return PARTICIPANT_ROLES.includes(user?.role)
 }
 
-export function isManager(user) {
+/** Кто открывает раздел «Команда»: владелец — всех, руководитель — свой отдел. */
+export function isViewer(user) {
   return user?.role === 'admin' || user?.role === 'lead'
 }
 
-export function assertAdmin(user) {
-  if (user?.role !== 'admin') throw ApiError.forbidden('Настройки мотивации меняет только админ')
+export function assertAdmin(user, message = 'Это может только владелец') {
+  if (user?.role !== 'admin') throw ApiError.forbidden(message)
 }
 
-export function assertManager(user) {
-  if (!isManager(user)) throw ApiError.forbidden('Это доступно руководителю отдела и админу')
+export function assertViewer(user) {
+  if (!isViewer(user)) throw ApiError.forbidden('Раздел «Команда» доступен руководителю отдела и владельцу')
 }
 
-export function assertEmployee(user) {
-  if (!isEmployee(user)) {
-    throw ApiError.forbidden('Банк и баллы есть только у сотрудников. Руководителю и админу доступен раздел «Команда»')
+export function assertParticipant(user) {
+  if (!isParticipant(user)) {
+    throw ApiError.forbidden('У владельца нет своего банка: он начисляет сотрудникам и руководителям. Вам доступны «Команда» и «Настройки»')
   }
 }
 
@@ -50,54 +57,60 @@ const EMPLOYEE_SELECT = {
   department: { select: { id: true, name: true } },
 }
 
-/** Сотрудник по id. Не сотрудник — значит, мотивации у него нет вовсе. */
+/** Участник мотивации по id. Владельца и несуществующих — нет. */
 export async function loadEmployee(id) {
   const user = await prisma.user.findUnique({ where: { id }, select: EMPLOYEE_SELECT })
-  if (!user || !isEmployee(user)) throw ApiError.notFound('Сотрудник не найден')
+  if (!user || !isParticipant(user)) throw ApiError.notFound('Сотрудник не найден')
   return user
 }
 
 /**
- * Может ли actor управлять мотивацией target: пополнять банк, ставить и
- * отменять баллы. Админ — любого сотрудника, руководитель — только своего
- * отдела.
+ * Может ли actor управлять мотивацией target: пополнять и списывать банк,
+ * ставить и отменять баллы. Только владелец, и только тем, у кого банк есть.
  */
 export function canManage(actor, target) {
-  if (!target || !isEmployee(target)) return false
-  if (actor.role === 'admin') return true
-  if (actor.role === 'lead') return Boolean(actor.departmentId) && target.departmentId === actor.departmentId
-  return false
+  return actor?.role === 'admin' && isParticipant(target)
 }
 
 export function assertCanManage(actor, target) {
-  if (!canManage(actor, target)) {
-    throw ApiError.forbidden('Можно управлять мотивацией только сотрудников своего отдела')
-  }
-}
-
-/** Смотреть чужую мотивацию может тот, кто ею управляет. Свою — каждый. */
-export function assertCanView(actor, target) {
-  if (actor.id === target.id && isEmployee(actor)) return
-  if (canManage(actor, target)) return
-  // Тот же ответ, что и на несуществующего сотрудника: по коду ответа
-  // нельзя было бы даже понять, есть ли такой человек.
-  throw ApiError.notFound('Сотрудник не найден')
+  if (!canManage(actor, target)) throw ApiError.forbidden('Начислять и списывать может только владелец')
 }
 
 /**
- * Загружает сотрудников и проверяет, что actor может управлять каждым.
- * Для форм «пополнить банк» и «клиент купил продукт», где выбирают
- * нескольких сразу. Ошибка на одном отменяет всю операцию: частичное
- * пополнение хуже, чем понятный отказ.
+ * Смотреть мотивацию target: свою — каждый, у кого она есть; владелец —
+ * любую; руководитель — сотрудников своего отдела. Других руководителей
+ * руководитель не видит, даже если они в том же отделе.
+ */
+export function canView(actor, target) {
+  if (!actor || !isParticipant(target)) return false
+  if (actor.id === target.id) return true
+  if (actor.role === 'admin') return true
+  if (actor.role === 'lead') {
+    return Boolean(actor.departmentId) && target.role === 'staff' && target.departmentId === actor.departmentId
+  }
+  return false
+}
+
+export function assertCanView(actor, target) {
+  // Тот же ответ, что и на несуществующего: по коду ответа нельзя даже
+  // понять, есть ли такой человек.
+  if (!canView(actor, target)) throw ApiError.notFound('Сотрудник не найден')
+}
+
+const MANAGE_DENIED = 'Среди выбранных есть люди, мотивацией которых вы не управляете'
+
+/**
+ * Загружает участников и проверяет, что actor может управлять каждым. Для
+ * форм «пополнить банк» и «клиент купил продукт», где выбирают нескольких
+ * сразу. Ошибка на одном отменяет всю операцию: частичное пополнение хуже,
+ * чем понятный отказ.
+ *
+ * Ответ один на «нет такого», «у него нет банка» и «не ваше»: иначе по
+ * разным текстам ошибки можно было бы перебором узнавать чужие роли.
  */
 export async function loadManagedEmployees(actor, ids) {
   const unique = [...new Set(ids)]
   const users = await prisma.user.findMany({ where: { id: { in: unique } }, select: EMPLOYEE_SELECT })
-
-  // Сначала — можно ли вообще управлять каждым, и ответ один на «нет такого»,
-  // «не сотрудник» и «чужой отдел». Иначе по разным текстам ошибки
-  // руководитель мог бы перебором узнать роль и статус людей из чужих
-  // отделов. Подробности — только про тех, кем он и так управляет.
   if (users.length !== unique.length || users.some((u) => !canManage(actor, u))) {
     throw ApiError.forbidden(MANAGE_DENIED)
   }
@@ -105,20 +118,6 @@ export async function loadManagedEmployees(actor, ids) {
     if (!u.active) throw ApiError.badRequest(`${u.name || u.email}: сотрудник отключён`)
   }
   return users
-}
-
-const MANAGE_DENIED = 'Среди выбранных есть люди, мотивацией которых вы не управляете'
-
-/**
- * Отмена события из прошлого месяца меняет итоги, которые уже посчитаны и,
- * возможно, выплачены. По заданию задним числом баллы меняет только админ,
- * поэтому руководитель отменяет события только текущего месяца.
- */
-export function assertCanCancelInMonth(actor, eventMonthKey, currentMonthKey) {
-  if (actor.role === 'admin') return
-  if (eventMonthKey !== currentMonthKey) {
-    throw ApiError.forbidden('Этот месяц уже закрыт: отменить событие задним числом может только админ')
-  }
 }
 
 export { EMPLOYEE_SELECT }

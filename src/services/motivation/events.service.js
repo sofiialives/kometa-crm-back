@@ -1,15 +1,15 @@
 import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
-import { assertCanCancelInMonth, assertCanManage, assertManager, loadEmployee, loadManagedEmployees } from './access.js'
-import { currentMonthKey, monthKeyOf } from './month.js'
+import { assertAdmin, assertCanManage, loadEmployee, loadManagedEmployees } from './access.js'
 import { isDuplicate, requestKeyFor } from './dedupe.js'
 import { assignmentAt, assignmentsAt } from './profiles.js'
 import { eventEntry, eventTypeCard, profileCard } from './shape.js'
 
 /**
- * Ручные баллы: события, которые фиксирует руководитель, корректировка на
+ * Ручные баллы: события, которые отмечает владелец, корректировка на
  * произвольное число баллов и «клиент купил новый продукт». Плюс отмена
- * любого события, в том числе автоматического.
+ * любого события, в том числе автоматического. Всё это — только владелец:
+ * руководитель свой отдел только видит.
  *
  * Комментарий у всего ручного обязателен — так в задании: «добавлять и
  * отменять баллы вручную (с обязательным комментарием)». Через месяц никто
@@ -32,13 +32,13 @@ function assertPoints(value, label) {
 }
 
 /**
- * Что можно поставить сотруднику вручную: события его профиля, которые
- * фиксирует руководитель. Автоматические сюда не попадают — их ставит
+ * Что можно поставить человеку вручную: события его профиля, которые
+ * отмечает владелец. Автоматические сюда не попадают — их ставит
  * система по задачам, и ручная копия означала бы баллы дважды. «Клиент
  * купил продукт» тоже не попадает: у него своя кнопка и своя форма.
  */
 export async function manualOptions(actor, userId) {
-  assertManager(actor)
+  assertAdmin(actor, 'Ставить баллы может только владелец')
   const employee = await loadEmployee(userId)
   assertCanManage(actor, employee)
 
@@ -65,7 +65,7 @@ export async function manualOptions(actor, userId) {
  * то же в обе шкалы, но можно развести, как и у событий профиля.
  */
 export async function addManual(actor, { userId, eventTypeId, prizePoints, levelPoints, comment, requestKey }) {
-  assertManager(actor)
+  assertAdmin(actor, 'Ставить баллы может только владелец')
   if (!comment?.trim()) throw ApiError.badRequest('Напишите комментарий: за что баллы')
 
   const employee = await loadEmployee(userId)
@@ -122,7 +122,7 @@ export async function addManual(actor, { userId, eventTypeId, prizePoints, level
 }
 
 /**
- * Клиент купил дополнительный продукт. Руководитель выбирает специалистов,
+ * Клиент купил дополнительный продукт. Владелец выбирает специалистов,
  * чья работа к этому привела, и каждый получает полные баллы события из
  * своего профиля — по заданию это +10, но цену админ может поменять.
  *
@@ -131,7 +131,7 @@ export async function addManual(actor, { userId, eventTypeId, prizePoints, level
  * получили бы баллы, а другие молча нет.
  */
 export async function addProduct(actor, { userIds, clientId, product, comment, requestKey }) {
-  assertManager(actor)
+  assertAdmin(actor, 'Отмечать покупку продукта может только владелец')
   const users = await loadManagedEmployees(actor, userIds)
   const title = product?.trim()
   if (!title) throw ApiError.badRequest('Укажите, какой продукт купил клиент')
@@ -193,7 +193,9 @@ export async function addProduct(actor, { userIds, clientId, product, comment, r
  * расчёт отменённые записи просто пропускает.
  */
 export async function cancelEvent(actor, id, { reason }) {
-  assertManager(actor)
+  // Отменяет только владелец — в том числе в прошлых месяцах: по заданию
+  // задним числом баллы меняет только он.
+  assertAdmin(actor, 'Отменять события может только владелец')
   if (!reason?.trim()) throw ApiError.badRequest('Напишите, почему отменяете событие')
 
   const event = await prisma.motivationEvent.findUnique({ where: { id } })
@@ -201,7 +203,6 @@ export async function cancelEvent(actor, id, { reason }) {
 
   const employee = await loadEmployee(event.userId)
   assertCanManage(actor, employee)
-  assertCanCancelInMonth(actor, monthKeyOf(event.occurredAt), currentMonthKey())
   if (event.cancelledAt) throw ApiError.conflict('Событие уже отменено')
 
   // updateMany с условием «ещё не отменено» — защита от двойного клика:
