@@ -86,6 +86,14 @@ export async function loadJournalsFor(userIds, monthKey, db = prisma) {
  *
  * Только для текущего месяца. Задним числом сумму не подставляем: сумма
  * профиля сегодня может быть уже другой.
+ *
+ * И только пока в месяце у человека нет других записей банка. Стартовая
+ * запись датируется первым числом, и если бы она легла после пополнений,
+ * проигрыш журнала зафиксировал бы пройденные уровни по меньшему банку:
+ * банк вырос бы, а «заработано» упало. Так бывает, когда владелец задал
+ * стартовую сумму в середине месяца или ночное задание не сработало, а
+ * пополнения уже были. Тогда новая сумма начнёт действовать со следующего
+ * месяца — так же, как смена суммы, когда стартовая уже лежит.
  */
 export async function ensureStartBank(user, monthKey, now = new Date(), db = prisma) {
   if (!user?.active) return false
@@ -96,7 +104,13 @@ export async function ensureStartBank(user, monthKey, now = new Date(), db = pri
   // заведомо неудачными вставками.
   if (await db.motivationBankEntry.findUnique({ where: { dedupeKey }, select: { id: true } })) return false
 
-  const { start } = monthRange(monthKey)
+  const { start, end } = monthRange(monthKey)
+  const hasBank = await db.motivationBankEntry.findFirst({
+    where: { userId: user.id, occurredAt: { gte: start, lt: end } },
+    select: { id: true },
+  })
+  if (hasBank) return false
+
   const assignment = await assignmentAt(user.id, start, db)
   const cents = assignment?.profile?.startBankCents ?? 0
   if (cents <= 0) return false
