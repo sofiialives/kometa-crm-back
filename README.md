@@ -94,5 +94,8 @@ DELETE /api/tasks/:id           (auth)
 - Индексы под нагрузку — уже проставлены на User.departmentId, Task.ownerId+status, Task.departmentId+status.
 - Тесты — `npm test` (node:test, без зависимостей). Пока покрыт расчёт мотивации, остальное
   тестируется по той же схеме: чистая логика отдельным модулем, сервисы вокруг.
+- Миграции пишутся руками. Проверить, что база после них совпадает со schema.prisma
+  (код выхода 0 — совпадает):
+  `npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code`
 - Если понадобится Postgres/Prisma вместо Mongo — меняются только models/ и запросы в services/,
   остальные слои не трогаем.

@@ -123,7 +123,7 @@ function touchConditions(profileId, db = prisma) {
  *
  * В пустой профиль сразу кладём «Клиент купил дополнительный продукт»: это
  * событие по заданию есть во всех профилях, и на него завязана отдельная
- * кнопка у руководителя.
+ * кнопка у владельца.
  */
 export async function createProfile(actor, { title, copyFromId }) {
   assertAdmin(actor)
@@ -303,7 +303,7 @@ export async function updateEventType(actor, id, body) {
   // «Клиент купил продукт» — ручное событие с отдельной кнопкой. Сделать его
   // автоматическим значит сломать кнопку: автоматике не за что зацепиться.
   if (type.systemKey === PRODUCT_KEY && mode !== 'manual') {
-    throw ApiError.badRequest('Покупку продукта отмечает руководитель, автоматической она быть не может')
+    throw ApiError.badRequest('Покупку продукта отмечает владелец, автоматической она быть не может')
   }
 
   const data = { mode, autoRule }
@@ -328,7 +328,7 @@ export async function updateEventType(actor, id, body) {
 /**
  * Удаление события из профиля. Уже начисленное по нему остаётся: название и
  * баллы скопированы в каждую запись журнала. Событие покупки продукта
- * удалить нельзя — на него завязана кнопка руководителя; его можно только
+ * удалить нельзя — на него завязана кнопка владельца; его можно только
  * выключить.
  */
 export async function deleteEventType(actor, id) {
