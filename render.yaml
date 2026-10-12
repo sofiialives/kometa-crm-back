@@ -20,8 +20,10 @@ services:
         value: https://your-frontend.vercel.app
       - key: SEED_ADMIN_EMAIL
         value: yan993870@gmail.com
+      # Пароль первого админа для npm run seed:admin. Задаётся в панели
+      # Render, в репозиторий не попадает. Без него сид не запустится.
       - key: SEED_ADMIN_PASSWORD
-        value: admin
+        sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
       # Токен бота напоминаний от @BotFather. Задаётся в панели Render,
