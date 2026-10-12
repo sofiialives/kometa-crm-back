@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, isOnTime,
-  mskDateStart, mskDayStart, overdueNights, ruleFor,
+  autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, holdsSlot, isOnTime,
+  isRealDayKey, mskDateStart, mskDayStart, overdueNights, ruleFor,
 } from '../taskRules.js'
 
 // Время по Москве: msk('2026-11-03 18:00') — 18:00 по Москве, это 15:00 UTC.
@@ -90,6 +90,28 @@ describe('ночи просрочки', () => {
     assert.deepEqual(nights.map((n) => n.dayKey), ['2026-11-03'])
   })
 
+  test('уже разобранные ночи не штрафуются задним числом', () => {
+    // Задача со сроком 3-го была в «Готово», 10-го её вернули в работу.
+    // Ночной проход разбирал каждую ночь — в те ночи задача была закрыта.
+    const nights = overdueNights({
+      deadline: msk('2026-11-03 18:00'),
+      autoFrom,
+      checkedUntil: msk('2026-11-10 00:00'),
+      now: msk('2026-11-11 00:00:05'),
+    })
+    assert.deepEqual(nights.map((n) => n.dayKey), ['2026-11-10'])
+  })
+
+  test('проспанные сервером ночи после отметки доначисляются', () => {
+    const nights = overdueNights({
+      deadline: msk('2026-11-03 18:00'),
+      autoFrom,
+      checkedUntil: msk('2026-11-05 00:00'),
+      now: msk('2026-11-08 09:00'),
+    })
+    assert.deepEqual(nights.map((n) => n.dayKey), ['2026-11-05', '2026-11-06', '2026-11-07'])
+  })
+
   test('срок ровно в полночь — первый штраф следующей ночью', () => {
     const nights = overdueNights({ deadline: msk('2026-11-04 00:00'), autoFrom, now: msk('2026-11-04 00:00:05') })
     assert.deepEqual(nights, [])
@@ -119,6 +141,30 @@ describe('лимиты', () => {
   test('событие с плюсом лимит не режет: это решение владельца', () => {
     assert.equal(capPenalty(2, 10, 10), 2)
     assert.equal(capGain(-1, 5, 2), -1)
+  })
+})
+
+describe('дата включения', () => {
+  test('настоящие даты проходят', () => {
+    assert.ok(isRealDayKey('2026-11-01'))
+    assert.ok(isRealDayKey('2028-02-29'))
+  })
+
+  test('несуществующие даты и странные годы отклоняются, а не переносятся', () => {
+    assert.ok(!isRealDayKey('2026-02-31'))
+    assert.ok(!isRealDayKey('2026-04-31'))
+    assert.ok(!isRealDayKey('2027-02-29'))
+    assert.ok(!isRealDayKey('0001-01-01'))
+    assert.ok(!isRealDayKey('2026-1-1'))
+    assert.ok(!isRealDayKey(null))
+  })
+})
+
+describe('отмена владельцем держится', () => {
+  test('живая и отменённая владельцем запись занимают место, отменённая системой — нет', () => {
+    assert.ok(holdsSlot({ cancelledAt: null }))
+    assert.ok(holdsSlot({ cancelledAt: new Date(), cancelledById: 'owner' }))
+    assert.ok(!holdsSlot({ cancelledAt: new Date(), cancelledById: null }))
   })
 })
 

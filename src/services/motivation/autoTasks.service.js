@@ -22,6 +22,10 @@ import {
 
 const RETURNED_REASON = 'Задачу вернули из «Готово»'
 
+// Запись занимает место, если она живая или её отменил человек — см.
+// holdsSlot в taskRules.js. Отменённая системой место освобождает.
+const HOLDS_SLOT = { OR: [{ cancelledAt: null }, { cancelledById: { not: null } }] }
+
 /**
  * Событие профиля, по которому начисляются баллы, или null, если начислять
  * нечего: автобаллы выключены или ещё не начались, человек не участвует в
@@ -57,12 +61,15 @@ function autoEventData({ task, rule, type, profile, prizePoints, levelPoints, at
 
 // Все автозаписи человека проходят под одним замком на человека — тем же,
 // что и списание: лимиты считаются по журналу, и два параллельных закрытия
-// не должны оба уложиться в один и тот же остаток.
+// не должны оба уложиться в один и тот же остаток. Под тем же замком —
+// снятие баллов при возврате из «Готово», чтобы «закрыл» и «вернул»,
+// пришедшие почти одновременно, не разминулись.
 const lockUser = (tx, userId) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`
 
 /**
  * Задачу закрыли в срок — баллы события «в срок» из профиля. Не больше
- * одной живой записи на задачу: закрыли, открыли, закрыли — баллы одни.
+ * одной записи на задачу: закрыли, открыли, закрыли — баллы одни. Если
+ * баллы за эту задачу снял владелец, второй раз они не начислятся.
  * Для личных задач — с дневным потолком из настроек.
  */
 export async function awardOnTime(task, settings) {
@@ -75,11 +82,15 @@ export async function awardOnTime(task, settings) {
 
   return prisma.$transaction(async (tx) => {
     await lockUser(tx, task.ownerId)
-    const alive = await tx.motivationEvent.findFirst({
-      where: { taskId: task.id, dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) }, cancelledAt: null },
+    // Пока ждали замка, задачу могли вернуть из «Готово» — тогда баллов нет.
+    const fresh = await tx.task.findUnique({ where: { id: task.id }, select: { status: true, doneAt: true } })
+    if (fresh?.status !== 'done' || fresh.doneAt?.getTime() !== at.getTime()) return null
+
+    const taken = await tx.motivationEvent.findFirst({
+      where: { taskId: task.id, dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) }, ...HOLDS_SLOT },
       select: { id: true },
     })
-    if (alive) return null
+    if (taken) return null
 
     let prizePoints = type.prizePoints
     let levelPoints = type.levelPoints
@@ -111,22 +122,26 @@ export async function awardOnTime(task, settings) {
 
 /**
  * Задачу вернули из «Готово» — баллы за срок снимаются: запись отменяется с
- * причиной и остаётся в истории. Только в текущем месяце: прошлый месяц уже
- * посчитан и, возможно, выплачен.
+ * причиной и остаётся в истории. Отменяет система, автора у отмены нет —
+ * поэтому, закрыв задачу снова в срок, человек получит баллы снова. Только
+ * в текущем месяце: прошлый месяц уже посчитан и, возможно, выплачен.
  */
 export async function revokeOnTime(task, now = new Date()) {
   const rule = ruleFor(task, 'on_time')
   const { start } = monthRange(currentMonthKey(now))
-  const res = await prisma.motivationEvent.updateMany({
-    where: {
-      taskId: task.id,
-      dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) },
-      cancelledAt: null,
-      occurredAt: { gte: start },
-    },
-    data: { cancelledAt: now, cancelReason: RETURNED_REASON },
+  return prisma.$transaction(async (tx) => {
+    await lockUser(tx, task.ownerId)
+    const res = await tx.motivationEvent.updateMany({
+      where: {
+        taskId: task.id,
+        dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) },
+        cancelledAt: null,
+        occurredAt: { gte: start },
+      },
+      data: { cancelledAt: now, cancelReason: RETURNED_REASON },
+    })
+    return res.count
   })
-  return res.count
 }
 
 /**
@@ -150,22 +165,24 @@ export async function syncTaskStatus(before, after, now = new Date()) {
 
 /**
  * Штрафы за просрочку на «сейчас»: каждая незакрытая задача со сроком до
- * последней московской полуночи. Из Иерархии — за каждую прошедшую ночь, до
- * лимита на задачу; личная — один раз. Пропущенные ночи доначисляются, уже
- * начисленные отсекаются ключом записи, так что звать можно сколько угодно
- * раз: ночью перед уборкой и при каждом запуске сервера.
+ * последней московской полуночи. Из Иерархии — за каждую ещё не
+ * проверенную ночь, до лимита на задачу; личная — один раз. Звать можно
+ * сколько угодно раз — ночью перед уборкой и при каждом запуске сервера:
+ * повтор отсекается ключом записи, а проверенные ночи отмечаются в
+ * настройках (overdueCheckedUntil) и второй раз не разбираются.
  *
- * Отменённый владельцем штраф за сутки заново не ляжет (ключ занят), но и в
- * лимит задачи не считается.
+ * Возвращает, сколько штрафов легло, и задачи, по которым запись не
+ * удалась: уборка их не удаляет, чтобы личная просрочка не ушла без штрафа.
  */
 export async function chargeOverdue(now = new Date()) {
   const settings = await getSettingsRow()
-  if (!settings.autoTasksFrom || !autoActiveAt(settings.autoTasksFrom, now)) return { charged: 0 }
+  if (!settings.autoTasksFrom || !autoActiveAt(settings.autoTasksFrom, now)) return { charged: 0, failed: [] }
 
+  const lastMidnight = mskDayStart(now)
   const tasks = await prisma.task.findMany({
     where: {
       status: { not: 'done' },
-      deadline: { gte: settings.autoTasksFrom, lt: mskDayStart(now) },
+      deadline: { gte: settings.autoTasksFrom, lt: lastMidnight },
       owner: { role: { in: PARTICIPANT_ROLES }, active: true },
     },
     select: { id: true, title: true, deadline: true, origin: true, ownerId: true, status: true },
@@ -173,21 +190,35 @@ export async function chargeOverdue(now = new Date()) {
   })
 
   let charged = 0
+  const failed = []
   for (const task of tasks) {
     try {
       charged += await chargeTask(task, settings, now)
     } catch (e) {
       // Одна сломанная задача не должна оставить без штрафа остальные.
+      failed.push(task.id)
       console.error('[motivation] штраф за просрочку не записался', task.id, e)
     }
   }
-  return { charged }
+
+  // Ночи до последней полуночи разобраны. Только вперёд: параллельный
+  // проход с более ранним «сейчас» отметку не откатит.
+  await prisma.motivationSettings.updateMany({
+    where: { id: 'global', OR: [{ overdueCheckedUntil: null }, { overdueCheckedUntil: { lt: lastMidnight } }] },
+    data: { overdueCheckedUntil: lastMidnight },
+  })
+  return { charged, failed }
 }
 
 async function chargeTask(task, settings, now) {
   const rule = ruleFor(task, 'overdue')
-  let nights = overdueNights({ deadline: task.deadline, autoFrom: settings.autoTasksFrom, now })
-  // Личная просрочка штрафуется один раз — за первую ночь.
+  let nights = overdueNights({
+    deadline: task.deadline,
+    autoFrom: settings.autoTasksFrom,
+    checkedUntil: settings.overdueCheckedUntil,
+    now,
+  })
+  // Личная просрочка штрафуется один раз — за первую же разобранную ночь.
   if (rule === 'personal_task_overdue') nights = nights.slice(0, 1)
 
   let charged = 0
@@ -202,8 +233,10 @@ async function chargeTask(task, settings, now) {
       const dedupeKey = autoKey(rule, task.id, key)
       if (await tx.motivationEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return 'exists'
 
+      // В лимит идут и штрафы, прощённые владельцем: иначе следующая ночь
+      // молча вернула бы то, что он простил.
       const used = await tx.motivationEvent.aggregate({
-        where: { taskId: task.id, dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) }, cancelledAt: null },
+        where: { taskId: task.id, dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) }, ...HOLDS_SLOT },
         _sum: { prizePoints: true, levelPoints: true },
       })
       const prizePoints = capPenalty(type.prizePoints, -(used._sum.prizePoints ?? 0), settings.overduePenaltyCap)

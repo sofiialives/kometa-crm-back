@@ -15,6 +15,10 @@
  *   уборка CRM (jobs/clearFinishedTasks.job.js).
  * - Всё это работает только с даты, которую владелец поставил в настройках.
  *   Задачи, просроченные раньше этой даты, не штрафуются.
+ * - Отмена владельцем «держится»: прощённый штраф не заменяется штрафом
+ *   следующей ночи, а снятые владельцем баллы «в срок» не вернутся, если
+ *   перетащить задачу туда и обратно. Сама система отменяет только баллы
+ *   «в срок» при возврате из «Готово» — такие возвращаются.
  */
 import { MSK_OFFSET_MS, dayKeyOf } from './month.js'
 
@@ -34,6 +38,19 @@ export function mskDayStart(date) {
 export function mskDateStart(dayKey) {
   const [y, m, d] = String(dayKey).split('-').map(Number)
   return new Date(Date.UTC(y, m - 1, d) - MSK_OFFSET_MS)
+}
+
+/**
+ * Настоящая ли это дата «ГГГГ-ММ-ДД» в разумных годах. Date.parse молча
+ * переносит 31 февраля на 3 марта, поэтому сверяем, что день не уехал.
+ */
+export function isRealDayKey(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''))
+  if (!m) return false
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  if (y < 2020 || y > 2100) return false
+  const date = new Date(Date.UTC(y, mo - 1, d))
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d
 }
 
 /** Какое событие профиля отвечает за задачу. */
@@ -58,33 +75,49 @@ export function autoActiveAt(autoFrom, at) {
 /**
  * Ночи, за которые задача должна получить штраф: каждая московская
  * полночь после срока и до «сейчас», но не раньше даты включения
- * автобаллов. Штраф датируется последней секундой ушедших суток — так
- * просрочка 31-го остаётся в своём месяце, хотя ночная проверка идёт уже
- * первого числа.
+ * автобаллов и только ещё не проверенные. Штраф датируется последней
+ * секундой ушедших суток — так просрочка 31-го остаётся в своём месяце,
+ * хотя ночная проверка идёт уже первого числа.
  *
- * Возвращает [{ at, dayKey }] по порядку. Пропущенные ночи (сервер спал)
- * сюда тоже попадают: повторный проход их доначислит, а уже начисленные
- * отсекутся ключом записи.
+ * checkedUntil — последняя полночь, которую ночной проход уже разобрал.
+ * Ночи до неё не трогаем: в ту ночь задача могла лежать в «Готово»,
+ * человек мог быть отключён, а событие профиля выключено — тогда штрафа
+ * не было, и задним числом его быть не должно. Вернули задачу из «Готово»
+ * через две недели — штрафы пойдут с ближайшей ночи, а не за все две
+ * недели разом. А ночи, которые сервер проспал, остаются непроверенными, и
+ * при запуске они доначисляются.
+ *
+ * Возвращает [{ at, dayKey }] по порядку.
  */
-export function overdueNights({ deadline, autoFrom, now }) {
+export function overdueNights({ deadline, autoFrom, checkedUntil = null, now }) {
   if (!autoFrom) return []
   const deadlineMs = new Date(deadline).getTime()
   const fromMs = new Date(autoFrom).getTime()
   // Просроченные до включения задачи не штрафуются вовсе.
   if (deadlineMs < fromMs) return []
+  const checkedMs = checkedUntil ? new Date(checkedUntil).getTime() : -Infinity
 
   const lastMidnight = mskDayStart(now).getTime()
   // Первая полночь строго после срока.
   let midnight = mskDayStart(deadlineMs).getTime() + DAY_MS
   const nights = []
   while (midnight <= lastMidnight && nights.length < MAX_NIGHTS) {
-    if (midnight > fromMs) {
+    if (midnight > fromMs && midnight > checkedMs) {
       const at = new Date(midnight - 1000)
       nights.push({ at, dayKey: dayKeyOf(at) })
     }
     midnight += DAY_MS
   }
   return nights
+}
+
+/**
+ * Занимает ли запись место: живая или отменённая человеком. Такие
+ * считаются в лимит штрафа на задачу и не дают начислить «в срок» заново.
+ * Отменённая системой (вернули из «Готово») место освобождает.
+ */
+export function holdsSlot(event) {
+  return !event.cancelledAt || Boolean(event.cancelledById)
 }
 
 /**

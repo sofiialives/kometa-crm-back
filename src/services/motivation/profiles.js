@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS = {
   notifyBank: true,
   notifyPoints: true,
   autoTasksFrom: null,
+  overdueCheckedUntil: null,
 }
 
 export async function getSettingsRow(db = prisma) {
