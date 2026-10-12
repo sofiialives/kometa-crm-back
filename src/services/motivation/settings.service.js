@@ -13,9 +13,12 @@ import { employeeCard, eventTypeCard } from './shape.js'
  * уровни работы, лимит штрафа за просрочку, уведомления и назначение
  * профиля каждому сотруднику. Всё меняется без разработчика.
  *
- * Изменения действуют только на будущее. Уже начисленные баллы не
- * пересчитываются: в каждой записи журнала лежат свои баллы и название
- * на момент начисления.
+ * Уже начисленные баллы при правках не пересчитываются: в каждой записи
+ * журнала лежат свои баллы и название на момент начисления. А шкала,
+ * уровни работы и профиль действуют на месяц целиком — поменяли долю
+ * уровня, и текущий месяц сразу считается по новой. Итоги закрытых месяцев
+ * зафиксирует закрытие месяца (этап 3): до него прошлые месяцы показываются
+ * по текущим настройкам.
  */
 
 const toCents = (dollars) => Math.round(Number(dollars) * 100)
@@ -376,7 +379,15 @@ export async function saveScale(actor, profileId, levels) {
   return profileId ? profileView(await loadProfile(profileId)) : rows
 }
 
-/** Уровни работы — тоже целиком. Касаются всех профилей. */
+/**
+ * Уровни работы — тоже целиком. Касаются всех профилей.
+ *
+ * Подсказки профилей привязаны к номеру уровня. Если админ вставил уровень
+ * в середину или убрал один, номера сдвигаются — поэтому подсказки
+ * переносятся вслед за своим уровнем: фронт присылает, каким по счёту
+ * уровень был до правки (from). Подсказки убранного уровня уходят вместе с
+ * ним, у нового уровня их пока нет.
+ */
 export async function saveWorkLevels(actor, levels) {
   assertAdmin(actor)
   const rows = levels.map((l, i) => ({
@@ -388,10 +399,32 @@ export async function saveWorkLevels(actor, levels) {
   const errors = validateWorkLevels(rows)
   if (errors.length) throw ApiError.badRequest(errors[0], { errors })
 
+  // «Был третьим — стал четвёртым»: старый номер → новый. Переносим всегда,
+  // когда фронт прислал старые номера: так и сдвиг, и удаление, и новый
+  // уровень обрабатываются одинаково, и подсказка убранного уровня не
+  // всплывёт потом у нового уровня на том же месте.
+  const moves = new Map()
+  levels.forEach((l, i) => { if (l.from) moves.set(String(l.from), String(i + 1)) })
+  const remap = levels.some((l) => l.from !== undefined)
+
   await prisma.$transaction(async (tx) => {
     await tx.motivationWorkLevel.deleteMany({})
     await tx.motivationWorkLevel.createMany({ data: rows })
-    await tx.motivationProfile.updateMany({ data: { conditionsUpdatedAt: new Date() } })
+    const now = new Date()
+    if (!remap) {
+      await tx.motivationProfile.updateMany({ data: { conditionsUpdatedAt: now } })
+      return
+    }
+    const profiles = await tx.motivationProfile.findMany({ select: { id: true, workHints: true } })
+    for (const p of profiles) {
+      const hints = (p.workHints && typeof p.workHints === 'object') ? p.workHints : {}
+      const moved = {}
+      for (const [oldPos, text] of Object.entries(hints)) {
+        const newPos = moves.get(oldPos)
+        if (newPos) moved[newPos] = text
+      }
+      await tx.motivationProfile.update({ where: { id: p.id }, data: { workHints: moved, conditionsUpdatedAt: now } })
+    }
   })
   return rows
 }

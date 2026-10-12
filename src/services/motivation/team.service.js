@@ -51,9 +51,8 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
   const assignments = await assignmentsAt(ids, refAt)
 
   // Стартовые суммы — до чтения журналов, как и на экране сотрудника.
-  if (monthKey === currentMonthKey(now)) {
-    await Promise.all(users.map((u) => ensureStartBank(u.id, monthKey, assignments.get(u.id), now)))
-  }
+  // Отключённым и прошлым месяцам ensureStartBank ничего не кладёт.
+  await Promise.all(users.map((u) => ensureStartBank(u, monthKey, now)))
 
   const [journals, globalScale, workLevels] = await Promise.all([
     loadJournalsFor(ids, monthKey),
@@ -109,6 +108,7 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
 
   return {
     month: monthKey,
+    currentMonth: currentMonthKey(now),
     isCurrent: monthKey === currentMonthKey(now),
     departmentId: scope,
     departments,

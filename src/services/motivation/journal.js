@@ -1,5 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { currentMonthKey, monthKeyOf, monthRange, monthsBetween } from './month.js'
+import { assignmentAt } from './profiles.js'
 
 /**
  * Чтение журналов банка и событий за месяц.
@@ -70,42 +71,50 @@ export async function loadJournalsFor(userIds, monthKey, db = prisma) {
  * Стартовая сумма банка.
  *
  * Первого числа банк получает стартовую сумму профиля, если админ её задал.
- * Отдельного ночного задания для этого пока нет: запись появляется при
- * первом же обращении к текущему месяцу. Это безопасно делать сколько угодно
- * раз — у стартовой записи уникальный ключ «start:сотрудник:месяц», и
- * вторая попытка просто не пройдёт.
+ * Кладёт её ночное задание в начале месяца (jobs/openMotivationMonth.job.js),
+ * а при чтении текущего месяца она проверяется ещё раз — на случай, если
+ * сервер в ту ночь не работал. Повторять это безопасно: у стартовой записи
+ * уникальный ключ «start:сотрудник:месяц», второй раз она не ляжет.
  *
- * Сумма полагается, только если профиль был назначен к началу месяца.
- * Назначили в середине — стартовая сумма будет со следующего месяца: так
- * понятнее, чем «половина месяца с бонусом за то, что тебя поздно
- * оформили».
+ * Профиль берётся на начало месяца, а не на сейчас: перевели человека на
+ * другую должность десятого числа — стартовая сумма месяца всё равно по
+ * той должности, с которой он месяц начал. Назначили профиль в середине
+ * месяца — стартовая сумма будет со следующего.
  *
- * Только для текущего месяца. В прошлом месяце сумма профиля сегодня может
- * быть уже другой, и задним числом её подставлять нельзя.
+ * Отключённым сотрудникам не кладётся: иначе уволенный каждый месяц
+ * всплывал бы в «Команде» с банком и входил в «К выплате».
+ *
+ * Только для текущего месяца. Задним числом сумму не подставляем: сумма
+ * профиля сегодня может быть уже другой.
  */
-export async function ensureStartBank(userId, monthKey, assignment, now = new Date(), db = prisma) {
-  if (!assignment?.profile) return false
-  const cents = assignment.profile.startBankCents
-  if (!cents || cents <= 0) return false
+export async function ensureStartBank(user, monthKey, now = new Date(), db = prisma) {
+  if (!user?.active) return false
   if (monthKey !== currentMonthKey(now)) return false
 
+  const dedupeKey = `start:${user.id}:${monthKey}`
+  // Сначала смотрим, нет ли уже записи: так обычный просмотр не долбит базу
+  // заведомо неудачными вставками.
+  if (await db.motivationBankEntry.findUnique({ where: { dedupeKey }, select: { id: true } })) return false
+
   const { start } = monthRange(monthKey)
-  if (new Date(assignment.from).getTime() > start.getTime()) return false
+  const assignment = await assignmentAt(user.id, start, db)
+  const cents = assignment?.profile?.startBankCents ?? 0
+  if (cents <= 0) return false
 
   try {
     await db.motivationBankEntry.create({
       data: {
-        userId,
+        userId: user.id,
         kind: 'start',
         amountCents: cents,
         comment: `Стартовая сумма профиля «${assignment.profile.title}»`,
         occurredAt: start,
-        dedupeKey: `start:${userId}:${monthKey}`,
+        dedupeKey,
       },
     })
     return true
   } catch (e) {
-    // Уже есть — значит, кто-то успел создать её раньше. Так и задумано.
+    // Кто-то успел положить её одновременно с нами — так и задумано.
     if (e?.code === 'P2002') return false
     throw e
   }

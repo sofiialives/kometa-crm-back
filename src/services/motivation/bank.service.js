@@ -98,7 +98,7 @@ export async function writeOff(actor, { userId, amount, comment }) {
   const monthKey = currentMonthKey()
   // Стартовая сумма месяца должна уже лежать в журнале, иначе банк ниже
   // окажется меньше настоящего.
-  await loadMonthState(employee.id, monthKey)
+  await loadMonthState(employee, monthKey)
   const { start, end } = monthRange(monthKey)
 
   // Проверка «не больше банка» и запись — в одной транзакции под замком на

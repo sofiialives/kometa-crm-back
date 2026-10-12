@@ -16,7 +16,7 @@ export const getMyConditions = asyncHandler(async (req, res) => {
 })
 
 export const markSeen = asyncHandler(async (req, res) => {
-  res.json(await overview.markSeen(req.user))
+  res.json(await overview.markSeen(req.user, req.body))
 })
 
 // ---- Руководитель и админ --------------------------------------------------

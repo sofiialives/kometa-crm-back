@@ -28,15 +28,15 @@ function resolveMonth(month, now = new Date()) {
  * этим же пользуются условия (суммы уровней при текущем банке) и действия
  * руководителя (проверка, что списание не больше банка).
  */
-export async function loadMonthState(userId, monthKey, now = new Date()) {
+export async function loadMonthState(employee, monthKey, now = new Date()) {
   const refAt = referenceMoment(monthKey, now)
-  const assignment = await assignmentAt(userId, refAt)
 
   // Стартовая сумма появляется до чтения журнала, чтобы сразу в него попасть.
-  await ensureStartBank(userId, monthKey, assignment, now)
+  await ensureStartBank(employee, monthKey, now)
+  const assignment = await assignmentAt(employee.id, refAt)
 
   const [journals, globalScale, workLevels] = await Promise.all([
-    loadJournals(userId, monthKey),
+    loadJournals(employee.id, monthKey),
     getGlobalScale(),
     getWorkLevels(),
   ])
@@ -67,7 +67,7 @@ export async function getOverview(actor, userId, month, now = new Date()) {
   const monthKey = resolveMonth(month, now)
   const isSelf = actor.id === employee.id
   const [state, months, seen] = await Promise.all([
-    loadMonthState(employee.id, monthKey, now),
+    loadMonthState(employee, monthKey, now),
     availableMonths(employee.id, now),
     isSelf ? seenFor(employee.id) : Promise.resolve(undefined),
   ])
@@ -85,10 +85,13 @@ export async function getOverview(actor, userId, month, now = new Date()) {
   const unseenEvents = history.filter((e) => e.isNew).length
 
   const { result } = state
+  const isCurrent = monthKey === currentMonthKey(now)
+  const canManageEmployee = canManage(actor, employee)
   return {
     employee: employeeCard(employee),
     month: monthKey,
-    isCurrent: monthKey === currentMonthKey(now),
+    currentMonth: currentMonthKey(now),
+    isCurrent,
     months: months.includes(monthKey) ? months : [monthKey, ...months],
     profile: profileCard(state.profile),
     scale: usesCustomScale(state.profile) ? 'custom' : 'global',
@@ -114,8 +117,11 @@ export async function getOverview(actor, userId, month, now = new Date()) {
     history,
     unseen: isSelf ? { bankCents: unseenBankCents, events: unseenEvents } : null,
     permissions: {
-      canManage: canManage(actor, employee),
+      canManage: canManageEmployee,
       canWriteOff: actor.role === 'admin',
+      // Отменять события руководитель может только в текущем месяце:
+      // прошлые уже посчитаны, их задним числом меняет только админ.
+      canCancel: canManageEmployee && (isCurrent || actor.role === 'admin'),
     },
   }
 }
@@ -135,7 +141,7 @@ export async function getConditions(actor, userId, now = new Date()) {
   assertCanView(actor, employee)
 
   const monthKey = currentMonthKey(now)
-  const [state, settings] = await Promise.all([loadMonthState(employee.id, monthKey, now), getSettingsRow()])
+  const [state, settings] = await Promise.all([loadMonthState(employee, monthKey, now), getSettingsRow()])
   const { profile, result } = state
 
   const types = (profile?.eventTypes ?? []).filter((t) => t.enabled).map(eventTypeCard)
@@ -166,13 +172,27 @@ export async function getMyConditions(actor, now = new Date()) {
   return getConditions(actor, actor.id, now)
 }
 
-/** Сотрудник увидел новое — гасим подсветку пополнений и баллов. */
-export async function markSeen(actor, now = new Date()) {
+/**
+ * Сотрудник увидел новое — гасим подсветку пополнений и баллов.
+ *
+ * Фронт присылает время самой свежей записи из того ответа, что был на
+ * экране. «Сейчас» сервера не годится: пополнение, пришедшее, пока страница
+ * открыта, человек ещё не видел, и гасить его подсветку рано. Без времени
+ * (старый клиент) — как раньше, по текущему моменту. В будущее метку не
+ * ставим, и назад она не откатывается.
+ */
+export async function markSeen(actor, { bankUntil, eventsUntil } = {}, now = new Date()) {
   assertEmployee(actor)
+  const clamp = (d) => (d && new Date(d).getTime() < now.getTime() ? new Date(d) : now)
+  const current = await prisma.motivationSeen.findUnique({ where: { userId: actor.id } })
+  const later = (a, b) => (!b || a.getTime() > new Date(b).getTime() ? a : new Date(b))
+
+  const bankSeenAt = later(clamp(bankUntil), current?.bankSeenAt)
+  const eventsSeenAt = later(clamp(eventsUntil), current?.eventsSeenAt)
   await prisma.motivationSeen.upsert({
     where: { userId: actor.id },
-    create: { userId: actor.id, bankSeenAt: now, eventsSeenAt: now },
-    update: { bankSeenAt: now, eventsSeenAt: now },
+    create: { userId: actor.id, bankSeenAt, eventsSeenAt },
+    update: { bankSeenAt, eventsSeenAt },
   })
   return { ok: true }
 }

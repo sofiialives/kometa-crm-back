@@ -12,9 +12,11 @@ const optional = (schema) => z.preprocess((v) => (v === '' || v === null ? undef
 // Месяц строкой «ГГГГ-ММ» — без часового пояса, спутать нечего.
 const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Месяц нужен в виде ГГГГ-ММ')
 
-// Деньги в долларах. Потолок защищает от случайно вставленной длинной строки.
-const money = z.coerce.number().finite().positive('Сумма должна быть больше нуля').max(1_000_000)
-const moneyOrZero = z.coerce.number().finite().min(0).max(1_000_000)
+// Деньги в целых долларах: в задании суммы округляются до доллара, и если
+// банк будет с центами, вершина шкалы и итоги начнут расходиться на копейки.
+// Потолок защищает от случайно вставленной длинной строки.
+const money = z.coerce.number().int('Сумма — целое число долларов').positive('Сумма должна быть больше нуля').max(1_000_000)
+const moneyOrZero = z.coerce.number().int('Сумма — целое число долларов').min(0).max(1_000_000)
 
 // Баллы за одно событие: шкала — сто баллов на месяц.
 const points = z.coerce.number().int('Баллы — целое число').min(-100).max(100)
@@ -196,6 +198,10 @@ export const workLevelsSchema = z.object({
         title: z.string().trim().min(1, 'Укажите название уровня').max(60),
         minPoints: z.coerce.number().int(),
         hint: z.string().trim().max(500).default(''),
+        // Каким по счёту этот уровень был до правки. Нужен, чтобы подсказки
+        // профилей переехали вместе с уровнем, когда админ вставил новый
+        // уровень в середину или убрал один. У нового уровня пусто.
+        from: z.coerce.number().int().min(1).max(10).nullable().optional(),
       }))
       .min(1)
       .max(10),
@@ -216,4 +222,16 @@ export const generalSettingsSchema = z.object({
 export const assignmentSchema = z.object({
   params: z.object({ userId: objectId }),
   body: z.object({ profileId: objectId }),
+})
+
+// Что сотрудник увидел: время самой свежей записи банка и событий из того
+// ответа, который был у него на экране. Не «сейчас»: пополнение, пришедшее,
+// пока страница открыта, он ещё не видел.
+export const seenSchema = z.object({
+  body: z
+    .object({
+      bankUntil: z.coerce.date().optional(),
+      eventsUntil: z.coerce.date().optional(),
+    })
+    .default({}),
 })

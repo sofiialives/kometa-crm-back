@@ -52,15 +52,16 @@ export async function assignmentAt(userId, at = new Date(), db = prisma) {
  */
 export async function assignmentsAt(userIds, at = new Date(), db = prisma) {
   if (userIds.length === 0) return new Map()
+  // distinct по сотруднику вместе с сортировкой «новые сверху» оставляет
+  // ровно одно, последнее назначение на человека. Вся история переводов с
+  // профилями целиком здесь не нужна.
   const rows = await db.motivationAssignment.findMany({
     where: { userId: { in: userIds }, from: { lte: at } },
-    orderBy: [{ from: 'desc' }, { createdAt: 'desc' }],
+    orderBy: [{ userId: 'asc' }, { from: 'desc' }, { createdAt: 'desc' }],
+    distinct: ['userId'],
     include: { profile: { include: PROFILE_INCLUDE } },
   })
-  const byUser = new Map()
-  // Строки уже идут от новых к старым, поэтому первая встреченная — текущая.
-  for (const row of rows) if (!byUser.has(row.userId)) byUser.set(row.userId, row)
-  return byUser
+  return new Map(rows.map((row) => [row.userId, row]))
 }
 
 /**

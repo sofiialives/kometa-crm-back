@@ -3,7 +3,7 @@ import { validate } from '../middlewares/validate.middleware.js'
 import { authenticate, authorize } from '../middlewares/auth.middleware.js'
 import {
   assignmentSchema, cancelEventSchema, createEventTypeSchema, createProfileSchema, generalSettingsSchema,
-  globalScaleSchema, manualEventSchema, monthQuerySchema, productSchema, profileScaleSchema, teamQuerySchema,
+  globalScaleSchema, manualEventSchema, monthQuerySchema, productSchema, profileScaleSchema, seenSchema, teamQuerySchema,
   topUpSchema, updateEventTypeSchema, updateProfileSchema, userIdParamSchema, userMonthSchema, workLevelsSchema,
   writeOffSchema,
 } from '../schemas/motivation.schema.js'
@@ -25,7 +25,7 @@ router.use(authenticate)
 // них нет, — роль здесь не режем, чтобы этот ответ был понятным.
 router.get('/me', validate(monthQuerySchema), c.getMine)
 router.get('/me/conditions', c.getMyConditions)
-router.post('/me/seen', c.markSeen)
+router.post('/me/seen', validate(seenSchema), c.markSeen)
 
 // Руководитель и админ.
 const manager = authorize('admin', 'lead')

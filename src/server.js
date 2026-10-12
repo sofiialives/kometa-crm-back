@@ -3,12 +3,14 @@ import { connectDb } from './config/db.js'
 import { env } from './config/env.js'
 import { scheduleClearFinishedTasks } from './jobs/clearFinishedTasks.job.js'
 import { scheduleClearPastCalls } from './jobs/clearPastCalls.job.js'
+import { scheduleOpenMotivationMonth } from './jobs/openMotivationMonth.job.js'
 import { startBot } from './bot/index.js'
 
 async function bootstrap() {
   await connectDb()
   scheduleClearFinishedTasks()
   scheduleClearPastCalls()
+  scheduleOpenMotivationMonth()
 
   const app = createApp()
   app.listen(env.port, () => {
