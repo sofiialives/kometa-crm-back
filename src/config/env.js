@@ -1,6 +1,9 @@
 import 'dotenv/config'
 
 const nodeEnv = process.env.NODE_ENV || 'development'
+// Регистр и пробелы не важны: «Production» в панели — тоже боевой сервер,
+// и пустить его на временных секретах хуже, чем не стартовать.
+const isProduction = nodeEnv.trim().toLowerCase() === 'production'
 
 // Секрет для подписи токенов входа. В разработке можно не задавать —
 // подставится временное значение. На боевом сервере без него не стартуем:
@@ -8,8 +11,10 @@ const nodeEnv = process.env.NODE_ENV || 'development'
 // токен и войдёт в CRM под любым сотрудником.
 function jwtSecret(name, devFallback) {
   const value = process.env[name]
-  if (value) return value
-  if (nodeEnv === 'production') {
+  // Строка из одних пробелов — тоже «не задано». Сам секрет не обрезаем,
+  // чтобы уже выданные токены остались действительными.
+  if (value && value.trim()) return value
+  if (isProduction) {
     throw new Error(
       `Не задана переменная окружения ${name}. На боевом сервере она обязательна: ` +
         'без неё токены входа подписывались бы общеизвестным ключом. ' +

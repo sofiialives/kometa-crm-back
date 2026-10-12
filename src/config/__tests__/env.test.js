@@ -51,6 +51,22 @@ describe('секреты токенов входа', () => {
     assert.match(stderr, /Не задана переменная окружения JWT_REFRESH_SECRET/)
   })
 
+  test('NODE_ENV с другим регистром и пробелами — тоже прод', () => {
+    const { code, stderr } = loadEnv({ NODE_ENV: ' Production ' })
+    assert.notEqual(code, 0)
+    assert.match(stderr, /Не задана переменная окружения JWT_ACCESS_SECRET/)
+  })
+
+  test('секрет из одних пробелов на проде считается незаданным', () => {
+    const { code, stderr } = loadEnv({
+      NODE_ENV: 'production',
+      JWT_ACCESS_SECRET: '   ',
+      JWT_REFRESH_SECRET: 'refresh-from-render',
+    })
+    assert.notEqual(code, 0)
+    assert.match(stderr, /Не задана переменная окружения JWT_ACCESS_SECRET/)
+  })
+
   test('на проде с заданными секретами берутся они', () => {
     const { code, secrets } = loadEnv({
       NODE_ENV: 'production',
