@@ -210,9 +210,18 @@ export function replayPrize({ levels, bankEntries = [], events = [] }) {
 
       if (amount > 0) {
         // Правило 2: уровни, пройденные при пустом банке, ждали денег —
-        // фиксируем их первым же пополнением.
-        for (let i = 0; i < reached; i += 1) {
-          if (i !== lastIndex && fixed[i] === null) fixed[i] = lock(i)
+        // фиксируем их первым же пополнением. Идём сверху вниз и не даём
+        // нижнему уровню стать дороже уже зафиксированного верхнего: при
+        // банке в пару долларов нижняя доля округляется до нуля и ждёт, а
+        // верхняя успевает зафиксироваться на 1 $.
+        let ceiling = Infinity
+        for (let i = reached - 1; i >= 0; i -= 1) {
+          if (i === lastIndex) continue
+          if (fixed[i] === null) {
+            const value = lock(i)
+            fixed[i] = value === null ? null : Math.min(value, ceiling)
+          }
+          if (fixed[i] !== null) ceiling = Math.min(ceiling, fixed[i])
         }
       } else if (amount < 0) {
         // Правило 6: после списания уровень не может стоить больше, чем при

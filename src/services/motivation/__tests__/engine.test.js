@@ -342,6 +342,21 @@ describe('ноль долларов — не фиксация', () => {
     assert.equal(dollars(r.levels[0].amountCents), 30)
     assert.equal(dollars(r.earnedCents), 30)
   })
+
+  test('нижний уровень, дождавшийся денег, не дороже уже зафиксированного верхнего', () => {
+    const r = replayPrize({
+      levels: SCALE,
+      bankEntries: [bank(0, 2), bank(30, 500)],
+      events: [ev(10, 45)],
+    })
+    // При банке 2 $ первый уровень (15%) округлился до нуля и ждёт денег, а
+    // второй (30%) зафиксировался на 1 $. Пополнение до 502 $ фиксирует
+    // первый, но не выше второго: уровень ниже не может стоить больше.
+    const [first, second] = amounts(r)
+    assert.equal(second, 1)
+    assert.ok(first <= second, `первый ${first} $, второй ${second} $`)
+    assert.equal(dollars(r.earnedCents), 1)
+  })
 })
 
 describe('вершина без округления', () => {
