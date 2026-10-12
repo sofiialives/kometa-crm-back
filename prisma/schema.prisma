@@ -83,6 +83,18 @@ model User {
   archiveReports   ArchiveReport[]  @relation("ArchiveReportAuthor")
   taskStat         UserTaskStat?
 
+  // Мотивация. Банк и баллы бывают только у рядовых сотрудников, но
+  // руководитель и админ тоже оставляют следы в журналах: кто пополнил,
+  // кто отменил, кто назначил профиль. Поэтому связей несколько.
+  motivationAssignments     MotivationAssignment[] @relation("MotivationAssignmentUser")
+  motivationAssignmentsMade MotivationAssignment[] @relation("MotivationAssignmentCreatedBy")
+  motivationBankEntries     MotivationBankEntry[]  @relation("MotivationBankEntryUser")
+  motivationBankEntriesMade MotivationBankEntry[]  @relation("MotivationBankEntryCreatedBy")
+  motivationEvents          MotivationEvent[]      @relation("MotivationEventUser")
+  motivationEventsMade      MotivationEvent[]      @relation("MotivationEventCreatedBy")
+  motivationEventsCancelled MotivationEvent[]      @relation("MotivationEventCancelledBy")
+  motivationSeen            MotivationSeen?
+
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
@@ -126,6 +138,12 @@ model Client {
   // Связь без onDelete, то есть Restrict: удалить клиента, по которому
   // ведётся финансовый учёт, база не даст.
   board     BoardClient?
+
+  // Пополнения банка «за нового клиента» и отметки «клиент купил продукт».
+  // Связь необязательная и без запрета на удаление: журнал мотивации
+  // хранит название клиента у себя, поэтому переживёт и его удаление.
+  motivationBankEntries MotivationBankEntry[]
+  motivationEvents      MotivationEvent[]
 }
 
 model Work {
@@ -477,4 +495,314 @@ model BoardExpense {
   updatedAt   DateTime     @updatedAt
 
   @@index([serviceId])
+}
+
+// ---------------------------------------------------------------------------
+// Мотивация сотрудников
+// ---------------------------------------------------------------------------
+//
+// Устройство в двух словах. У каждого сотрудника на месяц есть личный банк
+// премии и баллы. Баллы определяют, какую долю банка он заберёт, и какой у
+// него уровень работы. За что дают и снимают баллы, решает профиль его
+// должности: у дизайнера одни события, у разработчика другие.
+//
+// Главное правило хранения: текущих «баллов» и «банка» в базе нет. Есть два
+// журнала, банка и событий, и всё остальное считается по ним. Так любую
+// цифру на экране можно разложить на записи, из которых она получилась, и
+// ни одна правка не теряется: записи не удаляются, а отменяются.
+
+// Как фиксируется событие: руками руководителя или само, по задачам CRM.
+enum MotivationEventMode {
+  manual
+  auto
+}
+
+// Какое именно автоматическое правило стоит за событием. Задачи из Иерархии
+// и личные разделены: личные человек ставит себе сам, поэтому за них баллов
+// меньше и есть дневной потолок, а просроченную личную задачу ночная уборка
+// CRM удаляет, так что штраф за неё бывает только один раз.
+enum MotivationAutoRule {
+  task_on_time
+  personal_task_on_time
+  task_overdue
+  personal_task_overdue
+}
+
+// Запись журнала банка: стартовая сумма месяца, пополнение или списание.
+enum MotivationBankKind {
+  start
+  top_up
+  write_off
+}
+
+// Почему пополнили банк. Три варианта — ровно те, что в форме из задания.
+enum MotivationBankReason {
+  new_client
+  free_budget
+  other
+}
+
+// Чем является запись журнала событий: событием из профиля, ручной
+// корректировкой на произвольное число баллов или покупкой клиентом нового
+// продукта. Последнее вынесено отдельно, потому что у него своя форма и своя
+// кнопка, и в истории оно должно узнаваться с первого взгляда.
+enum MotivationEntryKind {
+  event
+  adjustment
+  product
+}
+
+// Профиль должности: набор условий, по которым человек получает и теряет
+// баллы. Один сотрудник — один профиль.
+model MotivationProfile {
+  id    String @id @default(cuid())
+  title String @unique
+
+  // Сколько лежит в банке первого числа, ещё до всех пополнений. По умолчанию
+  // ноль: банк растёт только тогда, когда приходят клиенты и бюджет.
+  startBankCents Int @default(0)
+
+  // Своя шкала премии вместо общей. Сами уровни лежат в MotivationPrizeLevel
+  // с этим profileId, пока флаг снят, они просто не используются.
+  customScale Boolean @default(false)
+
+  // Свои подсказки к уровням работы. Ключ — номер уровня (position), значение
+  // — текст. Чего здесь нет, берётся из общих уровней.
+  workHints Json @default("{}")
+
+  // Дата, которую сотрудник видит в «Моих условиях»: «Условия обновлены 1
+  // ноября». Отдельно от updatedAt, потому что переименование профиля
+  // условий не меняет, а правка баллов меняет.
+  conditionsUpdatedAt DateTime @default(now())
+
+  eventTypes  MotivationEventType[]
+  prizeLevels MotivationPrizeLevel[]
+  assignments MotivationAssignment[]
+  events      MotivationEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Событие в профиле: за что и сколько баллов.
+model MotivationEventType {
+  id String @id @default(cuid())
+
+  profileId String
+  profile   MotivationProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  title String
+
+  // Короткий пример для «Моих условий», чтобы человек понимал, о чём речь.
+  example String?
+
+  // Баллы в шкалу премии и в шкалу уровня работы. По умолчанию одинаковые,
+  // но админ может развести их, если событие должно влиять на шкалы
+  // по-разному. Знак входит в число: штраф — отрицательные баллы.
+  prizePoints Int
+  levelPoints Int
+
+  mode MotivationEventMode @default(manual)
+
+  // Заполнено только у автоматических событий. В одном профиле одно правило
+  // встречается не больше одного раза, иначе задача давала бы баллы дважды.
+  autoRule MotivationAutoRule?
+
+  // Служебная метка события, которое есть во всех профилях и на которое
+  // ссылается отдельная кнопка. Сейчас такое одно: «клиент купил продукт».
+  systemKey String?
+
+  enabled  Boolean @default(true)
+  position Int     @default(0)
+
+  events MotivationEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([profileId, autoRule])
+  @@unique([profileId, systemKey])
+  @@index([profileId, position])
+}
+
+// Уровень шкалы премии: сколько баллов нужно и какую долю банка он даёт.
+// profileId пустой — это общая шкала, заполненный — своя шкала профиля.
+// Шкала всегда сохраняется целиком, поэтому номер уровня не уникален на
+// уровне базы: старые строки удаляются и пишутся новые в одной транзакции.
+model MotivationPrizeLevel {
+  id String @id @default(cuid())
+
+  profileId String?
+  profile   MotivationProfile? @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  position  Int
+  threshold Int
+
+  // Доля банка в процентах. У последнего уровня всегда 100: он и есть весь
+  // банк, так прямо сказано в задании.
+  percent Int
+
+  @@index([profileId, position])
+}
+
+// Уровень работы: текстовая оценка месяца без денег.
+model MotivationWorkLevel {
+  id       String @id @default(cuid())
+  position Int    @unique
+  title    String
+
+  // Нижняя граница в баллах. Верхняя — это граница следующего уровня минус
+  // один, отдельно её не храним, чтобы между уровнями не возникло дыр.
+  minPoints Int
+  hint      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Общие настройки мотивации. Строка ровно одна, с id «global».
+model MotivationSettings {
+  id String @id @default("global")
+
+  // Штраф за просрочку одной задачи не больше этого числа баллов, сколько
+  // бы дней она ни висела.
+  overduePenaltyCap Int @default(10)
+
+  // Сколько баллов в день можно получить за личные задачи. Личную задачу
+  // человек ставит себе сам, без потолка ими можно было бы набрать всю шкалу.
+  personalTaskDailyCap Int @default(2)
+
+  // Слать ли сотруднику сообщения о пополнении банка и о баллах. Шлёт их
+  // агент, вкладка здесь только хранит выбор админа.
+  notifyBank   Boolean @default(true)
+  notifyPoints Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+}
+
+// Какой профиль у сотрудника и с какого момента. Записи не перезаписываются:
+// перевели на другую должность — появилась новая строка, а старые события
+// так и остались посчитаны по прежним условиям.
+model MotivationAssignment {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation("MotivationAssignmentUser", fields: [userId], references: [id])
+
+  profileId String
+  profile   MotivationProfile @relation(fields: [profileId], references: [id])
+
+  from DateTime @default(now())
+
+  createdById String?
+  createdBy   User?   @relation("MotivationAssignmentCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, from])
+}
+
+// Журнал банка. Банк сотрудника за месяц — это сумма его записей за месяц.
+model MotivationBankEntry {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation("MotivationBankEntryUser", fields: [userId], references: [id])
+
+  kind   MotivationBankKind
+  reason MotivationBankReason?
+
+  // Плюс у пополнения и стартовой суммы, минус у списания.
+  amountCents Int
+
+  // Клиент, за которого пополнили банк. Название копируется сюда же: клиента
+  // могут переименовать или удалить, а история должна читаться как была.
+  clientId   String?
+  client     Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  clientName String?
+
+  comment String?
+
+  // Момент, к которому относится запись. По нему определяется месяц и
+  // порядок, в котором банк рос вперемешку с баллами.
+  occurredAt DateTime @default(now())
+
+  // Защита от повторной стартовой суммы: у стартовой записи здесь
+  // «сотрудник:месяц», у остальных пусто, а пустые значения уникальность
+  // не нарушают.
+  startKey String? @unique
+
+  // Кто сделал запись. Пусто у стартовой суммы — её кладёт сама система.
+  createdById String?
+  createdBy   User?   @relation("MotivationBankEntryCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, occurredAt])
+}
+
+// Журнал событий: всё, за что сотрудник получил или потерял баллы.
+model MotivationEvent {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation("MotivationEventUser", fields: [userId], references: [id])
+
+  // Профиль, по которому событие посчитано в момент начисления. Если
+  // человека потом перевели, его прошлое остаётся по старым условиям.
+  profileId String?
+  profile   MotivationProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  eventTypeId String?
+  eventType   MotivationEventType? @relation(fields: [eventTypeId], references: [id], onDelete: SetNull)
+
+  kind MotivationEntryKind
+  mode MotivationEventMode
+
+  // Название и баллы копируются в момент начисления. Админ может потом
+  // поменять событие в профиле, но уже начисленное от этого не меняется.
+  title       String
+  prizePoints Int
+  levelPoints Int
+
+  // Задачу держим без внешнего ключа: личные задачи ночная уборка CRM
+  // удаляет, а запись о баллах за неё должна остаться.
+  taskId    String?
+  taskTitle String?
+
+  clientId   String?
+  client     Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  clientName String?
+
+  comment    String?
+  occurredAt DateTime @default(now())
+
+  // Защита автоматики от повторов: «задача:правило:день». Одна задача не
+  // получит баллы за срок дважды, даже если её закрыть, открыть и закрыть.
+  dedupeKey String? @unique
+
+  // Пусто у автоматических событий.
+  createdById String?
+  createdBy   User?   @relation("MotivationEventCreatedBy", fields: [createdById], references: [id])
+
+  // Отмена вместо удаления: запись остаётся в истории, баллы пересчитываются.
+  cancelledAt   DateTime?
+  cancelledById String?
+  cancelledBy   User?     @relation("MotivationEventCancelledBy", fields: [cancelledById], references: [id])
+  cancelReason  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, occurredAt])
+}
+
+// Что сотрудник уже видел во вкладке. До агента это единственный способ
+// сказать человеку «тебе пополнили банк»: новое подсвечивается, пока он
+// его не открыл.
+model MotivationSeen {
+  userId       String    @id
+  user         User      @relation(fields: [userId], references: [id])
+  bankSeenAt   DateTime?
+  eventsSeenAt DateTime?
+  updatedAt    DateTime  @updatedAt
 }
