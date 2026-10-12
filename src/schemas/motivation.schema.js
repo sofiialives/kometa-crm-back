@@ -72,6 +72,7 @@ export const writeOffSchema = z.object({
     userId: objectId,
     amount: money,
     comment: requiredComment,
+    requestKey: optional(requestKey),
   }),
 })
 

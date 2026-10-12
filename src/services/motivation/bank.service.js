@@ -85,8 +85,12 @@ export async function topUp(actor, { userIds, amount, reason, clientId, comment,
 /**
  * Списание из банка. Только админ, только с комментарием, и не больше, чем
  * сейчас лежит в банке текущего месяца: в минус банк не уходит.
+ *
+ * Повтор того же запроса (ответ потерялся, владелец нажал ещё раз) второй
+ * раз не списывает: ключ запроса проверяется под тем же замком, что и
+ * остаток банка, и в ответ уходит уже сделанное списание.
  */
-export async function writeOff(actor, { userId, amount, comment }) {
+export async function writeOff(actor, { userId, amount, comment, requestKey }) {
   assertAdmin(actor, 'Списывать из банка может только владелец')
   const cents = toCents(amount)
   if (!(cents > 0)) throw ApiError.badRequest('Сумма списания должна быть больше нуля')
@@ -104,8 +108,14 @@ export async function writeOff(actor, { userId, amount, comment }) {
   // Проверка «не больше банка» и запись — в одной транзакции под замком на
   // сотрудника. Без замка два одновременных списания оба прошли бы проверку
   // по одному и тому же банку, и журнал разошёлся бы с экраном.
-  const entry = await prisma.$transaction(async (tx) => {
+  const dedupeKey = requestKeyFor(requestKey, employee.id)
+  const include = { createdBy: { select: { id: true, name: true } } }
+  const { entry, duplicate } = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${employee.id}))`
+    if (dedupeKey) {
+      const done = await tx.motivationBankEntry.findUnique({ where: { dedupeKey }, include })
+      if (done) return { entry: done, duplicate: true }
+    }
     const sum = await tx.motivationBankEntry.aggregate({
       where: { userId: employee.id, occurredAt: { gte: start, lt: end } },
       _sum: { amountCents: true },
@@ -114,17 +124,19 @@ export async function writeOff(actor, { userId, amount, comment }) {
     if (cents > bankCents) {
       throw ApiError.badRequest(`В банке сейчас ${(bankCents / 100).toLocaleString('ru-RU')} $ — больше списать нельзя`)
     }
-    return tx.motivationBankEntry.create({
+    const created = await tx.motivationBankEntry.create({
       data: {
         userId: employee.id,
         kind: 'write_off',
         amountCents: -cents,
         comment: comment.trim(),
         occurredAt: new Date(),
+        dedupeKey,
         createdById: actor.id,
       },
-      include: { createdBy: { select: { id: true, name: true } } },
+      include,
     })
+    return { entry: created, duplicate: false }
   })
-  return bankEntry(entry)
+  return { ...bankEntry(entry), duplicate }
 }
