@@ -102,6 +102,8 @@ model User {
   motivationAwaysMade       MotivationAway[]       @relation("MotivationAwayCreatedBy")
   motivationMonthResults    MotivationMonthResult[] @relation("MotivationMonthResultUser")
   motivationWorkHints       MotivationWorkHint[]   @relation("MotivationWorkHintDecidedBy")
+  botMessages               BotMessage[]
+  botCheckinAnswers         BotCheckinAnswer[]
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -575,6 +577,27 @@ enum MotivationComplexity {
   high
 }
 
+// Вид отлучки: короткий перерыв («отошёл на час») или форс-мажор.
+enum MotivationAwayKind {
+  break
+  force_majeure
+}
+
+// Кто поставил отлучку: владелец в CRM или сам человек через бота.
+enum MotivationAwaySource {
+  owner
+  bot
+}
+
+// Ответ на внезапный чек-ин: спросили, ответил, пропущен (отлучка или нет
+// телеграма), оштрафован за молчание.
+enum BotCheckinStatus {
+  asked
+  answered
+  skipped
+  penalized
+}
+
 // Подсказка «Пополнить банк?» о новой работе: ждёт, банк пополнили, не нужно.
 enum MotivationHintStatus {
   pending
@@ -976,6 +999,16 @@ model MotivationAway {
   // Сняли раньше срока — человек вернулся.
   endedAt DateTime?
 
+  // Отошёл на время или форс-мажор; кто поставил.
+  kind   MotivationAwayKind   @default(force_majeure)
+  source MotivationAwaySource @default(owner)
+
+  // Бот уже спросил «ты на месте?» перед концом отлучки и когда человек
+  // сказал, что вернулся. Сколько раз продлевал.
+  returnAskedAt DateTime?
+  returnedAt    DateTime?
+  extensions    Int       @default(0)
+
   createdAt DateTime @default(now())
 
   @@index([userId, until])
@@ -1048,6 +1081,67 @@ model MotivationWorkHint {
   createdAt DateTime @default(now())
 
   @@index([status, createdAt])
+}
+
+// Переписка бота: память агента и лимит сообщений в день. Входящие — то,
+// что человек написал сам (нажатия кнопок сюда не пишутся).
+model BotMessage {
+  id String @id @default(cuid())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+  chatId String
+
+  // in — от человека, out — от бота.
+  direction String
+  text      String
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// Что бот уже отправил: «напомнил о задаче X», «написал про заявку Y».
+// Ключ — защита от повторов, если задание сработало дважды.
+model BotNotice {
+  key    String   @id
+  sentAt DateTime @default(now())
+}
+
+// Внезапный чек-ин: день, на который он запланирован, и когда ушёл и
+// закрылся. Один на день.
+model BotCheckin {
+  id String @id @default(cuid())
+
+  day        String    @unique
+  plannedAt  DateTime
+  startedAt  DateTime?
+  deadlineAt DateTime?
+  closedAt   DateTime?
+
+  answers BotCheckinAnswer[]
+
+  createdAt DateTime @default(now())
+}
+
+model BotCheckinAnswer {
+  id String @id @default(cuid())
+
+  checkinId String
+  checkin   BotCheckin @relation(fields: [checkinId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  status     BotCheckinStatus @default(asked)
+  answer     String?
+  answeredAt DateTime?
+  // Штраф −3 за молчание — событие в журнале баллов.
+  eventId    String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([checkinId, userId])
 }
 
 // Что сотрудник уже видел во вкладке. До агента это единственный способ
