@@ -80,7 +80,6 @@ export async function createTask({ title, description, deadline, startAt, workId
   if (workId && user.role === 'staff') {
     throw ApiError.forbidden('Задачи по работам создаёт только главный отдела или админ')
   }
-  if (!workId) await assertPersonalTaskLimit(user)
 
   const ids = ownerIds && ownerIds.length > 0 ? [...new Set(ownerIds)] : [user.id]
 
@@ -91,7 +90,7 @@ export async function createTask({ title, description, deadline, startAt, workId
   const targets = []
   for (const id of ids) {
     if (id === user.id) {
-      targets.push({ ownerId: user.id, departmentId: user.departmentId ?? null })
+      targets.push({ ownerId: user.id, departmentId: user.departmentId ?? null, role: user.role })
       continue
     }
 
@@ -106,12 +105,13 @@ export async function createTask({ title, description, deadline, startAt, workId
       throw ApiError.forbidden('Можно назначать задачи только сотрудникам своего отдела')
     }
 
-    targets.push({ ownerId: id, departmentId: owner.departmentId })
+    targets.push({ ownerId: id, departmentId: owner.departmentId, role: owner.role })
   }
 
-  const created = await prisma.$transaction(
-    targets.map((t) =>
-      prisma.task.create({
+  const created = await prisma.$transaction(async (tx) => {
+    if (!workId) await assertPersonalTaskLimit(tx, targets)
+    return Promise.all(targets.map((t) =>
+      tx.task.create({
         data: {
           title,
           description: description || null,
@@ -127,8 +127,8 @@ export async function createTask({ title, description, deadline, startAt, workId
         },
         include: OWNER_INCLUDE,
       }),
-    ),
-  )
+    ))
+  })
 
   return created
 }
@@ -140,16 +140,22 @@ export async function createTask({ title, description, deadline, startAt, workId
  * банка нет, и его личный дневник лимит не трогает. Сколько именно — в
  * настройках мотивации.
  */
-async function assertPersonalTaskLimit(user, now = new Date()) {
-  if (user.role === 'admin') return
-  const { personalTaskDailyLimit: limit } = await getSettingsRow()
-  const today = await prisma.task.count({
-    where: { ownerId: user.id, origin: 'personal', createdAt: { gte: mskDayStart(now) } },
-  })
-  if (today >= limit) {
-    throw ApiError.badRequest(
-      `Личных задач на сегодня уже ${today} из ${limit} — больше поставить нельзя. Объедините мелкие в одну и опишите подробнее`,
-    )
+async function assertPersonalTaskLimit(tx, targets, now = new Date()) {
+  const limited = targets.filter((t) => t.role !== 'admin')
+  if (limited.length === 0) return
+  const { personalTaskDailyLimit: limit } = await getSettingsRow(tx)
+  for (const t of limited) {
+    // Замок на человека: двадцать одновременных запросов не пройдут
+    // проверку все разом со счётом ноль.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`tasks:${t.ownerId}`}))`
+    const today = await tx.task.count({
+      where: { ownerId: t.ownerId, origin: 'personal', createdAt: { gte: mskDayStart(now) } },
+    })
+    if (today >= limit) {
+      throw ApiError.badRequest(
+        `Личных задач на сегодня уже ${today} из ${limit} — больше поставить нельзя. Объедините мелкие в одну и опишите подробнее`,
+      )
+    }
   }
 }
 

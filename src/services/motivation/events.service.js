@@ -208,6 +208,10 @@ export async function cancelEvent(actor, id, { reason }) {
   const employee = await loadEmployee(event.userId)
   assertCanManage(actor, employee)
   if (event.cancelledAt) throw ApiError.conflict('Событие уже отменено')
+  // Иначе журнал показывал бы «был», а баллов бы не было.
+  if (await prisma.motivationCallMark.findUnique({ where: { eventId: id }, select: { id: true } })) {
+    throw ApiError.badRequest('Это отметка журнала звонка — поменяйте её в журнале')
+  }
 
   // updateMany с условием «ещё не отменено» — защита от двойного клика:
   // вторая отмена ничего не перезапишет, даже если пришла одновременно.

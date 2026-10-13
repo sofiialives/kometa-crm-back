@@ -36,6 +36,11 @@ const REVIEW_TAKEN = ['pending', 'approved', 'rejected']
 
 const reviewMode = (settings) => settings.taskPointsMode !== 'auto'
 
+// Записи задачи по правилу: автоматические и начисленные по заявкам.
+const slotOf = (rule, taskId) => ({
+  OR: [{ dedupeKey: { startsWith: autoKeyPrefix(rule, taskId) } }, { review: { rule } }],
+})
+
 function reviewData({ task, rule, type, prizePoints, levelPoints, at, key, nights = [] }) {
   return {
     userId: task.ownerId,
@@ -116,8 +121,10 @@ export async function awardOnTime(task, settings) {
     const fresh = await tx.task.findUnique({ where: { id: task.id }, select: { status: true, doneAt: true } })
     if (fresh?.status !== 'done' || fresh.doneAt?.getTime() !== at.getTime()) return null
 
+    // Место занято и автоматической записью, и начисленной по заявке: при
+    // переключении режима «на проверку → автоматически» баллы не задвоятся.
     const taken = await tx.motivationEvent.findFirst({
-      where: { taskId: task.id, dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) }, ...HOLDS_SLOT },
+      where: { taskId: task.id, AND: [HOLDS_SLOT, slotOf(rule, task.id)] },
       select: { id: true },
     })
     if (taken) return null
@@ -192,17 +199,20 @@ export async function revokeOnTime(task, now = new Date()) {
     })
     const approved = await tx.motivationReview.findMany({
       where: { taskId: task.id, rule, status: 'approved', event: { cancelledAt: null, occurredAt: { gte: start } } },
-      select: { id: true, eventId: true },
+      select: { id: true, eventId: true, decisionNote: true },
     })
     if (approved.length) {
       await tx.motivationEvent.updateMany({
         where: { id: { in: approved.map((a) => a.eventId) } },
         data: { cancelledAt: now, cancelReason: RETURNED_REASON },
       })
-      await tx.motivationReview.updateMany({
-        where: { id: { in: approved.map((a) => a.id) } },
-        data: { status: 'withdrawn', decisionNote: RETURNED_REASON },
-      })
+      // Заметку владельца не затираем — дописываем причину.
+      for (const a of approved) {
+        await tx.motivationReview.update({
+          where: { id: a.id },
+          data: { status: 'withdrawn', decisionNote: a.decisionNote ? `${a.decisionNote}. ${RETURNED_REASON}` : RETURNED_REASON },
+        })
+      }
     }
     return res.count + withdrawn.count + approved.length
   })
@@ -298,10 +308,11 @@ async function chargeTask(task, settings, now) {
       const dedupeKey = autoKey(rule, task.id, key)
       if (await tx.motivationEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return 'exists'
 
-      // В лимит идут и штрафы, прощённые владельцем: иначе следующая ночь
-      // молча вернула бы то, что он простил.
+      // В лимит идут и штрафы, прощённые владельцем, и начисленные по
+      // заявкам: иначе следующая ночь молча вернула бы то, что он простил,
+      // а смена режима — превысила бы лимит.
       const used = await tx.motivationEvent.aggregate({
-        where: { taskId: task.id, dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) }, ...HOLDS_SLOT },
+        where: { taskId: task.id, AND: [HOLDS_SLOT, slotOf(rule, task.id)] },
         _sum: { prizePoints: true, levelPoints: true },
       })
       const prizePoints = capPenalty(type.prizePoints, -(used._sum.prizePoints ?? 0), settings.overduePenaltyCap)

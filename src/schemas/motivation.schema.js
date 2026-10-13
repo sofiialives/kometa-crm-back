@@ -122,6 +122,8 @@ export const approveReviewSchema = z.object({
     prizePoints: optional(points),
     levelPoints: optional(points),
     comment: optional(comment),
+    // Сколько было подсказано на экране владельца — сервер сверит с текущим.
+    seenPrizePoints: optional(points),
   }),
 })
 

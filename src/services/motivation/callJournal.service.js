@@ -182,7 +182,7 @@ export async function setAway(actor, { userId, until, reason }, now = new Date()
   const end = new Date(until)
   if (!(end > now)) throw ApiError.badRequest('Время окончания уже прошло')
   if (end.getTime() - now.getTime() > MAX_AWAY_DAYS * 24 * 60 * 60 * 1000) {
-    throw ApiError.badRequest(`Форс-мажор — не дольше ${MAX_AWAY_DAYS} дней. Отпуск и больничный — отдельная история`)
+    throw ApiError.badRequest('Форс-мажор — не дольше 31 дня. Отпуск и больничный — отдельная история')
   }
   const away = await prisma.$transaction(async (tx) => {
     await lockUser(tx, userId)

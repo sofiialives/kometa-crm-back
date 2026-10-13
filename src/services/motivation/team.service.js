@@ -38,6 +38,11 @@ export function departmentScope(actor, departmentId) {
   return actor.departmentId
 }
 
+function awayFor(away, actor) {
+  if (!away) return null
+  return actor.role === 'admin' ? away : { ...away, reason: null }
+}
+
 export async function getTeam(actor, { month, departmentId } = {}, now = new Date()) {
   assertViewer(actor)
   const monthKey = resolveMonth(month, now)
@@ -100,7 +105,9 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
         ? { position: result.work.current.position, title: result.work.current.title }
         : null,
       eventsCount: events.filter((e) => !e.cancelledAt).length,
-      away: aways.get(user.id) ?? null,
+      // Причину метки («заболел», «дела в банке») видит только владелец:
+      // он её и ставил. Руководителю достаточно знать, что человека нет.
+      away: awayFor(aways.get(user.id), actor),
     })
   }
 

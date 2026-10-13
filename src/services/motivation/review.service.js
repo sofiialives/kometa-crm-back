@@ -24,8 +24,10 @@ const INCLUDE = {
 
 const lockUser = (tx, userId) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`
 
-function reviewCard(r, extra = {}) {
+function reviewCard(r, extra = {}, now = new Date()) {
   return {
+    // Заявка прошлого месяца начислится в текущий: прошлый уже посчитан.
+    previousMonth: monthKeyOf(r.occurredAt) !== currentMonthKey(now),
     id: r.id,
     rule: r.rule,
     title: r.title,
@@ -122,6 +124,11 @@ async function loadPending(tx, id) {
   return review
 }
 
+function assertStillPending(r) {
+  if (r.status === 'withdrawn') throw ApiError.conflict('Задачу вернули из «Готово» — заявка снята')
+  if (r.status !== 'pending') throw ApiError.conflict('По этой заявке уже есть решение')
+}
+
 /**
  * «Начислить». Можно поменять подсказанные баллы. Событие датируется
  * моментом самой задачи, если он в текущем месяце: так баллы встают в
@@ -131,7 +138,7 @@ async function loadPending(tx, id) {
  * Повторное нажатие (ответ потерялся) отдаёт уже сделанное, а не
  * начисляет второй раз.
  */
-export async function approveReview(actor, id, { prizePoints, levelPoints, comment } = {}, now = new Date()) {
+export async function approveReview(actor, id, { prizePoints, levelPoints, comment, seenPrizePoints } = {}, now = new Date()) {
   assertAdmin(actor, 'Начислять баллы может только владелец')
   const first = await prisma.motivationReview.findUnique({ where: { id }, select: { userId: true } })
   if (!first) throw ApiError.notFound('Заявка не найдена')
@@ -140,10 +147,19 @@ export async function approveReview(actor, id, { prizePoints, levelPoints, comme
     await lockUser(tx, first.userId)
     const r = await loadPending(tx, id)
     if (r.status === 'approved') return r
-    if (r.status !== 'pending') throw ApiError.conflict('По этой заявке уже есть решение')
+    assertStillPending(r)
     if (!r.user.active) throw ApiError.badRequest('Сотрудник отключён — начислять ему нельзя')
+    // Пока владелец смотрел, ночь добавила к просрочке ещё штраф — пусть
+    // увидит новое число, а не начислит то, чего не видел.
+    if (seenPrizePoints !== undefined && seenPrizePoints !== r.prizePoints) {
+      throw ApiError.conflict(`Заявка обновилась: теперь подсказано ${r.prizePoints > 0 ? '+' : ''}${r.prizePoints}. Обновите очередь`)
+    }
 
     const prize = prizePoints ?? r.prizePoints
+    // Опечатка в знаке превратила бы штраф в бонус и наоборот.
+    if (prize !== 0 && r.prizePoints !== 0 && Math.sign(prize) !== Math.sign(r.prizePoints)) {
+      throw ApiError.badRequest(r.prizePoints < 0 ? 'Это штраф — баллы со знаком минус' : 'Это начисление — баллы без минуса')
+    }
     const level = levelPoints ?? (prizePoints !== undefined && r.prizePoints === r.levelPoints ? prize : r.levelPoints)
     if (prize === 0 && level === 0) throw ApiError.badRequest('Ноль баллов начислять незачем — нажмите «Не начислять»')
 
@@ -188,7 +204,7 @@ export async function rejectReview(actor, id, { reason } = {}, now = new Date())
     await lockUser(tx, first.userId)
     const r = await loadPending(tx, id)
     if (r.status === 'rejected') return r
-    if (r.status !== 'pending') throw ApiError.conflict('По этой заявке уже есть решение')
+    assertStillPending(r)
     return tx.motivationReview.update({
       where: { id: r.id },
       data: { status: 'rejected', decidedById: actor.id, decidedAt: now, decisionNote: reason?.trim() || null },
