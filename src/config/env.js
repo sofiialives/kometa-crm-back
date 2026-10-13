@@ -52,6 +52,10 @@ export const env = {
   // любое окружение без токена не падают на старте.
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
 
+  // Адрес API телеграма. Меняют только для проверки на поддельном
+  // телеграме (src/scripts/fakeTelegram.js) — боевой токен локально не нужен.
+  telegramApiBase: process.env.TELEGRAM_API_BASE || 'https://api.telegram.org/bot',
+
   // За сколько минут до звонка предупреждать.
   remindBeforeMin: Number(process.env.REMIND_BEFORE_MIN) || 15,
 
