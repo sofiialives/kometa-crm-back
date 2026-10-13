@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { dueInMinutes, isCheckinDay, isWorkday, mskDayKey, randomCheckinTime, workdaysAfter } from '../plan.js'
+import { dueInMinutes, isCheckinDay, isQuietHour, isWorkday, mskDayKey, randomCheckinTime, workdaysAfter } from '../plan.js'
 
 describe('рабочие дни', () => {
   test('понедельник–пятница — будни, суббота и воскресенье — нет', () => {
@@ -47,5 +47,14 @@ describe('окно напоминаний', () => {
     assert.ok(dueInMinutes(new Date('2026-11-03T16:00:00+03:00'), now, 5))
     assert.ok(!dueInMinutes(new Date('2026-11-03T16:01:00+03:00'), now, 5))
     assert.ok(!dueInMinutes(new Date('2026-11-03T15:59:00+03:00'), now, 5))
+  })
+})
+
+describe('тихие часы', () => {
+  test('с 21:00 до 9:00 по Москве бот молчит', () => {
+    assert.ok(isQuietHour(new Date('2026-11-03T21:00:00+03:00')))
+    assert.ok(isQuietHour(new Date('2026-11-03T08:59:00+03:00')))
+    assert.ok(!isQuietHour(new Date('2026-11-03T09:00:00+03:00')))
+    assert.ok(!isQuietHour(new Date('2026-11-03T20:59:00+03:00')))
   })
 })

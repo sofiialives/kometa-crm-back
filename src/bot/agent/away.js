@@ -1,5 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { parseUntil } from '../parse.js'
+import { isQuietHour, isWorkday, mskDayKey } from '../plan.js'
 import { escapeHtml } from '../telegram.js'
 import { at, duration, endOfDay, hm, minutesBetween } from './format.js'
 import { claimNotice, hasNotice, nameOf, releaseNotice, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
@@ -62,10 +63,13 @@ function openBreak(userId, now, db = prisma) {
 
 /**
  * Отойти до until. Без времени — на час, и бот один раз переспросит
- * кнопками. Уже отошёл — это продление. Действует форс-мажор — отлучка не
- * нужна, он и так прикрывает.
+ * кнопками. Действует форс-мажор — отлучка не нужна, он и так прикрывает.
+ *
+ * extend — это «задерживаюсь»: продлеваем текущую отлучку, даже если её
+ * срок уже вышел. Новое «отхожу» после давно истёкшей отлучки, из которой
+ * человек не отметился, — новая отлучка: раз пишет, значит, вернулся.
  */
-export async function startBreak(user, { until = null, note = null } = {}, now = new Date()) {
+export async function startBreak(user, { until = null, note = null, extend = false } = {}, now = new Date()) {
   const timeGiven = Boolean(until)
   const end = until ?? new Date(now.getTime() + DEFAULT_BREAK_MIN * 60000)
   const minutes = minutesBetween(now, end)
@@ -78,8 +82,14 @@ export async function startBreak(user, { until = null, note = null } = {}, now =
     await lockUser(tx, user.id)
     const current = await activeAway(user.id, now, tx)
     if (current?.kind === 'force_majeure') return { type: 'covered', away: current }
-    const open = current?.kind === 'break' ? current : await openBreak(user.id, now, tx)
+    let open = current?.kind === 'break' ? current : await openBreak(user.id, now, tx)
+    if (open && !extend && open.until <= now) {
+      await tx.motivationAway.update({ where: { id: open.id }, data: { returnedAt: now } })
+      open = null
+    }
     if (open) {
+      // Двойное нажатие той же кнопки — ничего не меняем и Яну не пишем.
+      if (Math.abs(open.until.getTime() - end.getTime()) < 60000) return { type: 'same', away: open }
       // Отошёл без времени и тут же уточнил — это не продление, а уточнение.
       const clarify = open.extensions === 0 && !open.returnAskedAt && minutesBetween(open.from, now) <= 10
       const away = await tx.motivationAway.update({
@@ -103,6 +113,10 @@ export async function startBreak(user, { until = null, note = null } = {}, now =
     await tell(user.id, `У тебя и так отмечен форс-мажор до ${at(away.until, now)} — отдыхай, я не дёргаю.`)
     return result
   }
+  if (result.type === 'same') {
+    await tell(user.id, `Принято: жду к <b>${hm(away.until)}</b>.`)
+    return result
+  }
   if (result.type === 'started') {
     if (timeGiven) {
       await tell(user.id, `Понял, жду к <b>${hm(away.until)}</b> (${left}). Перед концом спрошу, на месте ли ты.`)
@@ -123,15 +137,33 @@ export async function startBreak(user, { until = null, note = null } = {}, now =
   return result
 }
 
+/** Есть ли отлучка, из которой человек ещё не отметился. */
+export async function hasOpenBreak(userId, now = new Date()) {
+  return Boolean(await openBreak(userId, now))
+}
+
+/** «Ухожу домой», «на сегодня всё» — закрываем отлучку, если была, и прощаемся. */
+export async function dayEnd(user, now = new Date()) {
+  state.clear(user.id)
+  const open = await openBreak(user.id, now)
+  if (open) {
+    await prisma.motivationAway.update({
+      where: { id: open.id },
+      data: { returnedAt: now, endedAt: open.until > now ? now : null },
+    })
+  }
+  await tell(user.id, 'Хорошего вечера! Отметил, что на сегодня всё 👋')
+}
+
 /**
  * Кнопка «15 мин / 30 мин…» под вопросом «на сколько?» или «до скольки
  * задерживаешься?». Данные кнопки присылает телефон, их можно подделать —
  * поэтому только минуты с наших кнопок.
  */
-export function setBreakMinutes(user, minutes, now = new Date()) {
+export function setBreakMinutes(user, minutes, now = new Date(), { extend = false } = {}) {
   state.clear(user.id)
   if (!BREAK_MINUTES.includes(minutes)) return null
-  return startBreak(user, { until: new Date(now.getTime() + minutes * 60000) }, now)
+  return startBreak(user, { until: new Date(now.getTime() + minutes * 60000), extend }, now)
 }
 
 /** «Вернулся», «я на месте». */
@@ -162,9 +194,10 @@ export async function comeBack(user, now = new Date()) {
 export async function runningLate(user, { until = null, text = '' } = {}, now = new Date()) {
   const open = await openBreak(user.id, now)
   if (open) {
-    if (until) return startBreak(user, { until }, now)
-    state.expect(user.id, 'break_time', { awayId: open.id })
-    await tell(user.id, 'До скольки задерживаешься? Нажми кнопку или напиши время.', { buttons: BREAK_BUTTONS('aw') })
+    if (until) return startBreak(user, { until, extend: true }, now)
+    state.expect(user.id, 'break_time', { awayId: open.id, extend: true })
+    // «ax» — продление: кнопка помнит, что это «задерживаюсь», а не новая отлучка.
+    await tell(user.id, 'До скольки задерживаешься? Нажми кнопку или напиши время.', { buttons: BREAK_BUTTONS('ax') })
     return null
   }
   // Одно «задерживаюсь» в 10 минут: десять подряд Яну не нужны.
@@ -182,6 +215,11 @@ export async function runningLate(user, { until = null, text = '' } = {}, now = 
 export async function reportForceMajeure(user, text, message, now = new Date()) {
   state.clear(user.id)
   if (!message) return
+  const current = await activeAway(user.id, now)
+  if (current?.kind === 'force_majeure') {
+    await tell(user.id, `У тебя уже стоит форс-мажор до ${at(current.until, now)} — отдыхай, я не дёргаю.`)
+    return
+  }
   if (await hasOpenForceMajeure(user.id, now)) {
     await tell(user.id, 'Твоя заявка на форс-мажор уже у Яна — жду его решения.')
     return
@@ -225,6 +263,12 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
   }
   let until = parseUntil(message.text, message.createdAt) ?? endOfDay(message.createdAt)
   if (until <= now) until = endOfDay(now)
+  // Уже стоит форс-мажор дольше (Ян поставил больничный до пятницы) — не
+  // укорачиваем его.
+  const current = await activeAway(user.id, now)
+  if (current?.kind === 'force_majeure' && current.until >= until) {
+    return { text: `✅ ${nameOf(user)}: форс-мажор уже стоит до ${at(current.until, now)} — оставил как есть.\n«${escapeHtml(message.text.slice(0, 300))}»` }
+  }
   try {
     await prisma.$transaction(async (tx) => {
       await lockUser(tx, user.id)
@@ -250,14 +294,17 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
  * пропал после срока — сообщить Яну (один раз).
  */
 export async function tickBreaks(now = new Date()) {
+  // Ночью и в выходные не спрашиваем и Яну не пишем: это уже не рабочее время.
+  if (isQuietHour(now) || !isWorkday(mskDayKey(now))) return
   const soon = await prisma.motivationAway.findMany({
     where: { kind: 'break', endedAt: null, returnedAt: null, returnAskedAt: null, until: { gt: now, lte: new Date(now.getTime() + 10 * 60000) } },
     include: { user: { select: { id: true, name: true, active: true } } },
   })
   for (const away of soon) {
     const total = minutesBetween(away.from, away.until)
-    // Короткая отлучка — спрашиваем за 5 минут, а не через 5 минут после ухода.
-    const askAt = total <= 20 ? 5 : 10
+    // Короткая отлучка — спрашиваем за 5 минут (а совсем короткую — на
+    // середине), а не сразу после ухода.
+    const askAt = total <= 20 ? Math.min(5, Math.floor(total / 2)) : 10
     if (minutesBetween(now, away.until) > askAt) continue
     const claimed = await prisma.motivationAway.updateMany({ where: { id: away.id, returnAskedAt: null }, data: { returnAskedAt: now } })
     if (!claimed.count || !away.user.active) continue

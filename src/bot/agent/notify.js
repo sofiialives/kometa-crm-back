@@ -19,7 +19,10 @@ const plain = (text) => String(text ?? '').replace(/<[^>]+>/g, '').replace(/&lt;
  * вопрос бота; button — нажатая кнопка. В дневной лимит идут только in.
  */
 export function logMessage({ userId = null, chatId, direction, text }) {
-  return prisma.botMessage.create({ data: { userId, chatId: String(chatId), direction, text: plain(text).slice(0, 4000) } })
+  // Своё сообщение бот пишет в HTML — теги убираем. Человек пишет как есть:
+  // «1 < 2» должно остаться «1 < 2».
+  const clean = direction === 'out' ? plain(text) : String(text ?? '')
+  return prisma.botMessage.create({ data: { userId, chatId: String(chatId), direction, text: clean.slice(0, 4000) } })
     .catch((e) => {
       console.error('[агент] журнал:', e.message)
       return null

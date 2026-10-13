@@ -3,6 +3,7 @@ import { escapeHtml } from '../telegram.js'
 import { BANK_REASON_LABELS } from '../../services/motivation/bank.service.js'
 import { getSettingsRow } from '../../services/motivation/profiles.js'
 import { approveReview, rejectReview } from '../../services/motivation/review.service.js'
+import { isQuietHour } from '../plan.js'
 import { points, short } from './format.js'
 import { claimNotice, crmButton, nameOf, ownerIds, releaseNotice, row, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
 
@@ -24,14 +25,6 @@ import { claimNotice, crmButton, nameOf, ownerIds, releaseNotice, row, sendOnce,
 const WATERMARK = 'feed:watermark'
 const OWNER_INIT = 'feed:owner-init'
 const OVERLAP_MS = 5 * 60000
-const QUIET_FROM_H = 21
-const QUIET_TO_H = 9
-
-export function isQuietHour(now = new Date()) {
-  const h = (new Date(now).getUTCHours() + 3) % 24
-  return h >= QUIET_FROM_H || h < QUIET_TO_H
-}
-
 /**
  * Отметка «до какого момента лента разобрана». Двигается по времени самих
  * записей, а не по часам сервера: часы базы и приложения могут чуть
@@ -62,21 +55,27 @@ async function readWatermark() {
 }
 
 const SPECIAL = {
-  call_missed: (p) => `Тебя не было на вечернем звонке — ${points(p)}. Ждём на следующем, в 19:00 🙌`,
+  call_missed: (p) => `Тебя не было на вечернем звонке — ${points(p)}. Ждём на следующем 🙌`,
   call_attended: (p) => `Спасибо за вечерний звонок — ${points(p)} 👍`,
   checkin_missed: (p) => `На внезапный чек-ин не было ответа — ${points(p)}. Если отходишь, просто напиши мне «отхожу на 30 минут» — тогда не спрашиваю.`,
 }
 
-function eventLine(e) {
+export function eventLine(e) {
   const special = SPECIAL[e.eventType?.systemKey]
   if (special) return special(e.prizePoints)
+  if (e.prizePoints === 0) {
+    // Корректировка только уровня работы — без «0 баллов».
+    if (!e.levelPoints) return null
+    return `📈 ${e.levelPoints > 0 ? '+' : '−'}${Math.abs(e.levelPoints)} к уровню работы — ${escapeHtml(e.title)}`
+  }
   const icon = e.prizePoints >= 0 ? '⭐' : '🔻'
   const what = e.taskTitle ? `${e.title}: «${short(e.taskTitle, 80)}»` : e.title
   return `${icon} ${points(e.prizePoints)} — ${escapeHtml(what)}${e.comment ? `\n<i>${escapeHtml(short(e.comment, 160))}</i>` : ''}`
 }
 
-function bankLine(b) {
-  const dollars = (b.amountCents / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })
+export function bankLine(b) {
+  // Списание лежит в журнале с минусом — в тексте «списано» минус лишний.
+  const dollars = (Math.abs(b.amountCents) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })
   if (b.kind === 'start') return `💰 Новый месяц: в банке $${dollars}`
   if (b.kind === 'write_off') return `💸 Из банка списано $${dollars}${b.comment ? ` — ${escapeHtml(short(b.comment, 120))}` : ''}`
   const why = [BANK_REASON_LABELS[b.reason], b.clientName && `«${b.clientName}»`].filter(Boolean).join(' ')
@@ -88,6 +87,9 @@ function bankLine(b) {
  * из-за временного сбоя — прежнюю, чтобы следующий проход взял это снова.
  */
 async function employeeFeed(since, settings) {
+  // Оба уведомления выключены — отметку двигаем на «сейчас»: включат через
+  // месяц — не придёт месяц накопленного.
+  if (!settings.notifyBank && !settings.notifyPoints) return new Date(Math.max(since.getTime(), Date.now()))
   const from = new Date(since.getTime() - OVERLAP_MS)
   let mark = since.getTime()
   const seen = (...dates) => { for (const d of dates) if (d) mark = Math.max(mark, d.getTime()) }
@@ -132,6 +134,14 @@ async function employeeFeed(since, settings) {
       continue
     }
     if (!told) push(e.userId, `event:${e.id}`, eventLine(e))
+  }
+  for (const item of byUser.values()) item.lines = item.lines.filter(Boolean)
+  for (const [userId, item] of byUser) {
+    // Нечего сказать (корректировка без баллов) — отметить и не писать.
+    if (!item.lines.length) {
+      for (const key of item.keys) await claimNotice(key)
+      byUser.delete(userId)
+    }
   }
 
   let failed = false
@@ -185,13 +195,15 @@ async function ownerFeed() {
   const owners = await ownerIds()
   if (!owners.length) return
   const [reviews, hints] = await Promise.all([
+    // Свежие сначала: при длинной очереди новые заявки не должны теряться
+    // за старыми. Отправляем потом по порядку.
     prisma.motivationReview.findMany({
       where: { status: 'pending' },
       include: { user: { select: { id: true, name: true } } },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: 300,
-    }),
-    prisma.motivationWorkHint.findMany({ where: { status: 'pending' }, orderBy: { createdAt: 'asc' }, take: 100 }),
+    }).then((rows) => rows.reverse()),
+    prisma.motivationWorkHint.findMany({ where: { status: 'pending' }, orderBy: { createdAt: 'desc' }, take: 100 }).then((rows) => rows.reverse()),
   ])
   if (await claimNotice(OWNER_INIT)) {
     await prisma.botNotice.createMany({
@@ -215,8 +227,9 @@ async function ownerFeed() {
 
 /** Раз в минуту. */
 export async function tickFeed(now = new Date()) {
-  if (isQuietHour(now)) return
+  // Отметку ставим и ночью: выкатили вечером — утром не придёт ночное старьё.
   const since = await readWatermark()
+  if (isQuietHour(now)) return
   if (since) {
     const mark = await employeeFeed(since, await getSettingsRow())
     if (mark > since) await prisma.botNotice.update({ where: { key: WATERMARK }, data: { sentAt: mark } })
@@ -244,7 +257,8 @@ export async function decideReview(owner, data, now = new Date()) {
       return { text: `${reviewText(r)}\n\n<i>Заявка обновилась — проверьте новое число.</i>`, buttons: reviewButtons(r) }
     }
     const done = { approved: '✅ Уже начислено', rejected: '❌ Уже отклонено', withdrawn: '↩️ Заявку сняла система: задачу вернули или удалили' }[r.status]
-    return { text: `${reviewText(r)}\n\n${done || `Не получилось: ${e.message}`}` }
+    if (!done) console.error('[агент] решение по заявке:', e.message)
+    return { text: `${reviewText(r)}\n\n${done || (e.status ? `Не получилось: ${escapeHtml(e.message)}` : 'Не получилось — решите во вкладке «На проверке».')}` }
   }
 }
 

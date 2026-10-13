@@ -49,7 +49,7 @@ export async function tickTaskStarts(now = new Date()) {
   const from = new Date(now.getTime() + (TASK_START_BEFORE_MIN - 1) * 60000)
   const to = new Date(now.getTime() + TASK_START_BEFORE_MIN * 60000)
   const tasks = await prisma.task.findMany({
-    where: { status: 'today', startAt: { gt: from, lte: to }, owner: { active: true } },
+    where: { status: 'today', startAt: { gt: from, lte: to }, owner: { active: true, role: { in: PARTICIPANT_ROLES } } },
     select: { id: true, title: true, startAt: true, ownerId: true },
   })
   for (const task of tasks) {
@@ -61,8 +61,16 @@ export async function tickTaskStarts(now = new Date()) {
   }
 }
 
-/** Кнопка «Беру в работу»: задача уходит в «В процессе». */
+/**
+ * Кнопка «Беру в работу»: задача уходит в «В процессе». Только из «На
+ * сегодня»: кнопка живёт под сообщением, и нажатая вечером на закрытой
+ * задаче она вернула бы её из «Готово» и сняла бы баллы за срок.
+ */
 export async function takeTask(user, taskId) {
+  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { title: true, status: true, ownerId: true } })
+  if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
+  if (task.status === 'progress') return `«${escapeHtml(short(task.title, 120))}» уже в процессе.`
+  if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта 👍`
   try {
     const task = await updateTaskStatus(taskId, 'progress', user)
     return `▶️ «${escapeHtml(short(task.title, 120))}» — в процессе. Удачи!`
@@ -73,8 +81,9 @@ export async function takeTask(user, taskId) {
 
 /** Кнопка «Не успеваю»: спрашиваем, что случилось, и ждём строку. */
 export async function lateForTask(user, taskId) {
-  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true } })
+  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true } })
   if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
+  if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта 👍`
   state.expect(user.id, 'task_late', { taskId })
   await tell(user.id, 'Что случилось и во сколько начнёшь? Напиши одной строкой — передам Яну.')
   return `⏳ «${escapeHtml(short(task.title, 120))}» — не успеваешь.`

@@ -42,8 +42,13 @@ export async function runMorning(now = new Date()) {
  */
 export async function pruneNotices(now = new Date()) {
   const before = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+  // Отметки заявок и работ не трогаем: заявка может висеть дольше трёх
+  // месяцев, и без отметки она ушла бы Яну второй раз.
   const notices = await prisma.botNotice.deleteMany({
-    where: { sentAt: { lt: before }, NOT: { key: { startsWith: 'feed:' } } },
+    where: {
+      sentAt: { lt: before },
+      NOT: [{ key: { startsWith: 'feed:' } }, { key: { startsWith: 'review:' } }, { key: { startsWith: 'hint:' } }],
+    },
   })
   const messages = await prisma.botMessage.deleteMany({ where: { createdAt: { lt: before } } })
   if (notices.count || messages.count) console.log(`[агент] уборка: отметок ${notices.count}, сообщений ${messages.count}`)

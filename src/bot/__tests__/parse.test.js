@@ -73,3 +73,31 @@ describe('что человек хочет сказать', () => {
     assert.equal(parseIntent('', now), null)
   })
 })
+
+describe('что не отлучка и не форс-мажор', () => {
+  const now = new Date('2026-11-03T12:00:00+03:00')
+  test('«не будет» о сайте или времени — не отлучка', () => {
+    assert.equal(parseIntent('Сайт не будет работать до 17', now), null)
+    assert.equal(parseIntent('не будет времени созвониться', now), null)
+  })
+
+  test('«ухожу домой», «на сегодня всё» — конец дня', () => {
+    assert.equal(parseIntent('всем пока, ухожу домой', now).type, 'day_end')
+    assert.equal(parseIntent('ушёл на сегодня', now).type, 'day_end')
+    assert.equal(parseIntent('на сегодня всё, до завтра', now).type, 'day_end')
+    assert.equal(parseIntent('еду домой на обед, вернусь в 14', now).type, 'away')
+  })
+
+  test('заболела голова, но работаю — не форс-мажор; температура спала — вернулся', () => {
+    assert.notEqual(parseIntent('Заболела голова, но работаю', now)?.type, 'force_majeure')
+    assert.equal(parseIntent('вернулся, температура спала', now).type, 'back')
+    assert.equal(parseIntent('заболел, на больничном', now).type, 'force_majeure')
+  })
+
+  test('«не успеваю закончить, отхожу на час» — отлучка на час', () => {
+    const r = parseIntent('Не успеваю закончить, отхожу на час', now)
+    assert.equal(r.type, 'away')
+    assert.equal(r.until.toISOString(), new Date('2026-11-03T13:00:00+03:00').toISOString())
+  })
+})
+

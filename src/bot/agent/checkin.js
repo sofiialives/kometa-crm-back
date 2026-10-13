@@ -8,7 +8,7 @@ import { CHECKIN_ANSWER_MIN, CHECKIN_TO_MIN, isCheckinDay, isWorkday, mskDayKey,
 import { escapeHtml } from '../telegram.js'
 import { activeAway, hasOpenForceMajeure } from './away.js'
 import { hm, points, short } from './format.js'
-import { chatOf, nameOf, sendOnce, tell, tellOwners } from './notify.js'
+import { chatOf, hasNotice, nameOf, sendOnce, tell, tellOwners } from './notify.js'
 
 /**
  * Внезапный чек-ин. Каждый третий рабочий день в случайный момент с 11:00
@@ -157,9 +157,13 @@ async function penalize(answer, checkin, now) {
 // Заявка на форс-мажор ещё у Яна: штраф откладываем до его решения.
 const FM_PENDING = 'заявка на форс-мажор ждёт решения Яна'
 
+/**
+ * Закрыть чек-ин и разобрать молчунов. Разбор идёт и по уже закрытому:
+ * если прошлый проход упал на середине, оставшиеся «спрошен» доделываются
+ * следующим — штраф защищён ключом и не ляжет дважды.
+ */
 async function close(checkin, now) {
-  const claimed = await prisma.botCheckin.updateMany({ where: { id: checkin.id, closedAt: null }, data: { closedAt: now } })
-  if (!claimed.count) return
+  if (!checkin.closedAt) await prisma.botCheckin.updateMany({ where: { id: checkin.id, closedAt: null }, data: { closedAt: now } })
   const asked = await prisma.botCheckinAnswer.findMany({ where: { checkinId: checkin.id, status: 'asked' } })
   for (const a of asked) {
     // За 45 минут человек мог предупредить, что отошёл, — тогда не штрафуем.
@@ -195,6 +199,10 @@ export async function penalizeIfDeferred(userId, now = new Date()) {
 
 /** Отчёт Яну: кто чем занят, кто промолчал, кого не спрашивали и почему. */
 async function report(checkin) {
+  const key = `checkin-report:${checkin.id}`
+  if (await hasNotice(key)) return null
+  // Пока не все молчуны разобраны, отчёт не собираем.
+  if (await prisma.botCheckinAnswer.count({ where: { checkinId: checkin.id, status: 'asked' } })) return null
   const answers = await prisma.botCheckinAnswer.findMany({
     where: { checkinId: checkin.id },
     include: { user: { select: { id: true, name: true } } },
@@ -218,7 +226,7 @@ async function report(checkin) {
   if (lines.penalized.length) parts.push(`<b>Не ответили:</b>\n${lines.penalized.join('\n')}`)
   if (lines.skipped.length) parts.push(`<b>Не спрашивал или не штрафовал:</b>\n${lines.skipped.join('\n')}`)
   if (answers.length === 0) parts.push('Спрашивать было некого.')
-  return sendOnce(`checkin-report:${checkin.id}`, () => tellOwners(parts.join('\n\n')))
+  return sendOnce(key, () => tellOwners(parts.join('\n\n')))
 }
 
 /** Раз в минуту: запланировать, начать, закрыть. */
@@ -227,12 +235,16 @@ export async function tickCheckin(now = new Date(), random = Math.random) {
   // Открытый чек-ин закрываем даже после выключения — люди уже ответили.
   const running = await prisma.botCheckin.findFirst({ where: { startedAt: { not: null }, closedAt: null } })
   if (running && running.deadlineAt <= now) await close(running, now)
-  // Отчёт — отдельно от закрытия: не ушёл из-за сбоя — уйдёт следующим проходом.
+  // Разбор и отчёт — отдельно от закрытия: упало или не ушло из-за сбоя —
+  // доделается следующим проходом.
   const closed = await prisma.botCheckin.findFirst({
     where: { startedAt: { not: null }, closedAt: { not: null, gt: new Date(now.getTime() - 6 * 60 * 60 * 1000) } },
     orderBy: { closedAt: 'desc' },
   })
-  if (closed) await report(closed)
+  if (closed && !(await hasNotice(`checkin-report:${closed.id}`))) {
+    await close(closed, now)
+    await report(closed)
+  }
   if (!settings.checkinFrom || !autoActiveAt(settings.checkinFrom, now)) return
 
   const checkin = await planToday(now, random)

@@ -95,6 +95,8 @@ export async function sendMessage(chatId, text, { buttons } = {}) {
       // Не бросаем: одно неотправленное сообщение не повод ронять процесс,
       // в котором заодно крутится вся CRM.
       console.error(`[бот] сообщение в ${chatId} не ушло:`, data?.description || status)
+      // Часть длинного уже ушла — не повторяем, иначе начало придёт дважды.
+      if (i > 0) return { ok: true, messageId, partial: true }
       return { ok: false, retry: status === 0 || status === 429 || status >= 500 }
     }
     messageId = data.result?.message_id

@@ -15,9 +15,14 @@ const HELP =
  * уже вошёл в CRM под собой, поэтому ни почту, ни имя спрашивать не нужно
  * и назваться чужим невозможно.
  */
+// Что прислали вместо текста — для журнала и как ответ на чек-ин.
+const MEDIA = [['voice', 'голосовое'], ['video_note', 'кружок'], ['photo', 'фото'], ['video', 'видео'], ['document', 'файл'], ['sticker', 'стикер'], ['audio', 'аудио']]
+
 async function handleMessage(msg) {
   const chatId = msg.chat?.id
-  const text = String(msg.text || '').trim()
+  // Подпись к фото — тоже текст.
+  const text = String(msg.text || msg.caption || '').trim()
+  const media = MEDIA.find(([key]) => msg[key])?.[1] ?? null
   // Только личная переписка: в группе бот не работает — общего чата нет.
   if (!chatId || msg.chat?.type !== 'private') return
 
@@ -25,7 +30,7 @@ async function handleMessage(msg) {
   if (!code) {
     // Уже подключённый человек — дальше разговор ведёт агент.
     const user = await userByChat(chatId)
-    if (user) return onText(user, chatId, text)
+    if (user) return onText(user, chatId, text, new Date(), { media })
     await sendMessage(chatId, HELP)
     return
   }

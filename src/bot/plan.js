@@ -57,6 +57,16 @@ export function randomCheckinTime(dayKey, random = Math.random) {
   return new Date(mskDayStart(dayKey).getTime() + minute * 60000)
 }
 
+// Ночью (с 21:00 до 9:00 по Москве) бот никому не пишет сам: накопленное
+// уходит утром.
+const QUIET_FROM_H = 21
+const QUIET_TO_H = 9
+
+export function isQuietHour(now = new Date()) {
+  const h = (new Date(now).getUTCHours() + 3) % 24
+  return h >= QUIET_FROM_H || h < QUIET_TO_H
+}
+
 /** Попадает ли момент в окно «через n минут, ± полминуты» для ежеминутного задания. */
 export function dueInMinutes(at, now, minutes) {
   const diff = new Date(at).getTime() - new Date(now).getTime()
