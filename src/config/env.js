@@ -1,11 +1,35 @@
 import 'dotenv/config'
 
+const nodeEnv = process.env.NODE_ENV || 'development'
+// Регистр и пробелы не важны: «Production» в панели — тоже боевой сервер,
+// и пустить его на временных секретах хуже, чем не стартовать.
+const isProduction = nodeEnv.trim().toLowerCase() === 'production'
+
+// Секрет для подписи токенов входа. В разработке можно не задавать —
+// подставится временное значение. На боевом сервере без него не стартуем:
+// временные значения лежат в открытом коде, и по ним кто угодно подделает
+// токен и войдёт в CRM под любым сотрудником.
+function jwtSecret(name, devFallback) {
+  const value = process.env[name]
+  // Строка из одних пробелов — тоже «не задано». Сам секрет не обрезаем,
+  // чтобы уже выданные токены остались действительными.
+  if (value && value.trim()) return value
+  if (isProduction) {
+    throw new Error(
+      `Не задана переменная окружения ${name}. На боевом сервере она обязательна: ` +
+        'без неё токены входа подписывались бы общеизвестным ключом. ' +
+        'Задайте её в панели Render и перезапустите сервис.',
+    )
+  }
+  return devFallback
+}
+
 export const env = {
   port: process.env.PORT || 4000,
   databaseUrl: process.env.DATABASE_URL || '',
 
-  jwtAccessSecret: process.env.JWT_ACCESS_SECRET || 'dev-access-secret',
-  jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret',
+  jwtAccessSecret: jwtSecret('JWT_ACCESS_SECRET', 'dev-access-secret'),
+  jwtRefreshSecret: jwtSecret('JWT_REFRESH_SECRET', 'dev-refresh-secret'),
   accessTokenTtl: '15m',
   // "Никогда" в вечном смысле для JWT технически не бывает (иначе украденный
   // токен нельзя было бы обесценить), но 400 дней — это фактически "выходишь
@@ -14,7 +38,7 @@ export const env = {
 
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
 
   // Имя бота напоминаний — нужно, чтобы собрать ссылку вида
   // t.me/<бот>?start=<код>. Не секрет: его и так видно в телеграме.

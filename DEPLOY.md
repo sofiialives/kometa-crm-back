@@ -34,12 +34,12 @@ Render Dashboard → New → Web Service → подключить репозит
 | Переменная | Значение |
 |---|---|
 | `DATABASE_URL` | Internal Database URL из шага 1 |
-| `JWT_ACCESS_SECRET` | `openssl rand -hex 32` (свой рандомный) |
-| `JWT_REFRESH_SECRET` | `openssl rand -hex 32` (другой рандомный, не тот же) |
+| `JWT_ACCESS_SECRET` | `openssl rand -hex 32` (свой рандомный). Обязателен: без него сервер с `NODE_ENV=production` не запустится |
+| `JWT_REFRESH_SECRET` | `openssl rand -hex 32` (другой рандомный, не тот же). Обязателен, как и предыдущий |
 | `NODE_ENV` | `production` |
 | `CLIENT_URL` | адрес фронтенда на Vercel, без слэша на конце |
 | `SEED_ADMIN_EMAIL` | `yan993870@gmail.com` |
-| `SEED_ADMIN_PASSWORD` | `admin` |
+| `SEED_ADMIN_PASSWORD` | придумай свой надёжный пароль. Значения по умолчанию нет: без него `seed:admin` не запустится |
 | `GOOGLE_CLIENT_ID` | из Google Cloud Console, если нужен вход через Google |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | опционально — без них код восстановления пароля просто пишется в лог Render, а не уходит письмом |
 
@@ -56,10 +56,11 @@ Render Dashboard → сервис → вкладка **Shell** и выполни
 npm run seed:admin
 ```
 
-Дальше вход: `yan993870@gmail.com` / `admin`. Смени пароль после
-первого входа через «Забыли пароль» либо просто войди и дальше пароль
-уже станет постоянным по логике первого входа — трогать повторно
-`seed:admin` не нужно, он сам не создаст дубликат, если админ уже есть.
+Дальше вход: адрес из `SEED_ADMIN_EMAIL` и пароль из
+`SEED_ADMIN_PASSWORD`. Сразу после первого входа смени пароль (смена
+пароля в CRM или «Забыли пароль») и удали `SEED_ADMIN_PASSWORD` из
+переменных Render — серверу он не нужен. Трогать повторно `seed:admin`
+не нужно, он сам не создаст дубликат, если админ уже есть.
 
 ## 5. Важно про бесплатный план
 
