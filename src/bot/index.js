@@ -1,6 +1,7 @@
 import cron from 'node-cron'
 import { env } from '../config/env.js'
 import { broadcast, runRemindersOnce } from './reminders.js'
+import { pruneNotices, runAgentOnce, runMorning } from './agent/index.js'
 import { startPolling } from './updates.js'
 import { whoAmI } from './telegram.js'
 
@@ -40,6 +41,11 @@ const DAILY = [
     at: '45 18 * * 1-5',
     text: 'Напоминаю, вечерний звонок через 15 минут! Вот и конец дня, ты большой/ая молодец! Больше не напрягаю, хорошего вечера!',
   },
+  {
+    // Ян просил второе напоминание о звонке — за 5 минут.
+    at: '55 18 * * 1-5',
+    text: 'Вечерний звонок через 5 минут — подключайся \u{1F64C}',
+  },
 ]
 
 /**
@@ -70,6 +76,15 @@ export async function startBot() {
 
   cron.schedule('* * * * *', () => {
     runRemindersOnce().catch((e) => console.error('[бот] напоминания:', e.message))
+    runAgentOnce().catch((e) => console.error('[агент] проход:', e.message))
+  }, MSK)
+
+  // 10:00 по будням — тем, у кого нет задач на сегодня.
+  cron.schedule('0 10 * * 1-5', () => {
+    runMorning().catch((e) => console.error('[агент] утро:', e.message))
+  }, MSK)
+  cron.schedule('30 3 * * *', () => {
+    pruneNotices().catch((e) => console.error('[агент] уборка:', e.message))
   }, MSK)
 
   for (const { at, text } of DAILY) {

@@ -1,0 +1,90 @@
+import { prisma } from '../../config/prisma.js'
+import { escapeHtml } from '../telegram.js'
+import { PARTICIPANT_ROLES } from '../../services/motivation/access.js'
+import { mskDateStart } from '../../services/motivation/taskRules.js'
+import { updateTaskStatus } from '../../services/task.service.js'
+import { dueInMinutes, isWorkday, mskDayKey } from '../plan.js'
+import { activeAway } from './away.js'
+import { hm, short } from './format.js'
+import { claimNotice, crmButton, firstName, nameOf, row, tell, tellOwners } from './notify.js'
+import * as state from './state.js'
+
+/**
+ * Задачи: утром — тем, у кого на сегодня пусто; за 5 минут до начала —
+ * «перетащи в процесс». Не успевает — пишет боту, бот передаёт Яну.
+ * Человека с меткой отлучки или форс-мажора не трогаем.
+ */
+
+const TASK_START_BEFORE_MIN = 5
+
+/** 10:00 по будням: нет ни одной задачи со сроком на сегодня. */
+export async function morningNoTasks(now = new Date()) {
+  const day = mskDayKey(now)
+  if (!isWorkday(day)) return 0
+  const start = mskDateStart(day)
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
+
+  const people = await prisma.user.findMany({
+    where: {
+      role: { in: PARTICIPANT_ROLES },
+      active: true,
+      telegram: { chatId: { not: null } },
+      tasks: { none: { deadline: { gte: start, lt: end } } },
+    },
+    select: { id: true, name: true },
+  })
+  let sent = 0
+  for (const person of people) {
+    if (await activeAway(person.id, now)) continue
+    if (!(await claimNotice(`morning:${day}:${person.id}`))) continue
+    const res = await tell(person.id,
+      `${firstName(person.name)}, на сегодня у тебя в CRM нет ни одной задачи со сроком на сегодня. Проставь, пожалуйста, задачи на день 🙏`,
+      { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) })
+    if (res.ok) sent += 1
+  }
+  return sent
+}
+
+/** Раз в минуту: задачи, которые начинаются через 5 минут. */
+export async function tickTaskStarts(now = new Date()) {
+  const from = new Date(now.getTime() + (TASK_START_BEFORE_MIN - 1) * 60000)
+  const to = new Date(now.getTime() + TASK_START_BEFORE_MIN * 60000)
+  const tasks = await prisma.task.findMany({
+    where: { status: 'today', startAt: { gt: from, lte: to }, owner: { active: true } },
+    select: { id: true, title: true, startAt: true, ownerId: true },
+  })
+  for (const task of tasks) {
+    if (!dueInMinutes(task.startAt, now, TASK_START_BEFORE_MIN)) continue
+    if (await activeAway(task.ownerId, now)) continue
+    if (!(await claimNotice(`task-start:${task.id}:${task.startAt.getTime()}`))) continue
+    await tell(task.ownerId,
+      `Через 5 минут, в <b>${hm(task.startAt)}</b>, начинается задача\n«${escapeHtml(short(task.title, 120))}»\n\nКак начнёшь — перетащи её в «В процессе».`,
+      { buttons: [[{ text: '▶️ Беру в работу', data: `tk:go:${task.id}` }, { text: '⏳ Не успеваю', data: `tk:late:${task.id}` }]] })
+  }
+}
+
+/** Кнопка «Беру в работу»: задача уходит в «В процессе». */
+export async function takeTask(user, taskId) {
+  try {
+    const task = await updateTaskStatus(taskId, 'progress', user)
+    return `▶️ «${escapeHtml(short(task.title, 120))}» — в процессе. Удачи!`
+  } catch (e) {
+    return e.status ? `Не получилось: ${e.message}` : 'Не получилось — открой задачу в CRM.'
+  }
+}
+
+/** Кнопка «Не успеваю»: спрашиваем, что случилось, и ждём строку. */
+export async function lateForTask(user, taskId) {
+  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true } })
+  if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
+  state.expect(user.id, 'task_late', { taskId })
+  await tell(user.id, 'Что случилось и во сколько начнёшь? Напиши одной строкой — передам Яну.')
+  return `⏳ «${escapeHtml(short(task.title, 120))}» — не успеваешь.`
+}
+
+/** Ответ на «что случилось?» — Яну. */
+export async function reportTaskLate(user, taskId, text) {
+  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { title: true, startAt: true } })
+  await tell(user.id, 'Понял, передал Яну.')
+  await tellOwners(`⏳ ${nameOf(user)} не успевает начать «${escapeHtml(short(task?.title || 'задачу', 120))}»${task?.startAt ? ` (по плану в ${hm(task.startAt)})` : ''}:\n«${escapeHtml(text.slice(0, 400))}»`)
+}
