@@ -92,6 +92,8 @@ export async function getSettings(actor) {
       notifyBank: settings.notifyBank,
       notifyPoints: settings.notifyPoints,
       autoTasksFrom: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
+      taskPointsMode: settings.taskPointsMode,
+      personalTaskDailyLimit: settings.personalTaskDailyLimit,
     },
     employees: users.map((u) => {
       const a = assignments.get(u.id)
@@ -436,7 +438,7 @@ export async function saveWorkLevels(actor, levels) {
 export async function updateGeneral(actor, patch) {
   assertAdmin(actor)
   const data = {}
-  for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints']) {
+  for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints', 'taskPointsMode', 'personalTaskDailyLimit']) {
     if (patch[key] !== undefined) data[key] = patch[key]
   }
   // Дата включения автобаллов приходит днём «ГГГГ-ММ-ДД» и хранится
@@ -464,6 +466,8 @@ export async function updateGeneral(actor, patch) {
     notifyBank: row.notifyBank,
     notifyPoints: row.notifyPoints,
     autoTasksFrom: row.autoTasksFrom ? dayKeyOf(row.autoTasksFrom) : null,
+    taskPointsMode: row.taskPointsMode,
+    personalTaskDailyLimit: row.personalTaskDailyLimit,
   }
 }
 

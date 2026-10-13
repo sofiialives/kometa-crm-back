@@ -6,6 +6,7 @@ import {
   globalScaleSchema, manualEventSchema, monthQuerySchema, productSchema, profileScaleSchema, seenSchema, teamQuerySchema,
   topUpSchema, updateEventTypeSchema, updateProfileSchema, userIdParamSchema, userMonthSchema, workLevelsSchema,
   writeOffSchema,
+  reviewListSchema, approveReviewSchema, rejectReviewSchema,
 } from '../schemas/motivation.schema.js'
 import * as c from '../controllers/motivation.controller.js'
 
@@ -49,6 +50,11 @@ router.post('/bank/write-off', admin, validate(writeOffSchema), c.writeOff)
 router.post('/events', admin, validate(manualEventSchema), c.addManual)
 router.post('/events/product', admin, validate(productSchema), c.addProduct)
 router.post('/events/:id/cancel', admin, validate(cancelEventSchema), c.cancelEvent)
+
+router.get('/reviews', admin, validate(reviewListSchema), c.listReviews)
+router.get('/reviews/count', admin, c.reviewsCount)
+router.post('/reviews/:id/approve', admin, validate(approveReviewSchema), c.approveReview)
+router.post('/reviews/:id/reject', admin, validate(rejectReviewSchema), c.rejectReview)
 
 router.get('/settings', admin, c.getSettings)
 router.patch('/settings', admin, validate(generalSettingsSchema), c.updateGeneral)

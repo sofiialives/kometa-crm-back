@@ -4,6 +4,7 @@ import * as team from '../services/motivation/team.service.js'
 import * as bank from '../services/motivation/bank.service.js'
 import * as events from '../services/motivation/events.service.js'
 import * as settings from '../services/motivation/settings.service.js'
+import * as review from '../services/motivation/review.service.js'
 
 // ---- Про себя: сотрудник и руководитель ------------------------------------
 
@@ -63,6 +64,24 @@ export const addProduct = asyncHandler(async (req, res) => {
 
 export const cancelEvent = asyncHandler(async (req, res) => {
   res.json(await events.cancelEvent(req.user, req.params.id, req.body))
+})
+
+// ---- Очередь «На проверке» (владелец) --------------------------------------
+
+export const listReviews = asyncHandler(async (req, res) => {
+  res.json(await review.listReviews(req.user, req.query))
+})
+
+export const reviewsCount = asyncHandler(async (req, res) => {
+  res.json(await review.pendingCount(req.user))
+})
+
+export const approveReview = asyncHandler(async (req, res) => {
+  res.json(await review.approveReview(req.user, req.params.id, req.body))
+})
+
+export const rejectReview = asyncHandler(async (req, res) => {
+  res.json(await review.rejectReview(req.user, req.params.id, req.body))
 })
 
 // ---- Настройки (владелец) --------------------------------------------------

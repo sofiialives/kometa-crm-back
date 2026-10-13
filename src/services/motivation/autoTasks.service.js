@@ -3,7 +3,7 @@ import { PARTICIPANT_ROLES } from './access.js'
 import { currentMonthKey, monthRange } from './month.js'
 import { assignmentAt, getSettingsRow } from './profiles.js'
 import {
-  autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, isOnTime,
+  autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, estimateComplexity, isOnTime,
   mskDayStart, overdueNights, ruleFor,
 } from './taskRules.js'
 
@@ -16,8 +16,12 @@ import {
  * - ночная уборка задач (jobs/clearFinishedTasks.job.js) перед удалением и
  *   запуск сервера — штрафы за просрочку.
  *
- * Записи автоматические: без автора, с режимом auto. Владелец может
- * отменить любую из них в карточке человека, как и ручную.
+ * Два режима (MotivationSettings.taskPointsMode):
+ * - review (по умолчанию) — баллы не начисляются, а ложатся заявкой в
+ *   очередь «На проверке» с подсказанными баллами; начисляет владелец
+ *   (review.service.js). Так заказчик хочет на время проверки системы;
+ * - auto — баллы ложатся в журнал сами, без автора, с режимом auto.
+ * Владелец может отменить любую запись в карточке человека, как и ручную.
  */
 
 const RETURNED_REASON = 'Задачу вернули из «Готово»'
@@ -25,6 +29,32 @@ const RETURNED_REASON = 'Задачу вернули из «Готово»'
 // Запись занимает место, если она живая или её отменил человек — см.
 // holdsSlot в taskRules.js. Отменённая системой место освобождает.
 const HOLDS_SLOT = { OR: [{ cancelledAt: null }, { cancelledById: { not: null } }] }
+
+// То же для заявок: ждёт решения, начислена или отклонена владельцем —
+// место занято. Снятая системой (вернули из «Готово») — свободно.
+const REVIEW_TAKEN = ['pending', 'approved', 'rejected']
+
+const reviewMode = (settings) => settings.taskPointsMode !== 'auto'
+
+function reviewData({ task, rule, type, prizePoints, levelPoints, at, key, nights = [] }) {
+  return {
+    userId: task.ownerId,
+    rule,
+    eventTypeId: type.id,
+    title: type.title,
+    prizePoints,
+    levelPoints,
+    taskId: task.id,
+    taskTitle: task.title,
+    taskDescription: task.description ?? null,
+    taskDeadline: task.deadline,
+    // Сложность подсказываем для личных задач: их человек ставит себе сам.
+    complexity: task.origin === 'personal' ? estimateComplexity(task) : null,
+    nights,
+    occurredAt: at,
+    dedupeKey: `review:${rule}:${task.id}:${key}`,
+  }
+}
 
 /**
  * Событие профиля, по которому начисляются баллы, или null, если начислять
@@ -92,6 +122,19 @@ export async function awardOnTime(task, settings) {
     })
     if (taken) return null
 
+    if (reviewMode(settings)) {
+      // Заявка на проверку: одна на задачу, пока её не сняла система.
+      // Дневной потолок личных задач здесь не режет — его видит владелец.
+      const queued = await tx.motivationReview.findFirst({
+        where: { taskId: task.id, rule, status: { in: REVIEW_TAKEN } },
+        select: { id: true },
+      })
+      if (queued) return null
+      return tx.motivationReview.create({
+        data: reviewData({ task, rule, type, prizePoints: type.prizePoints, levelPoints: type.levelPoints, at, key: at.getTime() }),
+      })
+    }
+
     let prizePoints = type.prizePoints
     let levelPoints = type.levelPoints
     if (rule === 'personal_task_on_time') {
@@ -140,7 +183,28 @@ export async function revokeOnTime(task, now = new Date()) {
       },
       data: { cancelledAt: now, cancelReason: RETURNED_REASON },
     })
-    return res.count
+
+    // Заявка ещё ждёт — снимаем её. Уже начисленная по заявке — отменяем
+    // баллы так же, как автоматические, и помечаем заявку снятой.
+    const withdrawn = await tx.motivationReview.updateMany({
+      where: { taskId: task.id, rule, status: 'pending' },
+      data: { status: 'withdrawn', decisionNote: RETURNED_REASON, decidedAt: now },
+    })
+    const approved = await tx.motivationReview.findMany({
+      where: { taskId: task.id, rule, status: 'approved', event: { cancelledAt: null, occurredAt: { gte: start } } },
+      select: { id: true, eventId: true },
+    })
+    if (approved.length) {
+      await tx.motivationEvent.updateMany({
+        where: { id: { in: approved.map((a) => a.eventId) } },
+        data: { cancelledAt: now, cancelReason: RETURNED_REASON },
+      })
+      await tx.motivationReview.updateMany({
+        where: { id: { in: approved.map((a) => a.id) } },
+        data: { status: 'withdrawn', decisionNote: RETURNED_REASON },
+      })
+    }
+    return res.count + withdrawn.count + approved.length
   })
 }
 
@@ -185,7 +249,7 @@ export async function chargeOverdue(now = new Date()) {
       deadline: { gte: settings.autoTasksFrom, lt: lastMidnight },
       owner: { role: { in: PARTICIPANT_ROLES }, active: true },
     },
-    select: { id: true, title: true, deadline: true, origin: true, ownerId: true, status: true },
+    select: { id: true, title: true, description: true, deadline: true, origin: true, ownerId: true, status: true },
     orderBy: { deadline: 'asc' },
   })
 
@@ -211,6 +275,7 @@ export async function chargeOverdue(now = new Date()) {
 }
 
 async function chargeTask(task, settings, now) {
+  if (reviewMode(settings)) return proposeOverdue(task, settings, now)
   const rule = ruleFor(task, 'overdue')
   let nights = overdueNights({
     deadline: task.deadline,
@@ -253,4 +318,76 @@ async function chargeTask(task, settings, now) {
     if (created === 'created') charged += 1
   }
   return charged
+}
+
+/**
+ * Просрочка в режиме проверки: вместо штрафа — заявка владельцу. У задачи
+ * из Иерархии каждая ночь добавляет штраф в одну ждущую заявку («просрочено
+ * 3 ночи, снять 6»), пока владелец не решит; лимит на задачу тот же, в него
+ * идут и уже начисленные по заявкам штрафы. Личная просрочка — одна заявка.
+ * Отклонил владелец заявку по задаче — больше по ней не предлагаем.
+ */
+async function proposeOverdue(task, settings, now) {
+  const rule = ruleFor(task, 'overdue')
+  let nights = overdueNights({
+    deadline: task.deadline,
+    autoFrom: settings.autoTasksFrom,
+    checkedUntil: settings.overdueCheckedUntil,
+    now,
+  })
+  if (rule === 'personal_task_overdue') nights = nights.slice(0, 1)
+
+  let proposed = 0
+  for (const night of nights) {
+    const found = await autoEventType(task.ownerId, rule, night.at, settings)
+    if (!found) continue
+    const { type } = found
+
+    const outcome = await prisma.$transaction(async (tx) => {
+      await lockUser(tx, task.ownerId)
+      const reviews = await tx.motivationReview.findMany({ where: { taskId: task.id, rule } })
+      if (reviews.some((r) => r.status === 'rejected')) return 'capped'
+      if (rule === 'personal_task_overdue' && reviews.some((r) => r.status !== 'withdrawn')) return 'exists'
+      if (reviews.some((r) => r.nights.includes(night.dayKey))) return 'exists'
+
+      const pending = reviews.find((r) => r.status === 'pending')
+      const approved = await tx.motivationEvent.aggregate({
+        where: { taskId: task.id, review: { rule, status: 'approved' }, ...HOLDS_SLOT },
+        _sum: { prizePoints: true, levelPoints: true },
+      })
+      const automatic = await tx.motivationEvent.aggregate({
+        where: { taskId: task.id, dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) }, ...HOLDS_SLOT },
+        _sum: { prizePoints: true, levelPoints: true },
+      })
+      const usedPrize = -((approved._sum.prizePoints ?? 0) + (automatic._sum.prizePoints ?? 0) + (pending?.prizePoints ?? 0))
+      const usedLevel = -((approved._sum.levelPoints ?? 0) + (automatic._sum.levelPoints ?? 0) + (pending?.levelPoints ?? 0))
+      const prizePoints = capPenalty(type.prizePoints, usedPrize, settings.overduePenaltyCap)
+      const levelPoints = capPenalty(type.levelPoints, usedLevel, settings.overduePenaltyCap)
+      if (prizePoints === 0 && levelPoints === 0) return 'capped'
+
+      if (pending && rule === 'task_overdue') {
+        await tx.motivationReview.update({
+          where: { id: pending.id },
+          data: {
+            prizePoints: pending.prizePoints + prizePoints,
+            levelPoints: pending.levelPoints + levelPoints,
+            nights: { push: night.dayKey },
+            occurredAt: night.at,
+          },
+        })
+      } else {
+        await tx.motivationReview.create({
+          data: reviewData({
+            task, rule, type, prizePoints, levelPoints, at: night.at,
+            key: rule === 'personal_task_overdue' ? 'once' : night.dayKey,
+            nights: [night.dayKey],
+          }),
+        })
+      }
+      return 'created'
+    })
+    if (outcome === 'capped') break
+    if (outcome === 'created') proposed += 1
+  }
+  return proposed
 }

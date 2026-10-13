@@ -1,6 +1,8 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import { syncTaskStatus } from './motivation/autoTasks.service.js'
+import { getSettingsRow } from './motivation/profiles.js'
+import { mskDayStart } from './motivation/taskRules.js'
 
 const OWNER_INCLUDE = { owner: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } } }
 
@@ -78,6 +80,7 @@ export async function createTask({ title, description, deadline, startAt, workId
   if (workId && user.role === 'staff') {
     throw ApiError.forbidden('Задачи по работам создаёт только главный отдела или админ')
   }
+  if (!workId) await assertPersonalTaskLimit(user)
 
   const ids = ownerIds && ownerIds.length > 0 ? [...new Set(ownerIds)] : [user.id]
 
@@ -128,6 +131,26 @@ export async function createTask({ title, description, deadline, startAt, workId
   )
 
   return created
+}
+
+/**
+ * Лимит личных задач в день (по Москве) — защита баллов мотивации от
+ * накрутки: десяток задач по одному слову поставить нельзя. Касается тех,
+ * у кого есть банк премии, — сотрудников и руководителей. У владельца
+ * банка нет, и его личный дневник лимит не трогает. Сколько именно — в
+ * настройках мотивации.
+ */
+async function assertPersonalTaskLimit(user, now = new Date()) {
+  if (user.role === 'admin') return
+  const { personalTaskDailyLimit: limit } = await getSettingsRow()
+  const today = await prisma.task.count({
+    where: { ownerId: user.id, origin: 'personal', createdAt: { gte: mskDayStart(now) } },
+  })
+  if (today >= limit) {
+    throw ApiError.badRequest(
+      `Личных задач на сегодня уже ${today} из ${limit} — больше поставить нельзя. Объедините мелкие в одну и опишите подробнее`,
+    )
+  }
 }
 
 /**
