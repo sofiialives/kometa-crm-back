@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { isParticipant } from '../../services/motivation/access.js'
-import { parseIntent, parseUntil } from '../parse.js'
+import { isBareTime, parseIntent, parseUntil } from '../parse.js'
 import { answerCallback, editMessage, escapeHtml } from '../telegram.js'
 import { BREAK_MINUTES, comeBack, dayEnd, decideForceMajeure, hasOpenBreak, MENU, reportForceMajeure, runningLate, setBreakMinutes, startBreak } from './away.js'
 import { isAskedNow, penalizeIfDeferred, recordAnswer } from './checkin.js'
@@ -82,7 +82,9 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   // Ответ на чек-ин принимаем первым — даже голосовым и даже в потоке
   // сообщений: иначе человека оштрафовали бы за то, что он ответил.
   const answerText = text || (media ? `[${media}]` : '')
-  const answered = isParticipant(user) && answerText ? await recordAnswer(user.id, answerText, now) : false
+  // Команды (/menu, /start) — не ответ на чек-ин.
+  const isCommandText = /^\/\w+/.test(text)
+  const answered = isParticipant(user) && answerText && !isCommandText ? await recordAnswer(user.id, answerText, now) : false
 
   // Лимиты — по настоящим часам: это защита от потока сообщений.
   const real = new Date()
@@ -121,9 +123,10 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     return
   }
   if (answered) return thanks()
-  // «До 16:30» без других слов — уточнение текущей отлучки.
-  const until = parseUntil(text, now)
-  if (until && (await hasOpenBreak(user.id, now))) {
+  // «До 16:30» без других слов — уточнение текущей или только что
+  // закончившейся отлучки. «Встреча в 15:00» — не про отлучку.
+  const until = isBareTime(text) ? parseUntil(text, now) : null
+  if (until && (await hasOpenBreak(user.id, now, { recentMin: 30 }))) {
     await startBreak(user, { until, extend: true }, now)
     return
   }
@@ -181,6 +184,11 @@ export async function onCallback(cb, user, now = new Date()) {
     return tellChat(chatId, 'Что случилось и до какого времени? Напиши одной строкой — передам Яну.', { userId: user.id })
   }
   if (kind === 'aw' || kind === 'ax') {
+    // Кнопка со вчерашнего сообщения — не повод ставить отлучку сегодня.
+    if (cb.message?.date && Date.now() / 1000 - cb.message.date > 3 * 60 * 60) {
+      await closeButtons(cb, 'кнопка устарела — напиши «отхожу на …»')
+      return null
+    }
     const minutes = Number(action)
     if (!BREAK_MINUTES.includes(minutes)) return null
     await closeButtons(cb, `${minutes} мин`)

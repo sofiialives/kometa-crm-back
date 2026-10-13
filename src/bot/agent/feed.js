@@ -87,9 +87,6 @@ export function bankLine(b) {
  * из-за временного сбоя — прежнюю, чтобы следующий проход взял это снова.
  */
 async function employeeFeed(since, settings) {
-  // Оба уведомления выключены — отметку двигаем на «сейчас»: включат через
-  // месяц — не придёт месяц накопленного.
-  if (!settings.notifyBank && !settings.notifyPoints) return new Date(Math.max(since.getTime(), Date.now()))
   const from = new Date(since.getTime() - OVERLAP_MS)
   let mark = since.getTime()
   const seen = (...dates) => { for (const d of dates) if (d) mark = Math.max(mark, d.getTime()) }
@@ -101,34 +98,36 @@ async function employeeFeed(since, settings) {
     byUser.set(userId, item)
   }
 
-  const [entries, events] = await Promise.all([
-    settings.notifyBank
-      ? prisma.motivationBankEntry.findMany({ where: { createdAt: { gt: from } }, orderBy: { createdAt: 'asc' } })
-      : [],
-    settings.notifyPoints
-      ? prisma.motivationEvent.findMany({
-        where: { OR: [{ createdAt: { gt: from } }, { cancelledAt: { gt: from } }] },
-        include: { eventType: { select: { systemKey: true } } },
-        orderBy: { createdAt: 'asc' },
-      })
-      : [],
+  // Читаем оба журнала всегда: отметка должна идти вперёд и по тому, о чём
+  // сейчас не сообщаем, — иначе после включения пришло бы накопленное.
+  const [allEntries, allEvents] = await Promise.all([
+    prisma.motivationBankEntry.findMany({ where: { createdAt: { gt: from } }, orderBy: { createdAt: 'asc' } }),
+    prisma.motivationEvent.findMany({
+      where: { OR: [{ createdAt: { gt: from } }, { cancelledAt: { gt: from } }] },
+      include: { eventType: { select: { systemKey: true } } },
+      orderBy: { createdAt: 'asc' },
+    }),
   ])
+  for (const b of allEntries) seen(b.createdAt)
+  for (const e of allEvents) seen(e.createdAt, e.cancelledAt)
+  const entries = settings.notifyBank ? allEntries : []
+  const events = settings.notifyPoints ? allEvents : []
   const unsent = await unsentKeys([
     ...entries.map((b) => `bank:${b.id}`),
     ...events.flatMap((e) => [`event:${e.id}`, `event-cancel:${e.id}`]),
   ])
 
   for (const b of entries) {
-    seen(b.createdAt)
     if (unsent.has(`bank:${b.id}`)) push(b.userId, `bank:${b.id}`, bankLine(b))
   }
   for (const e of events) {
-    seen(e.createdAt, e.cancelledAt)
     const told = !unsent.has(`event:${e.id}`)
     if (e.cancelledAt) {
       // Отмену сообщаем, только если о самих баллах человек уже знал;
       // не знал — молча отмечаем, чтобы не сообщить о них позже.
-      if (told && unsent.has(`event-cancel:${e.id}`)) {
+      // Корректировку только уровня человек не видел — и отмену тоже не сообщаем.
+      if (told && e.prizePoints === 0) await claimNotice(`event-cancel:${e.id}`)
+      else if (told && unsent.has(`event-cancel:${e.id}`)) {
         push(e.userId, `event-cancel:${e.id}`, `↩️ Отменено: ${points(e.prizePoints)} — ${escapeHtml(short(e.taskTitle ? `${e.title}: «${e.taskTitle}»` : e.title, 100))}${e.cancelReason ? `\n<i>${escapeHtml(short(e.cancelReason, 160))}</i>` : ''}`)
       } else if (!told) await claimNotice(`event:${e.id}`)
       continue

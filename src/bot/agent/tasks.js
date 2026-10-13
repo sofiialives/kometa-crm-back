@@ -4,7 +4,7 @@ import { PARTICIPANT_ROLES } from '../../services/motivation/access.js'
 import { mskDateStart } from '../../services/motivation/taskRules.js'
 import { updateTaskStatus } from '../../services/task.service.js'
 import { dueInMinutes, isWorkday, mskDayKey } from '../plan.js'
-import { activeAway } from './away.js'
+import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
 import { crmButton, firstName, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
 import * as state from './state.js'
@@ -54,7 +54,7 @@ export async function tickTaskStarts(now = new Date()) {
   })
   for (const task of tasks) {
     if (!dueInMinutes(task.startAt, now, TASK_START_BEFORE_MIN)) continue
-    if (await activeAway(task.ownerId, now)) continue
+    if ((await activeAway(task.ownerId, now)) || (await hasEndedDay(task.ownerId, now))) continue
     await sendOnce(`task-start:${task.id}:${task.startAt.getTime()}`, () => tell(task.ownerId,
       `Через 5 минут, в <b>${hm(task.startAt)}</b>, начинается задача\n«${escapeHtml(short(task.title, 120))}»\n\nКак начнёшь — перетащи её в «В процессе».`,
       { buttons: [[{ text: '▶️ Беру в работу', data: `tk:go:${task.id}` }, { text: '⏳ Не успеваю', data: `tk:late:${task.id}` }]] }))

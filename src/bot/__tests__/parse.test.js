@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseIntent, parseUntil } from '../parse.js'
+import { isBareTime, parseIntent, parseUntil } from '../parse.js'
 
 // Сейчас — 14:00 по Москве.
 const now = new Date('2026-11-03T14:00:00+03:00')
@@ -88,6 +88,20 @@ describe('что не отлучка и не форс-мажор', () => {
     assert.equal(parseIntent('еду домой на обед, вернусь в 14', now).type, 'away')
   })
 
+  test('«сделаю до завтра», «заеду домой, потом созвон» — не конец дня; задержка важнее', () => {
+    assert.notEqual(parseIntent('до завтра закончу отчёт', now)?.type, 'day_end')
+    assert.notEqual(parseIntent('домой заеду, потом на созвон', now)?.type, 'day_end')
+    assert.equal(parseIntent('Задерживаюсь, еду домой из-за пробок', now).type, 'late')
+  })
+
+  test('вернулся с обеда или перерыва — это возвращение', () => {
+    assert.equal(parseIntent('вернулся с перерыва', now).type, 'back')
+    assert.equal(parseIntent('я на месте, был на обеде', now).type, 'back')
+    assert.equal(parseIntent('вернулась, ходила на обед', now).type, 'back')
+    assert.equal(parseIntent('я тут, перерыв закончился', now).type, 'back')
+    assert.equal(parseIntent('ушла на обед', now).type, 'away')
+  })
+
   test('заболела голова, но работаю — не форс-мажор; температура спала — вернулся', () => {
     assert.notEqual(parseIntent('Заболела голова, но работаю', now)?.type, 'force_majeure')
     assert.equal(parseIntent('вернулся, температура спала', now).type, 'back')
@@ -101,3 +115,12 @@ describe('что не отлучка и не форс-мажор', () => {
   })
 })
 
+describe('только время', () => {
+  test('«до 16:30», «к 17», «16:30» — да; фраза со временем — нет', () => {
+    assert.ok(isBareTime('до 16:30'))
+    assert.ok(isBareTime('к 17'))
+    assert.ok(isBareTime('16:30'))
+    assert.ok(!isBareTime('встреча в 15:00, не беспокоить'))
+    assert.ok(!isBareTime('сдам отчёт до 17'))
+  })
+})

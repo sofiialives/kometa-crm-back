@@ -6,7 +6,7 @@ import { monthKeyOf } from '../../services/motivation/month.js'
 import { isMonthClosed } from '../../services/motivation/monthClose.service.js'
 import { CHECKIN_ANSWER_MIN, CHECKIN_TO_MIN, isCheckinDay, isWorkday, mskDayKey, mskDayStart, randomCheckinTime } from '../plan.js'
 import { escapeHtml } from '../telegram.js'
-import { activeAway, hasOpenForceMajeure } from './away.js'
+import { activeAway, FM_PENDING, hasEndedDay, hasOpenForceMajeure } from './away.js'
 import { hm, points, short } from './format.js'
 import { chatOf, hasNotice, nameOf, sendOnce, tell, tellOwners } from './notify.js'
 
@@ -84,7 +84,8 @@ async function start(checkin, now) {
     // Заявку на форс-мажор, которую Ян ещё не решил, не пропускаем: спросим,
     // а промолчит — штраф подождёт решения Яна (см. close).
     const skip = away ? (away.kind === 'break' ? `отлучка до ${hm(away.until)}` : `форс-мажор до ${hm(away.until)}`)
-      : !chat ? 'нет телеграма' : null
+      : (await hasEndedDay(person.id, now)) ? 'закончил(а) рабочий день'
+        : !chat ? 'нет телеграма' : null
     await prisma.botCheckinAnswer.create({
       data: { checkinId: checkin.id, userId: person.id, status: skip ? 'skipped' : 'asked', answer: skip },
     })
@@ -154,8 +155,6 @@ async function penalize(answer, checkin, now) {
   })
 }
 
-// Заявка на форс-мажор ещё у Яна: штраф откладываем до его решения.
-const FM_PENDING = 'заявка на форс-мажор ждёт решения Яна'
 
 /**
  * Закрыть чек-ин и разобрать молчунов. Разбор идёт и по уже закрытому:
@@ -166,17 +165,23 @@ async function close(checkin, now) {
   if (!checkin.closedAt) await prisma.botCheckin.updateMany({ where: { id: checkin.id, closedAt: null }, data: { closedAt: now } })
   const asked = await prisma.botCheckinAnswer.findMany({ where: { checkinId: checkin.id, status: 'asked' } })
   for (const a of asked) {
-    // За 45 минут человек мог предупредить, что отошёл, — тогда не штрафуем.
-    const away = await activeAway(a.userId, checkin.deadlineAt)
-    if (away) {
-      await prisma.botCheckinAnswer.update({ where: { id: a.id }, data: { status: 'skipped', answer: 'предупреждение об отлучке' } })
-      continue
+    // Сбой на одном человеке не должен останавливать остальных: его
+    // доделает следующий проход.
+    try {
+      // За 45 минут человек мог предупредить, что отошёл или закончил день, — тогда не штрафуем.
+      const away = await activeAway(a.userId, checkin.deadlineAt)
+      if (away || (await hasEndedDay(a.userId, checkin.deadlineAt))) {
+        await prisma.botCheckinAnswer.update({ where: { id: a.id }, data: { status: 'skipped', answer: away ? 'предупреждение об отлучке' : 'закончил(а) рабочий день' } })
+        continue
+      }
+      if (await hasOpenForceMajeure(a.userId, now)) {
+        await prisma.botCheckinAnswer.update({ where: { id: a.id }, data: { status: 'skipped', answer: FM_PENDING } })
+        continue
+      }
+      await penalize(a, checkin, now)
+    } catch (e) {
+      console.error(`[агент] чек-ин, разбор ответа ${a.id}:`, e.message)
     }
-    if (await hasOpenForceMajeure(a.userId, now)) {
-      await prisma.botCheckinAnswer.update({ where: { id: a.id }, data: { status: 'skipped', answer: FM_PENDING } })
-      continue
-    }
-    await penalize(a, checkin, now)
   }
 }
 

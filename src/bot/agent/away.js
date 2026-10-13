@@ -23,6 +23,11 @@ const DEFAULT_BREAK_MIN = 60
 // это уже форс-мажор, его подтверждает Ян.
 const MAX_BREAK_MIN = 8 * 60
 export const BREAK_MINUTES = [15, 30, 60, 120]
+// Ответ на чек-ин, штраф по которому ждёт решения Яна по форс-мажору.
+export const FM_PENDING = 'заявка на форс-мажор ждёт решения Яна'
+// Отлучка кончилась так давно (или ночью), что «вернулся» утром — не
+// возвращение из неё: закрываем тихо, без «не было 11 часов» Яну.
+const STALE_BREAK_MIN = 3 * 60
 const SILENT_AFTER_MIN = 15
 const lockUser = (tx, userId) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`
 
@@ -138,13 +143,22 @@ export async function startBreak(user, { until = null, note = null, extend = fal
 }
 
 /** Есть ли отлучка, из которой человек ещё не отметился. */
-export async function hasOpenBreak(userId, now = new Date()) {
-  return Boolean(await openBreak(userId, now))
+export async function hasOpenBreak(userId, now = new Date(), { recentMin = null } = {}) {
+  const open = await openBreak(userId, now)
+  if (!open) return false
+  // recentMin — только действующая или закончившаяся не раньше стольких минут назад.
+  return recentMin === null || minutesBetween(open.until, now) <= recentMin
+}
+
+/** Сказал ли человек сегодня «на сегодня всё»: чек-ин и задачи его больше не трогают. */
+export function hasEndedDay(userId, now = new Date()) {
+  return hasNotice(`dayend:${mskDayKey(now)}:${userId}`)
 }
 
 /** «Ухожу домой», «на сегодня всё» — закрываем отлучку, если была, и прощаемся. */
 export async function dayEnd(user, now = new Date()) {
   state.clear(user.id)
+  await claimNotice(`dayend:${mskDayKey(now)}:${user.id}`)
   const open = await openBreak(user.id, now)
   if (open) {
     await prisma.motivationAway.update({
@@ -183,8 +197,12 @@ export async function comeBack(user, now = new Date()) {
     await tell(user.id, 'Отметил: ты на месте 👍')
     return null
   }
-  const gone = duration(minutesBetween(away.from, now))
   const late = minutesBetween(away.until, now)
+  if (late > STALE_BREAK_MIN) {
+    await tell(user.id, 'Отметил: ты на месте 👍')
+    return away
+  }
+  const gone = duration(minutesBetween(away.from, now))
   await tell(user.id, `С возвращением! Тебя не было ${gone}.`)
   await tellOwners(`✅ ${nameOf(user)} на месте. Не было ${gone}${late > 1 ? `, опоздание ${duration(late)} (ждали к ${hm(away.until)})` : ''}.`)
   return away
@@ -267,6 +285,10 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
   // укорачиваем его.
   const current = await activeAway(user.id, now)
   if (current?.kind === 'force_majeure' && current.until >= until) {
+    await prisma.botCheckinAnswer.updateMany({
+      where: { userId: user.id, status: 'skipped', answer: FM_PENDING },
+      data: { answer: 'форс-мажор подтверждён' },
+    })
     return { text: `✅ ${nameOf(user)}: форс-мажор уже стоит до ${at(current.until, now)} — оставил как есть.\n«${escapeHtml(message.text.slice(0, 300))}»` }
   }
   try {
@@ -285,6 +307,12 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
     await releaseNotice(`fm:${messageId}`)
     throw e
   }
+  // Штраф за чек-ин, отложенный из-за этой заявки, больше не ждёт: Ян
+  // подтвердил — его не будет.
+  await prisma.botCheckinAnswer.updateMany({
+    where: { userId: user.id, status: 'skipped', answer: FM_PENDING },
+    data: { answer: 'форс-мажор подтверждён' },
+  })
   await tell(user.id, `Ян подтвердил форс-мажор до ${at(until, now)}. До этого времени я тебя не дёргаю.`)
   return { text: `✅ ${nameOf(user)}: форс-мажор до ${at(until, now)} — метка стоит в CRM.\n«${escapeHtml(message.text.slice(0, 300))}»` }
 }

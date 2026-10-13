@@ -16,7 +16,10 @@ const HELP =
  * и назваться чужим невозможно.
  */
 // Что прислали вместо текста — для журнала и как ответ на чек-ин.
-const MEDIA = [['voice', 'голосовое'], ['video_note', 'кружок'], ['photo', 'фото'], ['video', 'видео'], ['document', 'файл'], ['sticker', 'стикер'], ['audio', 'аудио']]
+const MEDIA = [
+  ['voice', 'голосовое'], ['video_note', 'кружок'], ['photo', 'фото'], ['video', 'видео'], ['document', 'файл'],
+  ['sticker', 'стикер'], ['audio', 'аудио'], ['location', 'геопозиция'], ['contact', 'контакт'], ['poll', 'опрос'], ['dice', 'кубик'],
+]
 
 async function handleMessage(msg) {
   const chatId = msg.chat?.id
