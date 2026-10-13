@@ -5,6 +5,7 @@ import * as bank from '../services/motivation/bank.service.js'
 import * as events from '../services/motivation/events.service.js'
 import * as settings from '../services/motivation/settings.service.js'
 import * as review from '../services/motivation/review.service.js'
+import * as journal from '../services/motivation/callJournal.service.js'
 
 // ---- Про себя: сотрудник и руководитель ------------------------------------
 
@@ -82,6 +83,24 @@ export const approveReview = asyncHandler(async (req, res) => {
 
 export const rejectReview = asyncHandler(async (req, res) => {
   res.json(await review.rejectReview(req.user, req.params.id, req.body))
+})
+
+// ---- Журнал звонка и форс-мажор (владелец) ---------------------------------
+
+export const getCallJournal = asyncHandler(async (req, res) => {
+  res.json(await journal.getJournal(req.user, req.params.day))
+})
+
+export const setCallMark = asyncHandler(async (req, res) => {
+  res.json(await journal.setMark(req.user, req.params.day, req.params.userId, req.body.status))
+})
+
+export const setAway = asyncHandler(async (req, res) => {
+  res.status(201).json(await journal.setAway(req.user, req.body))
+})
+
+export const endAway = asyncHandler(async (req, res) => {
+  res.json(await journal.endAway(req.user, req.params.id))
 })
 
 // ---- Настройки (владелец) --------------------------------------------------

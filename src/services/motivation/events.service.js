@@ -4,6 +4,7 @@ import { assertAdmin, assertCanManage, loadEmployee, loadManagedEmployees } from
 import { isDuplicate, requestKeyFor } from './dedupe.js'
 import { assignmentAt, assignmentsAt } from './profiles.js'
 import { eventEntry, eventTypeCard, profileCard } from './shape.js'
+import { CALL_KEYS } from './callRules.js'
 
 /**
  * Ручные баллы: события, которые отмечает владелец, корректировка на
@@ -17,6 +18,8 @@ import { eventEntry, eventTypeCard, profileCard } from './shape.js'
  */
 
 const PRODUCT_KEY = 'client_product'
+// События журнала звонка ставятся в журнале, а не этой формой.
+const FORM_EXCLUDED = new Set([PRODUCT_KEY, ...CALL_KEYS])
 
 const EVENT_INCLUDE = {
   createdBy: { select: { id: true, name: true } },
@@ -47,7 +50,7 @@ export async function manualOptions(actor, userId) {
   return {
     profile: profileCard(assignment?.profile),
     events: types
-      .filter((t) => t.enabled && t.mode === 'manual' && t.systemKey !== PRODUCT_KEY)
+      .filter((t) => t.enabled && t.mode === 'manual' && !FORM_EXCLUDED.has(t.systemKey))
       .map(eventTypeCard),
     product: (() => {
       const p = types.find((t) => t.systemKey === PRODUCT_KEY && t.enabled)
@@ -82,6 +85,7 @@ export async function addManual(actor, { userId, eventTypeId, prizePoints, level
     if (!type.enabled) throw ApiError.badRequest('Это событие выключено в профиле')
     if (type.mode !== 'manual') throw ApiError.badRequest('Это событие начисляется автоматически по задачам')
     if (type.systemKey === PRODUCT_KEY) throw ApiError.badRequest('Покупку продукта отмечают кнопкой «Клиент купил новый продукт»')
+    if (CALL_KEYS.includes(type.systemKey)) throw ApiError.badRequest('Звонок отмечают в журнале звонка')
     data = {
       kind: 'event',
       eventTypeId: type.id,

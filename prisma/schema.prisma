@@ -96,6 +96,10 @@ model User {
   motivationSeen            MotivationSeen?
   motivationReviews         MotivationReview[]     @relation("MotivationReviewUser")
   motivationReviewsDecided  MotivationReview[]     @relation("MotivationReviewDecidedBy")
+  motivationCallMarks       MotivationCallMark[]   @relation("MotivationCallMarkUser")
+  motivationCallMarksMade   MotivationCallMark[]   @relation("MotivationCallMarkedBy")
+  motivationAways           MotivationAway[]       @relation("MotivationAwayUser")
+  motivationAwaysMade       MotivationAway[]       @relation("MotivationAwayCreatedBy")
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -573,6 +577,13 @@ enum MotivationComplexity {
   high
 }
 
+// Отметка в журнале вечернего звонка: был, не был, форс-мажор.
+enum MotivationCallStatus {
+  present
+  absent
+  excused
+}
+
 enum MotivationEntryKind {
   event
   adjustment
@@ -845,6 +856,9 @@ model MotivationEvent {
 
   createdAt DateTime @default(now())
 
+  // Отметка в журнале звонка, по которой событие начислено.
+  callMark MotivationCallMark?
+
   // Заявка из очереди «На проверке», по которой событие начислено.
   review MotivationReview?
 
@@ -904,6 +918,58 @@ model MotivationReview {
   @@index([status, occurredAt])
   @@index([userId, status])
   @@index([taskId])
+}
+
+// Журнал вечернего звонка: владелец отмечает, кто был. Был — баллы события
+// «Был на созвоне» из профиля, не был — штраф «Пропустил звонок»,
+// форс-мажор — без баллов. Одна отметка на человека в день; поменяли
+// отметку — прежнее событие отменяется, ложится новое (eventId).
+model MotivationCallMark {
+  id String @id @default(cuid())
+
+  // День звонка по Москве, «ГГГГ-ММ-ДД».
+  day String
+
+  userId String
+  user   User   @relation("MotivationCallMarkUser", fields: [userId], references: [id])
+
+  status MotivationCallStatus
+
+  eventId String?          @unique
+  event   MotivationEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  markedById String
+  markedBy   User   @relation("MotivationCallMarkedBy", fields: [markedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([day, userId])
+  @@index([day])
+}
+
+// Метка «форс-мажор до …» на человеке. Ставит владелец, когда человек
+// предупредил, что его не будет. Пока метка действует, звонок и чек-ин на
+// баллы не влияют, а бот человека не дёргает.
+model MotivationAway {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation("MotivationAwayUser", fields: [userId], references: [id])
+
+  from   DateTime @default(now())
+  until  DateTime
+  reason String?
+
+  createdById String
+  createdBy   User   @relation("MotivationAwayCreatedBy", fields: [createdById], references: [id])
+
+  // Сняли раньше срока — человек вернулся.
+  endedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, until])
 }
 
 // Что сотрудник уже видел во вкладке. До агента это единственный способ

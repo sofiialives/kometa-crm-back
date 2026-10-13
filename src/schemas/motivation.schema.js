@@ -131,6 +131,29 @@ export const rejectReviewSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
+// Журнал звонка и форс-мажор
+// ---------------------------------------------------------------------------
+
+const dayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в виде ГГГГ-ММ-ДД')
+
+export const callDaySchema = z.object({
+  params: z.object({ day: dayKey }),
+})
+
+export const callMarkSchema = z.object({
+  params: z.object({ day: dayKey, userId: objectId }),
+  body: z.object({ status: z.enum(['present', 'absent', 'excused']).nullable() }),
+})
+
+export const awaySchema = z.object({
+  body: z.object({
+    userId: objectId,
+    until: z.coerce.date({ invalid_type_error: 'Укажите, до какого времени' }),
+    reason: optional(comment),
+  }),
+})
+
+// ---------------------------------------------------------------------------
 // Настройки
 // ---------------------------------------------------------------------------
 
