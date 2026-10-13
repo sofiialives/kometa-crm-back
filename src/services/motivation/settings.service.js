@@ -6,6 +6,7 @@ import { assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_I
 import { employeeCard, eventTypeCard } from './shape.js'
 import { dayKeyOf } from './month.js'
 import { mskDateStart } from './taskRules.js'
+import { CALL_KEYS } from './callRules.js'
 
 /**
  * Раздел «Настройки» — только для админа.
@@ -92,6 +93,8 @@ export async function getSettings(actor) {
       notifyBank: settings.notifyBank,
       notifyPoints: settings.notifyPoints,
       autoTasksFrom: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
+      taskPointsMode: settings.taskPointsMode,
+      personalTaskDailyLimit: settings.personalTaskDailyLimit,
     },
     employees: users.map((u) => {
       const a = assignments.get(u.id)
@@ -170,17 +173,41 @@ export async function createProfile(actor, { title, copyFromId }) {
         })
       }
     } else {
-      await tx.motivationEventType.create({
-        data: {
-          profileId: profile.id,
-          title: 'Клиент купил дополнительный продукт',
-          example: 'Клиент, с которым вы работали, заказал у агентства ещё одну услугу',
-          prizePoints: 10,
-          levelPoints: 10,
-          mode: 'manual',
-          systemKey: PRODUCT_KEY,
-          position: 1,
-        },
+      // Системные события нужны кнопкам и журналу, поэтому есть в каждом
+      // профиле с самого начала. Цену владелец поменяет как обычно.
+      await tx.motivationEventType.createMany({
+        data: [
+          {
+            profileId: profile.id,
+            title: 'Клиент купил дополнительный продукт',
+            example: 'Клиент, с которым вы работали, заказал у агентства ещё одну услугу',
+            prizePoints: 10,
+            levelPoints: 10,
+            mode: 'manual',
+            systemKey: PRODUCT_KEY,
+            position: 1,
+          },
+          {
+            profileId: profile.id,
+            title: 'Был на вечернем звонке',
+            example: 'Владелец отметил вас в журнале звонка',
+            prizePoints: 1,
+            levelPoints: 1,
+            mode: 'manual',
+            systemKey: 'call_attended',
+            position: 2,
+          },
+          {
+            profileId: profile.id,
+            title: 'Пропустил звонок',
+            example: 'Не было на вечернем звонке без предупреждения',
+            prizePoints: -1,
+            levelPoints: -1,
+            mode: 'manual',
+            systemKey: 'call_missed',
+            position: 3,
+          },
+        ],
       })
     }
 
@@ -308,6 +335,9 @@ export async function updateEventType(actor, id, body) {
   if (type.systemKey === PRODUCT_KEY && mode !== 'manual') {
     throw ApiError.badRequest('Покупку продукта отмечает владелец, автоматической она быть не может')
   }
+  if (CALL_KEYS.includes(type.systemKey) && mode !== 'manual') {
+    throw ApiError.badRequest('Звонок отмечают в журнале звонка — автоматическим это событие быть не может')
+  }
 
   const data = { mode, autoRule }
   if (body.title !== undefined) data.title = body.title.trim()
@@ -340,6 +370,9 @@ export async function deleteEventType(actor, id) {
   if (!type) throw ApiError.notFound('Событие не найдено')
   if (type.systemKey === PRODUCT_KEY) {
     throw ApiError.badRequest('Это событие нужно для кнопки «Клиент купил новый продукт». Его можно выключить, но не удалить')
+  }
+  if (CALL_KEYS.includes(type.systemKey)) {
+    throw ApiError.badRequest('Это событие нужно журналу звонка. Его можно выключить, но не удалить')
   }
   await prisma.$transaction([
     prisma.motivationEventType.delete({ where: { id } }),
@@ -436,7 +469,7 @@ export async function saveWorkLevels(actor, levels) {
 export async function updateGeneral(actor, patch) {
   assertAdmin(actor)
   const data = {}
-  for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints']) {
+  for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints', 'taskPointsMode', 'personalTaskDailyLimit']) {
     if (patch[key] !== undefined) data[key] = patch[key]
   }
   // Дата включения автобаллов приходит днём «ГГГГ-ММ-ДД» и хранится
@@ -464,6 +497,8 @@ export async function updateGeneral(actor, patch) {
     notifyBank: row.notifyBank,
     notifyPoints: row.notifyPoints,
     autoTasksFrom: row.autoTasksFrom ? dayKeyOf(row.autoTasksFrom) : null,
+    taskPointsMode: row.taskPointsMode,
+    personalTaskDailyLimit: row.personalTaskDailyLimit,
   }
 }
 

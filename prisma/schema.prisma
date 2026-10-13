@@ -94,6 +94,12 @@ model User {
   motivationEventsMade      MotivationEvent[]      @relation("MotivationEventCreatedBy")
   motivationEventsCancelled MotivationEvent[]      @relation("MotivationEventCancelledBy")
   motivationSeen            MotivationSeen?
+  motivationReviews         MotivationReview[]     @relation("MotivationReviewUser")
+  motivationReviewsDecided  MotivationReview[]     @relation("MotivationReviewDecidedBy")
+  motivationCallMarks       MotivationCallMark[]   @relation("MotivationCallMarkUser")
+  motivationCallMarksMade   MotivationCallMark[]   @relation("MotivationCallMarkedBy")
+  motivationAways           MotivationAway[]       @relation("MotivationAwayUser")
+  motivationAwaysMade       MotivationAway[]       @relation("MotivationAwayCreatedBy")
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -542,6 +548,38 @@ enum MotivationBankReason {
   other
 }
 
+// Как баллы за задачи доходят до человека: через проверку владельцем
+// (заявка в очереди «На проверке») или сразу сами. Включаются с даты
+// autoTasksFrom, до неё — никак.
+enum MotivationTaskPointsMode {
+  review
+  auto
+}
+
+// Заявка в очереди «На проверке»: ждёт решения, начислена, отклонена или
+// снята сама (задачу вернули из «Готово», пока заявка ждала).
+enum MotivationReviewStatus {
+  pending
+  approved
+  rejected
+  withdrawn
+}
+
+// Насколько весомой выглядит личная задача по названию и описанию —
+// подсказка владельцу, а не приговор.
+enum MotivationComplexity {
+  low
+  medium
+  high
+}
+
+// Отметка в журнале вечернего звонка: был, не был, форс-мажор.
+enum MotivationCallStatus {
+  present
+  absent
+  excused
+}
+
 // Чем является запись журнала событий: событием из профиля, ручной
 // корректировкой на произвольное число баллов или покупкой клиентом нового
 // продукта. Последнее вынесено отдельно, потому что у него своя форма и своя
@@ -615,7 +653,8 @@ model MotivationEventType {
   enabled  Boolean @default(true)
   position Int     @default(0)
 
-  events MotivationEvent[]
+  events  MotivationEvent[]
+  reviews MotivationReview[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -682,6 +721,14 @@ model MotivationSettings {
   // «Готово». Проспанные сервером ночи остаются после отметки и
   // доначисляются при запуске.
   overdueCheckedUntil DateTime?
+
+  // Пока заказчик проверяет систему, баллы за задачи начисляет он сам:
+  // по умолчанию — на проверку.
+  taskPointsMode MotivationTaskPointsMode @default(review)
+
+  // Сколько личных задач человек может поставить себе за день. Без лимита
+  // можно накидать десяток задач по одному слову.
+  personalTaskDailyLimit Int @default(7)
 
   // Слать ли сотруднику сообщения о пополнении банка и о баллах. Шлёт их
   // агент, вкладка здесь только хранит выбор админа.
@@ -809,8 +856,120 @@ model MotivationEvent {
 
   createdAt DateTime @default(now())
 
+  // Отметка в журнале звонка, по которой событие начислено.
+  callMark MotivationCallMark?
+
+  // Заявка из очереди «На проверке», по которой событие начислено.
+  review MotivationReview?
+
   @@index([userId, occurredAt])
   @@index([taskId])
+}
+
+// Заявка в очереди «На проверке»: CRM увидела, что задача закрыта в срок
+// или просрочена, и подсказывает владельцу баллы. Начислит он сам — тогда
+// появится обычное событие в журнале баллов (eventId), а заявка останется
+// как след решения.
+model MotivationReview {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation("MotivationReviewUser", fields: [userId], references: [id])
+
+  rule MotivationAutoRule
+
+  eventTypeId String?
+  eventType   MotivationEventType? @relation(fields: [eventTypeId], references: [id], onDelete: SetNull)
+
+  // Название события и подсказанные баллы — на момент заявки. Владелец
+  // может начислить другое число.
+  title       String
+  prizePoints Int
+  levelPoints Int
+
+  // Задачу держим без внешнего ключа, как и в журнале баллов: личные
+  // задачи ночная уборка удаляет.
+  taskId          String?
+  taskTitle       String?
+  taskDescription String?
+  taskDeadline    DateTime?
+  complexity      MotivationComplexity?
+
+  // Просрочка из Иерархии копится в одной заявке: каждая ночь добавляет
+  // штраф, пока владелец не решит. Здесь — разобранные ночи («ГГГГ-ММ-ДД»).
+  nights String[] @default([])
+
+  occurredAt DateTime
+
+  status       MotivationReviewStatus @default(pending)
+  decidedById  String?
+  decidedBy    User?                  @relation("MotivationReviewDecidedBy", fields: [decidedById], references: [id])
+  decidedAt    DateTime?
+  decisionNote String?
+
+  eventId String?          @unique
+  event   MotivationEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  dedupeKey String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, occurredAt])
+  @@index([userId, status])
+  @@index([taskId])
+}
+
+// Журнал вечернего звонка: владелец отмечает, кто был. Был — баллы события
+// «Был на созвоне» из профиля, не был — штраф «Пропустил звонок»,
+// форс-мажор — без баллов. Одна отметка на человека в день; поменяли
+// отметку — прежнее событие отменяется, ложится новое (eventId).
+model MotivationCallMark {
+  id String @id @default(cuid())
+
+  // День звонка по Москве, «ГГГГ-ММ-ДД».
+  day String
+
+  userId String
+  user   User   @relation("MotivationCallMarkUser", fields: [userId], references: [id])
+
+  status MotivationCallStatus
+
+  eventId String?          @unique
+  event   MotivationEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  markedById String
+  markedBy   User   @relation("MotivationCallMarkedBy", fields: [markedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([day, userId])
+  @@index([day])
+}
+
+// Метка «форс-мажор до …» на человеке. Ставит владелец, когда человек
+// предупредил, что его не будет. Пока метка действует, звонок и чек-ин на
+// баллы не влияют, а бот человека не дёргает.
+model MotivationAway {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation("MotivationAwayUser", fields: [userId], references: [id])
+
+  from   DateTime @default(now())
+  until  DateTime
+  reason String?
+
+  createdById String
+  createdBy   User   @relation("MotivationAwayCreatedBy", fields: [createdById], references: [id])
+
+  // Сняли раньше срока — человек вернулся.
+  endedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, until])
 }
 
 // Что сотрудник уже видел во вкладке. До агента это единственный способ

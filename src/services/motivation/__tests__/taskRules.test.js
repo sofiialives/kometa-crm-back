@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, holdsSlot, isOnTime,
-  isRealDayKey, mskDateStart, mskDayStart, overdueNights, ruleFor,
+  estimateComplexity, isRealDayKey, mskDateStart, mskDayStart, overdueNights, ruleFor,
 } from '../taskRules.js'
 
 // Время по Москве: msk('2026-11-03 18:00') — 18:00 по Москве, это 15:00 UTC.
@@ -174,5 +174,28 @@ describe('ключи записей', () => {
     assert.equal(key, 'auto:task_overdue:task1:2026-11-03')
     assert.ok(key.startsWith(autoKeyPrefix('task_overdue', 'task1')))
     assert.ok(!autoKey('task_overdue', 'task10', 'x').startsWith(autoKeyPrefix('task_overdue', 'task1')))
+  })
+})
+
+describe('сложность личной задачи', () => {
+  test('задачи по одному слову — лёгкие', () => {
+    assert.equal(estimateComplexity({ title: 'тест' }), 'low')
+    assert.equal(estimateComplexity({ title: 'Работа с командой' }), 'low')
+    assert.equal(estimateComplexity({ title: '   ', description: '!!! ...' }), 'low')
+  })
+
+  test('понятная задача с деталями — средняя', () => {
+    assert.equal(estimateComplexity({ title: 'Сверстать блок отзывов на главной по макету' }), 'medium')
+  })
+
+  test('развёрнутое описание — весомая', () => {
+    assert.equal(estimateComplexity({
+      title: 'Правки по брендбуку для клиента',
+      description: 'Внести три круга правок Дениса: поменять цвета, перерисовать иконки в разделе услуг, собрать итоговый PDF и отправить клиенту',
+    }), 'high')
+  })
+
+  test('пробелы и знаки препинания не накручивают сложность', () => {
+    assert.equal(estimateComplexity({ title: 'т е с т . . . . . . . . . . . . . . . . . . . . . . . . . .' }), 'low')
   })
 })

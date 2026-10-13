@@ -109,6 +109,53 @@ export const cancelEventSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
+// Очередь «На проверке»
+// ---------------------------------------------------------------------------
+
+export const reviewListSchema = z.object({
+  query: z.object({ status: z.enum(['pending', 'decided']).optional() }),
+})
+
+export const approveReviewSchema = z.object({
+  params: z.object({ id: objectId }),
+  body: z.object({
+    prizePoints: optional(points),
+    levelPoints: optional(points),
+    comment: optional(comment),
+    // Сколько было подсказано на экране владельца — сервер сверит с текущим.
+    seenPrizePoints: optional(points),
+  }),
+})
+
+export const rejectReviewSchema = z.object({
+  params: z.object({ id: objectId }),
+  body: z.object({ reason: optional(comment) }),
+})
+
+// ---------------------------------------------------------------------------
+// Журнал звонка и форс-мажор
+// ---------------------------------------------------------------------------
+
+const dayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в виде ГГГГ-ММ-ДД')
+
+export const callDaySchema = z.object({
+  params: z.object({ day: dayKey }),
+})
+
+export const callMarkSchema = z.object({
+  params: z.object({ day: dayKey, userId: objectId }),
+  body: z.object({ status: z.enum(['present', 'absent', 'excused']).nullable() }),
+})
+
+export const awaySchema = z.object({
+  body: z.object({
+    userId: objectId,
+    until: z.coerce.date({ invalid_type_error: 'Укажите, до какого времени' }),
+    reason: optional(comment),
+  }),
+})
+
+// ---------------------------------------------------------------------------
 // Настройки
 // ---------------------------------------------------------------------------
 
@@ -217,6 +264,8 @@ export const generalSettingsSchema = z.object({
       personalTaskDailyCap: z.coerce.number().int().min(0).max(100).optional(),
       notifyBank: z.boolean().optional(),
       notifyPoints: z.boolean().optional(),
+      taskPointsMode: z.enum(['review', 'auto']).optional(),
+      personalTaskDailyLimit: z.coerce.number().int('Лимит — целое число').min(1, 'Лимит — от 1 задачи').max(50, 'Лимит — не больше 50 задач').optional(),
       autoTasksFrom: z
         .string()
         .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в виде ГГГГ-ММ-ДД')

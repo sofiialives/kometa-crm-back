@@ -20,6 +20,8 @@ export const DEFAULT_SETTINGS = {
   notifyPoints: true,
   autoTasksFrom: null,
   overdueCheckedUntil: null,
+  taskPointsMode: 'review',
+  personalTaskDailyLimit: 7,
 }
 
 export async function getSettingsRow(db = prisma) {

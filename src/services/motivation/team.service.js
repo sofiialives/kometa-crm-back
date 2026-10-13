@@ -6,6 +6,7 @@ import { assertAdmin, assertViewer, EMPLOYEE_SELECT, PARTICIPANT_ROLES } from '.
 import { assignmentsAt, getGlobalScale, getWorkLevels, scaleOf, workLevelsOf } from './profiles.js'
 import { ensureStartBank, loadJournalsFor } from './journal.js'
 import { employeeCard, profileCard } from './shape.js'
+import { activeAways } from './callJournal.service.js'
 
 /**
  * Раздел «Команда»: таблица сотрудников с банком, баллами, уровнями и
@@ -37,6 +38,11 @@ export function departmentScope(actor, departmentId) {
   return actor.departmentId
 }
 
+function awayFor(away, actor) {
+  if (!away) return null
+  return actor.role === 'admin' ? away : { ...away, reason: null }
+}
+
 export async function getTeam(actor, { month, departmentId } = {}, now = new Date()) {
   assertViewer(actor)
   const monthKey = resolveMonth(month, now)
@@ -59,10 +65,12 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
   // Отключённым и прошлым месяцам ensureStartBank ничего не кладёт.
   await Promise.all(users.map((u) => ensureStartBank(u, monthKey, now)))
 
-  const [journals, globalScale, workLevels] = await Promise.all([
+  const [journals, globalScale, workLevels, aways] = await Promise.all([
     loadJournalsFor(ids, monthKey),
     getGlobalScale(),
     getWorkLevels(),
+    // Метка «форс-мажор до …» — на сейчас, видна в таблице рядом с именем.
+    activeAways(ids, now),
   ])
 
   const rows = []
@@ -97,6 +105,9 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
         ? { position: result.work.current.position, title: result.work.current.title }
         : null,
       eventsCount: events.filter((e) => !e.cancelledAt).length,
+      // Причину метки («заболел», «дела в банке») видит только владелец:
+      // он её и ставил. Руководителю достаточно знать, что человека нет.
+      away: awayFor(aways.get(user.id), actor),
     })
   }
 
