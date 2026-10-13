@@ -4,6 +4,7 @@ import { currentMonthKey } from '../services/motivation/month.js'
 import { ensureStartBank } from '../services/motivation/journal.js'
 import { PARTICIPANT_ROLES } from '../services/motivation/access.js'
 import { chargeOverdue } from '../services/motivation/autoTasks.service.js'
+import { catchUpClose } from '../services/motivation/monthClose.service.js'
 
 /**
  * Начало месяца мотивации: в полночь первого числа по Москве каждый
@@ -38,21 +39,34 @@ export async function openMonth(now = new Date()) {
  * записей, а штрафы за пропущенные ночи ложатся каждый своими сутками.
  */
 export async function catchUpMotivation(now = new Date()) {
-  // Шаги независимы: сбой стартовых сумм не должен оставить без штрафов, и
-  // наоборот.
+  // Шаги независимы: сбой одного не должен оставить без остальных. Порядок
+  // важен: штрафы за последние ночи прошлого месяца ложатся до его закрытия.
   let created = 0
   let charged = 0
+  let closed = []
+  let chargedOk = false
   try {
     created = (await openMonth(now)).created
   } catch (e) {
     console.error('[мотивация] стартовые суммы при запуске не легли:', e.message)
   }
   try {
-    charged = (await chargeOverdue(now)).charged
+    const res = await chargeOverdue(now)
+    charged = res.charged
+    chargedOk = res.failed.length === 0
   } catch (e) {
     console.error('[мотивация] штрафы при запуске не легли:', e.message)
   }
-  return { created, charged }
+  // Закрываем только после того, как штрафы за последние ночи легли: иначе
+  // штраф за 31-е потерялся бы навсегда — закрытый месяц не открыть.
+  if (chargedOk) {
+    try {
+      closed = await catchUpClose(now)
+    } catch (e) {
+      console.error('[мотивация] прошлые месяцы при запуске не закрылись:', e.message)
+    }
+  }
+  return { created, charged, closed }
 }
 
 export function scheduleOpenMotivationMonth() {
@@ -62,6 +76,23 @@ export function scheduleOpenMotivationMonth() {
       console.log(`[cron] мотивация: открыт месяц ${monthKey}, стартовых сумм: ${created}`)
     } catch (e) {
       console.error('[cron] мотивация: не удалось открыть месяц:', e.message)
+    }
+  }, { timezone: 'Europe/Moscow' })
+
+  // Закрытие прошлого месяца — в 00:10, после ночных штрафов в полночь.
+  // Каждую ночь, а не только 1-го: если 1-го штрафы не легли (база моргнула),
+  // месяц закроется следующей ночью, когда они лягут. Закрытый не трогается.
+  cron.schedule('10 0 * * *', async () => {
+    try {
+      const { failed } = await chargeOverdue()
+      if (failed.length) {
+        console.error(`[cron] мотивация: штрафы по ${failed.length} задачам не легли — закрытие месяца отложено`)
+        return
+      }
+      const closed = await catchUpClose()
+      for (const c of closed) console.log(`[cron] мотивация: закрыт месяц ${c.monthKey}, в итогах ${c.people} чел.`)
+    } catch (e) {
+      console.error('[cron] мотивация: не удалось закрыть месяц:', e.message)
     }
   }, { timezone: 'Europe/Moscow' })
 }

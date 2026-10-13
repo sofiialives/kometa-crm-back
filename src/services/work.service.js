@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
+import { createWorkHint } from './motivation/workHints.service.js'
 
 const WORK_INCLUDE = {
   client: { select: { id: true, name: true } },
@@ -36,7 +37,7 @@ export async function createWork({ clientId, title, departmentId, assignees, cre
   const client = await prisma.client.findUnique({ where: { id: clientId } })
   if (!client) throw ApiError.badRequest('Клиент не найден — выберите из списка')
 
-  return prisma.work.create({
+  const work = await prisma.work.create({
     data: {
       clientId,
       title,
@@ -46,6 +47,9 @@ export async function createWork({ clientId, title, departmentId, assignees, cre
     },
     include: WORK_INCLUDE,
   })
+  // Мотивация: владельцу — подсказка «Пополнить банк?» исполнителям.
+  await createWorkHint(work)
+  return work
 }
 
 export async function updateWork(id, patch, user) {

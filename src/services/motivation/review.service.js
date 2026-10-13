@@ -5,6 +5,7 @@ import { currentMonthKey, dayKeyOf, monthKeyOf } from './month.js'
 import { assignmentAt, getSettingsRow } from './profiles.js'
 import { employeeCard, person } from './shape.js'
 import { mskDayStart } from './taskRules.js'
+import { pendingHints } from './workHints.service.js'
 
 /**
  * Очередь «На проверке». CRM заметила, что задача закрыта в срок или
@@ -112,10 +113,14 @@ export async function listReviews(actor, { status = 'pending' } = {}) {
   }
 }
 
-/** Сколько заявок ждёт — для счётчика на вкладке. */
+/** Сколько заявок и подсказок о новых работах ждёт — для счётчика на вкладке. */
 export async function pendingCount(actor) {
   assertAdmin(actor)
-  return { pending: await prisma.motivationReview.count({ where: { status: 'pending' } }) }
+  const [pending, hints] = await Promise.all([
+    prisma.motivationReview.count({ where: { status: 'pending' } }),
+    pendingHints(),
+  ])
+  return { pending, hints }
 }
 
 async function loadPending(tx, id) {

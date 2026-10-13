@@ -100,6 +100,8 @@ model User {
   motivationCallMarksMade   MotivationCallMark[]   @relation("MotivationCallMarkedBy")
   motivationAways           MotivationAway[]       @relation("MotivationAwayUser")
   motivationAwaysMade       MotivationAway[]       @relation("MotivationAwayCreatedBy")
+  motivationMonthResults    MotivationMonthResult[] @relation("MotivationMonthResultUser")
+  motivationWorkHints       MotivationWorkHint[]   @relation("MotivationWorkHintDecidedBy")
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -573,6 +575,13 @@ enum MotivationComplexity {
   high
 }
 
+// Подсказка «Пополнить банк?» о новой работе: ждёт, банк пополнили, не нужно.
+enum MotivationHintStatus {
+  pending
+  done
+  dismissed
+}
+
 // Отметка в журнале вечернего звонка: был, не был, форс-мажор.
 enum MotivationCallStatus {
   present
@@ -970,6 +979,75 @@ model MotivationAway {
   createdAt DateTime @default(now())
 
   @@index([userId, until])
+}
+
+// Закрытый месяц. Закрывается сам 1 числа в 00:10 по Москве (или при запуске
+// сервера, если тот проспал): итоги каждого сохраняются снимком, и дальше
+// прошлый месяц показывается и выгружается из снимка. Изменения в закрытом
+// месяце не принимаются — смена шкалы и поздние отмены его не трогают.
+model MotivationMonthClose {
+  monthKey String   @id
+  closedAt DateTime @default(now())
+
+  results MotivationMonthResult[]
+}
+
+// Итог человека за закрытый месяц — то, что было в таблице команды в момент
+// закрытия. Карточка и профиль сохранены как были: человека могли потом
+// перевести в другой отдел или переименовать профиль.
+model MotivationMonthResult {
+  id String @id @default(cuid())
+
+  monthKey String
+  month    MotivationMonthClose @relation(fields: [monthKey], references: [monthKey], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("MotivationMonthResultUser", fields: [userId], references: [id])
+
+  employee Json
+  profile  Json?
+
+  bankCents    Int
+  earnedCents  Int
+  prizePoints  Int
+  levelPoints  Int
+  currentLevel Int
+  levelsCount  Int
+  eventsCount  Int
+
+  // Уровни шкалы с суммами и уровень работы — как на экране человека.
+  levels Json
+  work   Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([monthKey, userId])
+  @@index([userId])
+}
+
+// Подсказка «Пополнить банк?»: в Иерархии появилась новая работа. Владелец
+// видит её в «На проверке» и пополняет банк исполнителям или отмахивается.
+// Работу держим без внешнего ключа: её могут удалить, а след решения нужен.
+model MotivationWorkHint {
+  id String @id @default(cuid())
+
+  workId         String  @unique
+  workTitle      String
+  clientId       String?
+  clientName     String?
+  departmentId   String?
+  departmentName String?
+  assigneeIds    String[] @default([])
+  createdByName  String?
+
+  status      MotivationHintStatus @default(pending)
+  decidedById String?
+  decidedBy   User?                @relation("MotivationWorkHintDecidedBy", fields: [decidedById], references: [id])
+  decidedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt])
 }
 
 // Что сотрудник уже видел во вкладке. До агента это единственный способ

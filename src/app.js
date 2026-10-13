@@ -9,7 +9,9 @@ import { notFoundHandler, errorHandler } from './middlewares/error.middleware.js
 export function createApp() {
   const app = express()
 
-  app.use(cors({ origin: env.clientUrl, credentials: true }))
+  // Content-Disposition открыт браузеру, чтобы выгрузка сохранялась под
+  // своим именем, а не под запасным.
+  app.use(cors({ origin: env.clientUrl, credentials: true, exposedHeaders: ['Content-Disposition'] }))
   // Дефолтный лимит express.json() — 100kb, туда не влезет фото аватарки
   // в виде base64 (храним прямо в avatarUrl, без внешнего хранилища файлов).
   app.use(express.json({ limit: '3mb' }))

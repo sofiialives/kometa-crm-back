@@ -6,6 +6,8 @@ import * as events from '../services/motivation/events.service.js'
 import * as settings from '../services/motivation/settings.service.js'
 import * as review from '../services/motivation/review.service.js'
 import * as journal from '../services/motivation/callJournal.service.js'
+import * as exporter from '../services/motivation/export.service.js'
+import * as hints from '../services/motivation/workHints.service.js'
 
 // ---- Про себя: сотрудник и руководитель ------------------------------------
 
@@ -83,6 +85,33 @@ export const approveReview = asyncHandler(async (req, res) => {
 
 export const rejectReview = asyncHandler(async (req, res) => {
   res.json(await review.rejectReview(req.user, req.params.id, req.body))
+})
+
+export const getClientPeople = asyncHandler(async (req, res) => {
+  res.json(await team.clientPeople(req.user, req.params.id))
+})
+
+// ---- Подсказки «Пополнить банк?» (владелец) --------------------------------
+
+export const listHints = asyncHandler(async (req, res) => {
+  res.json(await hints.listHints(req.user))
+})
+
+export const markHintDone = asyncHandler(async (req, res) => {
+  res.json(await hints.markHintDone(req.user, req.params.id))
+})
+
+export const dismissHint = asyncHandler(async (req, res) => {
+  res.json(await hints.dismissHint(req.user, req.params.id))
+})
+
+// ---- Выгрузка итогов (владелец) --------------------------------------------
+
+export const exportMonth = asyncHandler(async (req, res) => {
+  const { buffer, contentType, fileName } = await exporter.exportMonth(req.user, req.query)
+  res.setHeader('Content-Type', contentType)
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
+  res.send(buffer)
 })
 
 // ---- Журнал звонка и форс-мажор (владелец) ---------------------------------
