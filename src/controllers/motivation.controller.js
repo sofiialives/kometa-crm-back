@@ -8,6 +8,7 @@ import * as review from '../services/motivation/review.service.js'
 import * as journal from '../services/motivation/callJournal.service.js'
 import * as exporter from '../services/motivation/export.service.js'
 import * as hints from '../services/motivation/workHints.service.js'
+import * as botJournal from '../services/motivation/botJournal.service.js'
 
 // ---- Про себя: сотрудник и руководитель ------------------------------------
 
@@ -115,6 +116,14 @@ export const exportMonth = asyncHandler(async (req, res) => {
 })
 
 // ---- Журнал звонка и форс-мажор (владелец) ---------------------------------
+
+export const getBotJournalPeople = asyncHandler(async (req, res) => {
+  res.json(await botJournal.journalPeople(req.user))
+})
+
+export const getBotJournal = asyncHandler(async (req, res) => {
+  res.json(await botJournal.getBotJournal(req.user, req.query))
+})
 
 export const getCallJournal = asyncHandler(async (req, res) => {
   res.json(await journal.getJournal(req.user, req.params.day))

@@ -52,7 +52,7 @@ async function onWaiting(user, waiting, text, logged, now) {
     return true
   }
   if (waiting.type === 'task_late') {
-    await reportTaskLate(user, waiting.payload.taskId, text)
+    await reportTaskLate(user, waiting.payload.taskId, text, now)
     return true
   }
   if (waiting.type === 'break_time') {
@@ -199,7 +199,7 @@ export async function onCallback(cb, user, now = new Date()) {
     return action === 'y' ? comeBack(user, now) : runningLate(user, {}, now)
   }
   if (kind === 'tk') {
-    const text = action === 'go' ? await takeTask(user, id) : await lateForTask(user, id)
+    const text = action === 'go' ? await takeTask(user, id, now) : await lateForTask(user, id)
     return closeButtons(cb, text)
   }
   if (kind === 'ci') {

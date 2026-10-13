@@ -29,6 +29,18 @@ export function logMessage({ userId = null, chatId, direction, text }) {
     })
 }
 
+/**
+ * Действие человека для журнала сотрудника (вкладка «Журнал бота»): то,
+ * чего нет в отлучках и чек-инах. Сбой журнала боту не мешает.
+ */
+export function logEvent(userId, type, { at = new Date(), text = null, data = null } = {}) {
+  return prisma.botEvent.create({ data: { userId, type, at, text: text ? String(text).slice(0, 1000) : null, data: data ?? undefined } })
+    .catch((e) => {
+      console.error('[агент] журнал действий:', e.message)
+      return null
+    })
+}
+
 /** Чат человека или null, если он не подключил телеграм или отключён. */
 export async function chatOf(userId) {
   const link = await prisma.telegramLink.findFirst({
