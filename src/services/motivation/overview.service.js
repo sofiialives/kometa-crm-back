@@ -87,6 +87,14 @@ export async function getOverview(actor, userId, month, now = new Date()) {
 
   const { result } = state
   const isCurrent = monthKey === currentMonthKey(now)
+  // Закрытый месяц — премия и банк из снимка закрытия: шкалу потом могли
+  // поменять, а итог месяца уже зафиксирован. История — из журналов.
+  const [closed, snap] = isCurrent
+    ? [null, null]
+    : await Promise.all([
+      prisma.motivationMonthClose.findUnique({ where: { monthKey }, select: { closedAt: true } }),
+      prisma.motivationMonthResult.findUnique({ where: { monthKey_userId: { monthKey, userId: employee.id } } }),
+    ])
   const canManageEmployee = canManage(actor, employee)
   return {
     employee: employeeCard(employee),
@@ -96,18 +104,21 @@ export async function getOverview(actor, userId, month, now = new Date()) {
     months: months.includes(monthKey) ? months : [monthKey, ...months],
     profile: profileCard(state.profile),
     scale: usesCustomScale(state.profile) ? 'custom' : 'global',
+    closedAt: closed?.closedAt ?? null,
     bank: {
-      cents: result.bankCents,
-      isEmpty: result.bankCents === 0,
+      cents: snap ? snap.bankCents : result.bankCents,
+      isEmpty: (snap ? snap.bankCents : result.bankCents) === 0,
       history: bankHistory,
     },
-    prize: {
-      points: result.prizePoints,
-      levels: result.levels,
-      currentLevel: result.currentLevel,
-      earnedCents: result.earnedCents,
-      next: result.next,
-    },
+    prize: snap
+      ? { points: snap.prizePoints, levels: snap.levels, currentLevel: snap.currentLevel, earnedCents: snap.earnedCents, next: null }
+      : {
+        points: result.prizePoints,
+        levels: result.levels,
+        currentLevel: result.currentLevel,
+        earnedCents: result.earnedCents,
+        next: result.next,
+      },
     work: {
       points: result.levelPoints,
       levels: result.work.levels,

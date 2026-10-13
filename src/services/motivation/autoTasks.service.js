@@ -1,6 +1,7 @@
 import { prisma } from '../../config/prisma.js'
 import { PARTICIPANT_ROLES } from './access.js'
-import { currentMonthKey, monthRange } from './month.js'
+import { currentMonthKey, monthKeyOf, monthRange } from './month.js'
+import { closedMonthSet } from './monthClose.service.js'
 import { assignmentAt, getSettingsRow } from './profiles.js'
 import {
   autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, estimateComplexity, isOnTime,
@@ -263,11 +264,16 @@ export async function chargeOverdue(now = new Date()) {
     orderBy: { deadline: 'asc' },
   })
 
+  // Ночи закрытых месяцев не штрафуем: месяц уже посчитан. Так бывает, если
+  // сервер проспал полночь 1-го и доначисляет при запуске.
+  const closed = await closedMonthSet()
+  const open = (night) => !closed.has(monthKeyOf(night.at))
+
   let charged = 0
   const failed = []
   for (const task of tasks) {
     try {
-      charged += await chargeTask(task, settings, now)
+      charged += await chargeTask(task, settings, now, open)
     } catch (e) {
       // Одна сломанная задача не должна оставить без штрафа остальные.
       failed.push(task.id)
@@ -284,8 +290,8 @@ export async function chargeOverdue(now = new Date()) {
   return { charged, failed }
 }
 
-async function chargeTask(task, settings, now) {
-  if (reviewMode(settings)) return proposeOverdue(task, settings, now)
+async function chargeTask(task, settings, now, open = () => true) {
+  if (reviewMode(settings)) return proposeOverdue(task, settings, now, open)
   const rule = ruleFor(task, 'overdue')
   let nights = overdueNights({
     deadline: task.deadline,
@@ -293,6 +299,7 @@ async function chargeTask(task, settings, now) {
     checkedUntil: settings.overdueCheckedUntil,
     now,
   })
+  nights = nights.filter(open)
   // Личная просрочка штрафуется один раз — за первую же разобранную ночь.
   if (rule === 'personal_task_overdue') nights = nights.slice(0, 1)
 
@@ -338,7 +345,7 @@ async function chargeTask(task, settings, now) {
  * идут и уже начисленные по заявкам штрафы. Личная просрочка — одна заявка.
  * Отклонил владелец заявку по задаче — больше по ней не предлагаем.
  */
-async function proposeOverdue(task, settings, now) {
+async function proposeOverdue(task, settings, now, open = () => true) {
   const rule = ruleFor(task, 'overdue')
   let nights = overdueNights({
     deadline: task.deadline,
@@ -346,6 +353,7 @@ async function proposeOverdue(task, settings, now) {
     checkedUntil: settings.overdueCheckedUntil,
     now,
   })
+  nights = nights.filter(open)
   if (rule === 'personal_task_overdue') nights = nights.slice(0, 1)
 
   let proposed = 0

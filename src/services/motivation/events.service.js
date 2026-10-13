@@ -5,6 +5,8 @@ import { isDuplicate, requestKeyFor } from './dedupe.js'
 import { assignmentAt, assignmentsAt } from './profiles.js'
 import { eventEntry, eventTypeCard, profileCard } from './shape.js'
 import { CALL_KEYS } from './callRules.js'
+import { isMonthClosed } from './monthClose.service.js'
+import { monthKeyOf } from './month.js'
 
 /**
  * Ручные баллы: события, которые отмечает владелец, корректировка на
@@ -208,6 +210,10 @@ export async function cancelEvent(actor, id, { reason }) {
   const employee = await loadEmployee(event.userId)
   assertCanManage(actor, employee)
   if (event.cancelledAt) throw ApiError.conflict('Событие уже отменено')
+  // Закрытый месяц уже посчитан и, возможно, выплачен.
+  if (await isMonthClosed(monthKeyOf(event.occurredAt))) {
+    throw ApiError.badRequest('Этот месяц закрыт — изменения в нём не принимаются')
+  }
   // Иначе журнал показывал бы «был», а баллов бы не было.
   if (await prisma.motivationCallMark.findUnique({ where: { eventId: id }, select: { id: true } })) {
     throw ApiError.badRequest('Это отметка журнала звонка — поменяйте её в журнале')

@@ -13,8 +13,9 @@ async function bootstrap() {
   scheduleOpenMotivationMonth()
   // Не ждём: запуск API не должен зависеть от мотивации.
   catchUpMotivation()
-    .then(({ created, charged }) => {
+    .then(({ created, charged, closed }) => {
       if (created || charged) console.log(`[мотивация] доначислено при запуске: стартовых сумм ${created}, штрафов ${charged}`)
+      for (const c of closed) console.log(`[мотивация] при запуске закрыт месяц ${c.monthKey}, в итогах ${c.people} чел.`)
     })
     .catch((e) => console.error('[мотивация] не удалось доначислить при запуске:', e.message))
 

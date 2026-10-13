@@ -4,6 +4,7 @@ import { currentMonthKey } from '../services/motivation/month.js'
 import { ensureStartBank } from '../services/motivation/journal.js'
 import { PARTICIPANT_ROLES } from '../services/motivation/access.js'
 import { chargeOverdue } from '../services/motivation/autoTasks.service.js'
+import { catchUpClose } from '../services/motivation/monthClose.service.js'
 
 /**
  * Начало месяца мотивации: в полночь первого числа по Москве каждый
@@ -38,10 +39,11 @@ export async function openMonth(now = new Date()) {
  * записей, а штрафы за пропущенные ночи ложатся каждый своими сутками.
  */
 export async function catchUpMotivation(now = new Date()) {
-  // Шаги независимы: сбой стартовых сумм не должен оставить без штрафов, и
-  // наоборот.
+  // Шаги независимы: сбой одного не должен оставить без остальных. Порядок
+  // важен: штрафы за последние ночи прошлого месяца ложатся до его закрытия.
   let created = 0
   let charged = 0
+  let closed = []
   try {
     created = (await openMonth(now)).created
   } catch (e) {
@@ -52,7 +54,12 @@ export async function catchUpMotivation(now = new Date()) {
   } catch (e) {
     console.error('[мотивация] штрафы при запуске не легли:', e.message)
   }
-  return { created, charged }
+  try {
+    closed = await catchUpClose(now)
+  } catch (e) {
+    console.error('[мотивация] прошлые месяцы при запуске не закрылись:', e.message)
+  }
+  return { created, charged, closed }
 }
 
 export function scheduleOpenMotivationMonth() {
@@ -62,6 +69,17 @@ export function scheduleOpenMotivationMonth() {
       console.log(`[cron] мотивация: открыт месяц ${monthKey}, стартовых сумм: ${created}`)
     } catch (e) {
       console.error('[cron] мотивация: не удалось открыть месяц:', e.message)
+    }
+  }, { timezone: 'Europe/Moscow' })
+
+  // Закрытие прошлого месяца — через пять минут после открытия нового и
+  // после ночных штрафов в полночь: последние сутки месяца в него уже легли.
+  cron.schedule('10 0 1 * *', async () => {
+    try {
+      const closed = await catchUpClose()
+      for (const c of closed) console.log(`[cron] мотивация: закрыт месяц ${c.monthKey}, в итогах ${c.people} чел.`)
+    } catch (e) {
+      console.error('[cron] мотивация: не удалось закрыть месяц:', e.message)
     }
   }, { timezone: 'Europe/Moscow' })
 }

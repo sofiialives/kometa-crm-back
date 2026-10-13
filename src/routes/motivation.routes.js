@@ -7,7 +7,7 @@ import {
   topUpSchema, updateEventTypeSchema, updateProfileSchema, userIdParamSchema, userMonthSchema, workLevelsSchema,
   writeOffSchema,
   reviewListSchema, approveReviewSchema, rejectReviewSchema,
-  callDaySchema, callMarkSchema, awaySchema,
+  callDaySchema, callMarkSchema, awaySchema, exportSchema,
 } from '../schemas/motivation.schema.js'
 import * as c from '../controllers/motivation.controller.js'
 
@@ -57,6 +57,11 @@ router.get('/reviews/count', admin, c.reviewsCount)
 router.post('/reviews/:id/approve', admin, validate(approveReviewSchema), c.approveReview)
 router.post('/reviews/:id/reject', admin, validate(rejectReviewSchema), c.rejectReview)
 
+router.get('/clients/:id/people', admin, validate(userIdParamSchema), c.getClientPeople)
+router.get('/hints', admin, c.listHints)
+router.post('/hints/:id/done', admin, validate(userIdParamSchema), c.markHintDone)
+router.post('/hints/:id/dismiss', admin, validate(userIdParamSchema), c.dismissHint)
+router.get('/export', admin, validate(exportSchema), c.exportMonth)
 router.get('/calls/:day', admin, validate(callDaySchema), c.getCallJournal)
 router.put('/calls/:day/:userId', admin, validate(callMarkSchema), c.setCallMark)
 router.post('/away', admin, validate(awaySchema), c.setAway)

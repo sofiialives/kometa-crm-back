@@ -1,10 +1,10 @@
 import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
-import { computeMonth } from './engine.js'
-import { currentMonthKey, isMonthKey, monthKeyOf, monthsBetween, referenceMoment } from './month.js'
+import { currentMonthKey, isMonthKey, monthKeyOf, monthsBetween } from './month.js'
 import { assertAdmin, assertViewer, EMPLOYEE_SELECT, PARTICIPANT_ROLES } from './access.js'
-import { assignmentsAt, getGlobalScale, getWorkLevels, scaleOf, workLevelsOf } from './profiles.js'
-import { ensureStartBank, loadJournalsFor } from './journal.js'
+import { assignmentsAt } from './profiles.js'
+import { computeRows } from './teamRows.js'
+import { loadClosedMonth, snapshotRow } from './monthClose.service.js'
 import { employeeCard, profileCard } from './shape.js'
 import { activeAways } from './callJournal.service.js'
 
@@ -58,40 +58,20 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
   })
   const ids = users.map((u) => u.id)
 
-  const refAt = referenceMoment(monthKey, now)
-  const assignments = await assignmentsAt(ids, refAt)
-
-  // Стартовые суммы — до чтения журналов, как и на экране сотрудника.
-  // Отключённым и прошлым месяцам ensureStartBank ничего не кладёт.
-  await Promise.all(users.map((u) => ensureStartBank(u, monthKey, now)))
-
-  const [journals, globalScale, workLevels, aways] = await Promise.all([
-    loadJournalsFor(ids, monthKey),
-    getGlobalScale(),
-    getWorkLevels(),
-    // Метка «форс-мажор до …» — на сейчас, видна в таблице рядом с именем.
-    activeAways(ids, now),
-  ])
-
-  const rows = []
-  for (const user of users) {
-    const bankEntries = journals.bank.get(user.id) ?? []
-    const events = journals.events.get(user.id) ?? []
-
-    // Отключённого сотрудника показываем, только если в этом месяце у него
-    // что-то было: его банк всё ещё входит в «Всего в банках».
-    if (!user.active && bankEntries.length === 0 && events.length === 0) continue
-
-    const assignment = assignments.get(user.id)
-    const profile = assignment?.profile ?? null
-    const result = computeMonth({
-      levels: scaleOf(profile, globalScale),
-      workLevels: workLevelsOf(profile, workLevels),
-      bankEntries,
-      events,
-    })
-
-    rows.push({
+  const closed = await loadClosedMonth(monthKey)
+  let rows
+  if (closed) {
+    // Закрытый месяц — из снимка: шкала и поздние правки его не меняют.
+    rows = closed.results
+      .filter((r) => roles.includes(r.employee.role) && (!scope || r.employee.department?.id === scope))
+      .map(snapshotRow)
+  } else {
+    const [computed, aways] = await Promise.all([
+      computeRows(users, monthKey, now),
+      // Метка «форс-мажор до …» — на сейчас, видна в таблице рядом с именем.
+      activeAways(ids, now),
+    ])
+    rows = computed.map(({ user, profile, result, eventsCount }) => ({
       employee: employeeCard(user),
       profile: profileCard(profile),
       bankCents: result.bankCents,
@@ -104,11 +84,11 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
       work: result.work.current
         ? { position: result.work.current.position, title: result.work.current.title }
         : null,
-      eventsCount: events.filter((e) => !e.cancelledAt).length,
+      eventsCount,
       // Причину метки («заболел», «дела в банке») видит только владелец:
       // он её и ставил. Руководителю достаточно знать, что человека нет.
       away: awayFor(aways.get(user.id), actor),
-    })
+    }))
   }
 
   const totals = rows.reduce(
@@ -126,6 +106,8 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
     month: monthKey,
     currentMonth: currentMonthKey(now),
     isCurrent: monthKey === currentMonthKey(now),
+    // Когда месяц закрыт — итоги зафиксированы, менять их нельзя.
+    closedAt: closed?.closedAt ?? null,
     departmentId: scope,
     departments,
     rows,
@@ -159,4 +141,21 @@ export async function managedEmployees(actor) {
   const users = await prisma.user.findMany({ where, select: EMPLOYEE_SELECT, orderBy: [{ name: 'asc' }, { email: 'asc' }] })
   const assignments = await assignmentsAt(users.map((u) => u.id))
   return users.map((u) => ({ ...employeeCard(u), profile: profileCard(assignments.get(u.id)?.profile) }))
+}
+
+/**
+ * Кто работает с клиентом: исполнители его работ в Иерархии, у кого есть
+ * банк. Форма «Клиент купил продукт» из карточки клиента сразу отмечает их —
+ * чаще всего продукт купили благодаря им.
+ */
+export async function clientPeople(actor, clientId) {
+  assertAdmin(actor, 'Начислять может только владелец')
+  const client = await prisma.client.findUnique({ where: { id: clientId }, select: { id: true, name: true } })
+  if (!client) throw ApiError.notFound('Клиент не найден')
+  const users = await prisma.user.findMany({
+    where: { role: { in: PARTICIPANT_ROLES }, active: true, assignedWorks: { some: { clientId } } },
+    select: EMPLOYEE_SELECT,
+    orderBy: { name: 'asc' },
+  })
+  return { client, people: users.map(employeeCard) }
 }
