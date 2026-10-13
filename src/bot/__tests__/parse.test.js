@@ -94,6 +94,14 @@ describe('что не отлучка и не форс-мажор', () => {
     assert.equal(parseIntent('Задерживаюсь, еду домой из-за пробок', now).type, 'late')
   })
 
+  test('«на сегодня все задачи закрыл» — не конец дня, «на сегодня всё!» — конец', () => {
+    for (const t of ['на сегодня все задачи закрыл', 'на сегодня вся работа сделана', 'на сегодня всем спасибо', 'на сегодня закончил задачу']) {
+      assert.notEqual(parseIntent(t, now)?.type, 'day_end', t)
+    }
+    assert.equal(parseIntent('на сегодня всё!', now).type, 'day_end')
+    assert.equal(parseIntent('на сегодня закончила', now).type, 'day_end')
+  })
+
   test('вернулся с обеда или перерыва — это возвращение', () => {
     assert.equal(parseIntent('вернулся с перерыва', now).type, 'back')
     assert.equal(parseIntent('я на месте, был на обеде', now).type, 'back')

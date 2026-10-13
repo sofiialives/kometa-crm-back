@@ -125,10 +125,11 @@ async function employeeFeed(since, settings) {
     if (e.cancelledAt) {
       // Отмену сообщаем, только если о самих баллах человек уже знал;
       // не знал — молча отмечаем, чтобы не сообщить о них позже.
-      // Корректировку только уровня человек не видел — и отмену тоже не сообщаем.
-      if (told && e.prizePoints === 0) await claimNotice(`event-cancel:${e.id}`)
+      // Пустую корректировку человек не видел — и отмену тоже не сообщаем.
+      if (told && e.prizePoints === 0 && !e.levelPoints) await claimNotice(`event-cancel:${e.id}`)
       else if (told && unsent.has(`event-cancel:${e.id}`)) {
-        push(e.userId, `event-cancel:${e.id}`, `↩️ Отменено: ${points(e.prizePoints)} — ${escapeHtml(short(e.taskTitle ? `${e.title}: «${e.taskTitle}»` : e.title, 100))}${e.cancelReason ? `\n<i>${escapeHtml(short(e.cancelReason, 160))}</i>` : ''}`)
+        const what = e.prizePoints === 0 ? `${e.levelPoints > 0 ? '+' : '−'}${Math.abs(e.levelPoints)} к уровню работы` : points(e.prizePoints)
+        push(e.userId, `event-cancel:${e.id}`, `↩️ Отменено: ${what} — ${escapeHtml(short(e.taskTitle ? `${e.title}: «${e.taskTitle}»` : e.title, 100))}${e.cancelReason ? `\n<i>${escapeHtml(short(e.cancelReason, 160))}</i>` : ''}`)
       } else if (!told) await claimNotice(`event:${e.id}`)
       continue
     }

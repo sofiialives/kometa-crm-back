@@ -113,6 +113,7 @@ export async function startBreak(user, { until = null, note = null, extend = fal
   })
 
   const { away } = result
+  if (result.type === 'started') await releaseNotice(`dayend:${mskDayKey(now)}:${user.id}`)
   const left = duration(minutesBetween(now, away.until))
   if (result.type === 'covered') {
     await tell(user.id, `У тебя и так отмечен форс-мажор до ${at(away.until, now)} — отдыхай, я не дёргаю.`)
@@ -183,6 +184,8 @@ export function setBreakMinutes(user, minutes, now = new Date(), { extend = fals
 /** «Вернулся», «я на месте». */
 export async function comeBack(user, now = new Date()) {
   state.clear(user.id)
+  // Сказал «еду домой», а потом вернулся — день не закончен.
+  await releaseNotice(`dayend:${mskDayKey(now)}:${user.id}`)
   const away = await prisma.$transaction(async (tx) => {
     await lockUser(tx, user.id)
     const open = await openBreak(user.id, now, tx)
