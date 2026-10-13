@@ -158,3 +158,19 @@ export function autoKey(rule, taskId, suffix) {
 export function autoKeyPrefix(rule, taskId) {
   return `auto:${rule}:${taskId}:`
 }
+
+/**
+ * Насколько весомой выглядит личная задача — подсказка владельцу в очереди
+ * «На проверке», пока оценку не делает ИИ. Считаем буквы и цифры в
+ * названии и описании: «тест» или «работа с командой» — лёгкая, пара
+ * предложений о том, что именно сделано, — средняя, развёрнутое описание —
+ * весомая. Так ставить задачи по одному слову становится невыгодно.
+ */
+export const COMPLEXITY_THRESHOLDS = { medium: 25, high: 100 }
+
+export function estimateComplexity({ title, description } = {}) {
+  const letters = `${title ?? ''} ${description ?? ''}`.replace(/[^\p{L}\p{N}]/gu, '').length
+  if (letters >= COMPLEXITY_THRESHOLDS.high) return 'high'
+  if (letters >= COMPLEXITY_THRESHOLDS.medium) return 'medium'
+  return 'low'
+}
