@@ -283,6 +283,12 @@ export const generalSettingsSchema = z.object({
         .refine(isRealDayKey, 'Такой даты нет')
         .nullable()
         .optional(),
+      checkinFrom: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/, 'Дата в виде ГГГГ-ММ-ДД')
+        .refine(isRealDayKey, 'Такой даты нет')
+        .nullable()
+        .optional(),
     })
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })

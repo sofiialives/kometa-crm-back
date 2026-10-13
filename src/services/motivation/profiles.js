@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS = {
   notifyBank: true,
   notifyPoints: true,
   autoTasksFrom: null,
+  checkinFrom: null,
   overdueCheckedUntil: null,
   taskPointsMode: 'review',
   personalTaskDailyLimit: 7,

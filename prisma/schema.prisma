@@ -767,6 +767,10 @@ model MotivationSettings {
   notifyBank   Boolean @default(true)
   notifyPoints Boolean @default(true)
 
+  // С какого дня бот устраивает внезапные чек-ины и снимает −3 молчунам
+  // (московская полночь дня, который выбрал владелец). Пусто — выключены.
+  checkinFrom DateTime?
+
   updatedAt DateTime @updatedAt
 }
 

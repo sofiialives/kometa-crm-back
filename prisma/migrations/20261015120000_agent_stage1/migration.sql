@@ -16,6 +16,8 @@ ADD COLUMN     "returnAskedAt" TIMESTAMP(3),
 ADD COLUMN     "returnedAt" TIMESTAMP(3),
 ADD COLUMN     "source" "MotivationAwaySource" NOT NULL DEFAULT 'owner';
 
+ALTER TABLE "MotivationSettings" ADD COLUMN     "checkinFrom" TIMESTAMP(3);
+
 CREATE TABLE "BotMessage" (
     "id" TEXT NOT NULL,
     "userId" TEXT,
