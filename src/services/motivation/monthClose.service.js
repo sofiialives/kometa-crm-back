@@ -1,8 +1,11 @@
 import { prisma } from '../../config/prisma.js'
 import { EMPLOYEE_SELECT, PARTICIPANT_ROLES } from './access.js'
-import { currentMonthKey, monthKeyOf, monthsBetween, shiftMonth } from './month.js'
+import { currentMonthKey, monthKeyOf } from './month.js'
 import { employeeCard, profileCard } from './shape.js'
 import { computeRows } from './teamRows.js'
+import { monthsToClose, snapshotEmployee, snapshotWork } from './closeRules.js'
+
+export { snapshotRow } from './closeRules.js'
 
 /**
  * Закрытие месяца. 1 числа в 00:10 по Москве прошлый месяц закрывается сам:
@@ -31,23 +34,6 @@ export async function isMonthClosed(monthKey, db = prisma) {
   return Boolean(await db.motivationMonthClose.findUnique({ where: { monthKey }, select: { monthKey: true } }))
 }
 
-/** Строка снимка в том же виде, что строка живой таблицы команды. */
-export function snapshotRow(r) {
-  return {
-    employee: r.employee,
-    profile: r.profile,
-    bankCents: r.bankCents,
-    prizePoints: r.prizePoints,
-    levelPoints: r.levelPoints,
-    currentLevel: r.currentLevel,
-    levelsCount: r.levelsCount,
-    earnedCents: r.earnedCents,
-    next: null,
-    work: r.work,
-    eventsCount: r.eventsCount,
-    away: null,
-  }
-}
 
 /**
  * Закрыть месяц. Только прошлый: текущий ещё идёт. Возвращает, сколько
@@ -74,7 +60,7 @@ export async function closeMonth(monthKey, now = new Date()) {
         data: rows.map(({ user, profile, result, eventsCount }) => ({
           monthKey,
           userId: user.id,
-          employee: employeeCard(user),
+          employee: snapshotEmployee(employeeCard(user)),
           profile: profileCard(profile),
           bankCents: result.bankCents,
           earnedCents: result.earnedCents,
@@ -84,7 +70,9 @@ export async function closeMonth(monthKey, now = new Date()) {
           levelsCount: result.levels.length,
           eventsCount,
           levels: result.levels,
-          work: result.work.current ? { position: result.work.current.position, title: result.work.current.title } : null,
+          // Уровень работы целиком: экран человека за закрытый месяц берёт
+          // его отсюда, как и премию, — пороги потом могли поменять.
+          work: snapshotWork(result.work),
         })),
       })
     }
@@ -103,12 +91,8 @@ export async function catchUpClose(now = new Date()) {
     prisma.motivationEvent.findFirst({ orderBy: { occurredAt: 'asc' }, select: { occurredAt: true } }),
   ])
   const firsts = [assignment?.from, bank?.occurredAt, event?.occurredAt].filter(Boolean).map(monthKeyOf).sort()
-  const lastPast = shiftMonth(currentMonthKey(now), -1)
-  if (!firsts.length || firsts[0] > lastPast) return []
-  const closed = await closedMonthSet()
   const done = []
-  for (const monthKey of monthsBetween(firsts[0], lastPast)) {
-    if (closed.has(monthKey)) continue
+  for (const monthKey of monthsToClose(firsts[0] ?? null, currentMonthKey(now), await closedMonthSet())) {
     const res = await closeMonth(monthKey, now)
     if (res) done.push(res)
   }

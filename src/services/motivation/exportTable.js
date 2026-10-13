@@ -73,7 +73,10 @@ export function exportFileName(monthKey, format) {
  */
 export function toCsv(table) {
   const cell = (v) => {
-    const s = typeof v === 'number' ? String(v).replace('.', ',') : String(v ?? '')
+    let s = typeof v === 'number' ? String(v).replace('.', ',') : String(v ?? '')
+    // Текст, начинающийся с «=», «+», «-» или «@», Excel выполнит как
+    // формулу — апостроф в начале делает его просто текстом.
+    if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`
     return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }
   const lines = [table.columns, ...table.body, table.totalsRow].map((row) => row.map(cell).join(';'))

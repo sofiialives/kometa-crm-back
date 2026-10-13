@@ -119,20 +119,23 @@ export async function getOverview(actor, userId, month, now = new Date()) {
         earnedCents: result.earnedCents,
         next: result.next,
       },
-    work: {
-      points: result.levelPoints,
-      levels: result.work.levels,
-      current: result.work.current,
-      next: result.work.next,
-      pointsLeft: result.work.pointsLeft,
-    },
+    work: snap?.work?.levels
+      ? { points: snap.levelPoints, levels: snap.work.levels, current: snap.work.current, next: snap.work.next, pointsLeft: snap.work.pointsLeft }
+      : {
+        points: result.levelPoints,
+        levels: result.work.levels,
+        current: result.work.current,
+        next: result.work.next,
+        pointsLeft: result.work.pointsLeft,
+      },
     history,
     unseen: isSelf ? { bankCents: unseenBankCents, events: unseenEvents } : null,
     permissions: {
       // Всё это — только владелец. Руководитель и сам сотрудник смотрят.
       canManage: canManageEmployee,
       canWriteOff: canManageEmployee,
-      canCancel: canManageEmployee,
+      // Закрытый месяц уже посчитан — отменять в нём нечего.
+      canCancel: canManageEmployee && !closed,
     },
   }
 }

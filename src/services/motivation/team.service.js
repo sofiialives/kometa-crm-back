@@ -5,6 +5,7 @@ import { assertAdmin, assertViewer, EMPLOYEE_SELECT, PARTICIPANT_ROLES } from '.
 import { assignmentsAt } from './profiles.js'
 import { computeRows } from './teamRows.js'
 import { loadClosedMonth, snapshotRow } from './monthClose.service.js'
+import { sortByName } from './closeRules.js'
 import { employeeCard, profileCard } from './shape.js'
 import { activeAways } from './callJournal.service.js'
 
@@ -62,9 +63,11 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
   let rows
   if (closed) {
     // Закрытый месяц — из снимка: шкала и поздние правки его не меняют.
-    rows = closed.results
+    // Фото — нынешнее: в снимке его нет.
+    const avatars = new Map(users.map((u) => [u.id, u.avatarUrl]))
+    rows = sortByName(closed.results
       .filter((r) => roles.includes(r.employee.role) && (!scope || r.employee.department?.id === scope))
-      .map(snapshotRow)
+      .map((r) => snapshotRow(r, avatars.get(r.userId))))
   } else {
     const [computed, aways] = await Promise.all([
       computeRows(users, monthKey, now),
@@ -153,7 +156,8 @@ export async function clientPeople(actor, clientId) {
   const client = await prisma.client.findUnique({ where: { id: clientId }, select: { id: true, name: true } })
   if (!client) throw ApiError.notFound('Клиент не найден')
   const users = await prisma.user.findMany({
-    where: { role: { in: PARTICIPANT_ROLES }, active: true, assignedWorks: { some: { clientId } } },
+    // Только действующие работы: закрытые давно и не про этот продукт.
+    where: { role: { in: PARTICIPANT_ROLES }, active: true, assignedWorks: { some: { clientId, status: 'active' } } },
     select: EMPLOYEE_SELECT,
     orderBy: { name: 'asc' },
   })

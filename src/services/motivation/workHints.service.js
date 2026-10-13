@@ -37,9 +37,24 @@ export async function createWorkHint(work) {
 }
 
 /** Ждущие подсказки — новые сверху: свежая работа важнее старой. */
-export async function listHints(actor) {
+export async function listHints(actor, now = new Date()) {
   assertAdmin(actor, 'Подсказки видит только владелец')
-  const hints = await prisma.motivationWorkHint.findMany({ where: { status: 'pending' }, orderBy: { createdAt: 'desc' }, take: 100 })
+  let hints = await prisma.motivationWorkHint.findMany({ where: { status: 'pending' }, orderBy: { createdAt: 'desc' } })
+
+  // Исполнителей берём нынешних: руководитель мог поменять их после
+  // создания работы. Работу удалили — подсказка больше не нужна.
+  const works = await prisma.work.findMany({
+    where: { id: { in: hints.map((h) => h.workId) } },
+    select: { id: true, title: true, assignees: { select: { id: true } } },
+  })
+  const workById = new Map(works.map((w) => [w.id, w]))
+  const gone = hints.filter((h) => !workById.has(h.workId)).map((h) => h.id)
+  if (gone.length) {
+    await prisma.motivationWorkHint.updateMany({ where: { id: { in: gone } }, data: { status: 'dismissed', decidedAt: now } })
+    hints = hints.filter((h) => workById.has(h.workId))
+  }
+  hints = hints.map((h) => ({ ...h, workTitle: workById.get(h.workId).title, assigneeIds: workById.get(h.workId).assignees.map((a) => a.id) }))
+
   const ids = [...new Set(hints.flatMap((h) => h.assigneeIds))]
   // Пополнить банк можно только тем, у кого он есть: сотрудникам и
   // руководителям, и только работающим.

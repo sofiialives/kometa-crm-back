@@ -83,3 +83,10 @@ describe('CSV и TXT', () => {
     assert.ok(lines.some((l) => l.includes('Итого: 3 чел.')))
   })
 })
+
+describe('CSV не превращает текст в формулы', () => {
+  test('имя с «=» в начале выходит текстом', () => {
+    const t = buildExportTable({ monthKey: '2026-10', rows: [row('=HYPERLINK("x")', 'Дизайн')] })
+    assert.ok(toCsv(t).includes(`"'=HYPERLINK(""x"")"`))
+  })
+})

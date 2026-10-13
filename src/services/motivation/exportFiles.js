@@ -1,32 +1,39 @@
 import { createRequire } from 'node:module'
-import ExcelJS from 'exceljs'
-import PdfPrinter from 'pdfmake'
-import { AlignmentType, Document, Packer, PageOrientation, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } from 'docx'
 import { toCsv, toTxt } from './exportTable.js'
 
 /**
  * Файлы выгрузки из одной таблицы (exportTable.js): Excel, PDF, Word, CSV и
  * TXT. Excel — с настоящими числами, чтобы дальше считать в таблице; PDF и
  * Word — для печати и отправки.
+ *
+ * Библиотеки грузятся при первой выгрузке, а не при старте сервера: они
+ * тяжёлые, а нужны раз в месяц, и сбой одной из них не должен ронять весь API.
  */
 
 const require = createRequire(import.meta.url)
-// Шрифт с кириллицей лежит внутри pdfmake: сам Roboto, ничего качать не нужно.
-const vfs = require('pdfmake/build/vfs_fonts.js')
-const font = (name) => Buffer.from(vfs[name], 'base64')
-const printer = new PdfPrinter({
-  Roboto: {
-    normal: font('Roboto-Regular.ttf'),
-    bold: font('Roboto-Medium.ttf'),
-    italics: font('Roboto-Italic.ttf'),
-    bolditalics: font('Roboto-MediumItalic.ttf'),
-  },
-})
+let pdfPrinter
+async function getPdfPrinter() {
+  if (pdfPrinter) return pdfPrinter
+  const { default: PdfPrinter } = await import('pdfmake')
+  // Шрифт с кириллицей лежит внутри pdfmake: сам Roboto, ничего качать не нужно.
+  const vfs = require('pdfmake/build/vfs_fonts.js')
+  const font = (name) => Buffer.from(vfs[name], 'base64')
+  pdfPrinter = new PdfPrinter({
+    Roboto: {
+      normal: font('Roboto-Regular.ttf'),
+      bold: font('Roboto-Medium.ttf'),
+      italics: font('Roboto-Italic.ttf'),
+      bolditalics: font('Roboto-MediumItalic.ttf'),
+    },
+  })
+  return pdfPrinter
+}
 
 const NUMERIC = new Set([0, 5, 6, 8])
 const MONEY = new Set([5, 8])
 
 async function toXlsx(table) {
+  const { default: ExcelJS } = await import('exceljs')
   const book = new ExcelJS.Workbook()
   book.creator = 'KOMETA CRM'
   const sheet = book.addWorksheet('Итоги', { views: [{ state: 'frozen', ySplit: 4 }] })
@@ -41,14 +48,16 @@ async function toXlsx(table) {
   total.font = { bold: true }
   table.columns.forEach((title, i) => {
     const col = sheet.getColumn(i + 1)
-    if (MONEY.has(i)) col.numFmt = '#,##0.##'
+    // Две цифры после запятой всегда: «#,##0.##» рисует целые как «150.».
+    if (MONEY.has(i)) col.numFmt = '#,##0.00'
     const longest = Math.max(title.length, ...table.body.map((r) => String(r[i] ?? '').length), String(table.totalsRow[i] ?? '').length)
     col.width = Math.min(40, Math.max(6, longest + 2))
   })
   return Buffer.from(await book.xlsx.writeBuffer())
 }
 
-function toPdf(table) {
+async function toPdf(table) {
+  const printer = await getPdfPrinter()
   const cell = (v, i, style) => ({ text: String(v ?? ''), alignment: NUMERIC.has(i) ? 'right' : 'left', style })
   const doc = {
     pageSize: 'A4',
@@ -83,7 +92,8 @@ function toPdf(table) {
   })
 }
 
-function toDocx(table) {
+async function toDocx(table) {
+  const { AlignmentType, Document, Packer, PageOrientation, Paragraph, Table, TableCell, TableRow, TextRun, WidthType } = await import('docx')
   const cell = (v, i, bold = false) => new TableCell({
     children: [new Paragraph({
       alignment: NUMERIC.has(i) ? AlignmentType.RIGHT : AlignmentType.LEFT,
