@@ -93,7 +93,7 @@ export async function lateForTask(user, taskId) {
 /** Ответ на «что случилось?» — Яну. */
 export async function reportTaskLate(user, taskId, text, now = new Date()) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { title: true, startAt: true } })
-  await logEvent(user.id, 'task_late', { at: now, text, data: { taskId, taskTitle: task?.title ?? null, startAt: task?.startAt ?? null } })
+  await logEvent(user.id, 'task_late', { at: now, text, data: { taskId, taskTitle: task?.title ?? null, startAt: task?.startAt?.toISOString() ?? null } })
   await tell(user.id, 'Понял, передал Яну.')
   await tellOwners(`⏳ ${nameOf(user)} не успевает начать «${escapeHtml(short(task?.title || 'задачу', 120))}»${task?.startAt ? ` (по плану в ${hm(task.startAt)})` : ''}:\n«${escapeHtml(text.slice(0, 400))}»`)
 }

@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { assertCanView, assertViewer, canView, EMPLOYEE_SELECT, loadEmployee, PARTICIPANT_ROLES } from './access.js'
-import { breakItem, groupByDay, summarize } from './botJournalRules.js'
+import { breakItem, forceMajeureItem, groupByDay, redact, summarize } from './botJournalRules.js'
 import { currentMonthKey, monthRange, monthsBetween, shiftMonth } from './month.js'
 import { employeeCard } from './shape.js'
 
@@ -33,29 +33,34 @@ export async function getBotJournal(actor, { userId, month }, now = new Date()) 
   assertCanView(actor, employee)
   const full = actor.role === 'admin'
   const monthKey = month || currentMonthKey(now)
-  const { start, end } = monthRange(monthKey)
+  const window = monthRange(monthKey)
+  const { start, end } = window
 
-  const [aways, answers, events, messages, linked] = await Promise.all([
+  const [aways, answers, events, latest, linked] = await Promise.all([
+    // Пересекает месяц и не снята до его начала.
     prisma.motivationAway.findMany({
-      where: { userId, from: { lt: end }, until: { gt: start } },
+      where: { userId, from: { lt: end }, until: { gt: start }, OR: [{ endedAt: null }, { endedAt: { gt: start } }] },
       include: { createdBy: { select: { name: true } } },
       orderBy: { from: 'asc' },
     }),
     prisma.botCheckinAnswer.findMany({
       where: { userId, checkin: { day: { startsWith: monthKey } } },
-      include: { checkin: { select: { day: true, startedAt: true, plannedAt: true } } },
+      include: { checkin: { select: { day: true, startedAt: true } } },
     }),
     prisma.botEvent.findMany({ where: { userId, at: { gte: start, lt: end } }, orderBy: { at: 'asc' } }),
+    // Переписку — только владельцу и с конца: у очень активных обрежутся
+    // самые старые дни, а не свежие.
     full
       ? prisma.botMessage.findMany({
         where: { userId, createdAt: { gte: start, lt: end } },
-        orderBy: { createdAt: 'asc' },
-        take: MESSAGES_LIMIT,
+        orderBy: { createdAt: 'desc' },
+        take: MESSAGES_LIMIT + 1,
         select: { createdAt: true, direction: true, text: true },
       })
       : [],
     prisma.telegramLink.findUnique({ where: { userId }, select: { chatId: true } }),
   ])
+  const messages = latest.slice(0, MESSAGES_LIMIT).reverse()
 
   const penalties = await prisma.motivationEvent.findMany({
     where: { id: { in: answers.map((a) => a.eventId).filter(Boolean) } },
@@ -65,23 +70,11 @@ export async function getBotJournal(actor, { userId, month }, now = new Date()) 
 
   const items = []
   for (const a of aways) {
-    if (a.kind === 'break') {
-      items.push({ ...breakItem(a, now), reason: full ? a.reason : null })
-    } else {
-      items.push({
-        kind: 'force_majeure',
-        id: a.id,
-        at: a.from,
-        until: a.until,
-        endedAt: a.endedAt,
-        source: a.source,
-        by: a.createdBy?.name ?? null,
-        reason: full ? a.reason : null,
-      })
-    }
+    if (a.kind === 'break') items.push({ ...breakItem(a, now, window), reason: a.reason })
+    else items.push(forceMajeureItem(a, window))
   }
   for (const a of answers) {
-    // Чек-ин, который ещё не начался или день пропущен, — не событие.
+    // Чек-ин, который не начинался (день пропущен), — не событие.
     if (!a.checkin.startedAt) continue
     const penalty = a.eventId ? penaltyOf.get(a.eventId) : null
     items.push({
@@ -90,14 +83,12 @@ export async function getBotJournal(actor, { userId, month }, now = new Date()) 
       at: a.checkin.startedAt,
       status: a.status,
       answeredAt: a.answeredAt,
-      // Ответ — что человек делает; причина пропуска бывает личной.
-      answer: full ? a.answer : null,
-      points: penalty && !penalty.cancelledAt ? penalty.prizePoints : null,
+      answer: a.answer,
+      points: penalty ? penalty.prizePoints : null,
+      penaltyCancelled: Boolean(penalty?.cancelledAt),
     })
   }
-  for (const e of events) {
-    items.push({ kind: e.type, id: e.id, at: e.at, text: full ? e.text : null, data: publicData(e, full) })
-  }
+  for (const e of events) items.push({ kind: e.type, id: e.id, at: e.at, text: e.text, data: e.data ?? null })
 
   return {
     employee: employeeCard(employee),
@@ -106,15 +97,8 @@ export async function getBotJournal(actor, { userId, month }, now = new Date()) 
     currentMonth: currentMonthKey(now),
     telegram: Boolean(linked?.chatId),
     full,
+    messagesTruncated: latest.length > MESSAGES_LIMIT,
     summary: summarize(items),
-    days: groupByDay(items, messages.map((m) => ({ at: m.createdAt, direction: m.direction, text: m.text }))),
+    days: groupByDay(items.map((i) => redact(i, full)), messages.map((m) => ({ at: m.createdAt, direction: m.direction, text: m.text }))),
   }
-}
-
-/** Данные события без лишнего: руководителю — без того, что человек написал. */
-function publicData(event, full) {
-  const data = event.data ?? null
-  if (!data || full) return data
-  const { taskTitle, taskId, startAt, until, approved } = data
-  return { taskTitle, taskId, startAt, until, approved }
 }

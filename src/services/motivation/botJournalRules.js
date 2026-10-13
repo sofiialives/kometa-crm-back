@@ -7,29 +7,78 @@ import { dayKeyOf } from './month.js'
 
 const minutes = (from, to) => Math.max(0, Math.round((new Date(to).getTime() - new Date(from).getTime()) / 60000))
 
+// Бот ждёт 15 минут после срока, прежде чем считать, что человек пропал.
+const SILENT_AFTER_MIN = 15
+// «Вернулся» позже трёх часов после срока — не возвращение из отлучки, а
+// просто следующее сообщение (вечером «ухожу домой», утром «я на месте»).
+// Так же считает и бот (away.js): иначе отлучка вышла бы в 6 часов.
+const STALE_RETURN_MIN = 3 * 60
+
+const later = (a, b) => (new Date(a) > new Date(b) ? new Date(a) : new Date(b))
+const earlier = (a, b) => (new Date(a) < new Date(b) ? new Date(a) : new Date(b))
+
 /**
  * Отлучка в журнале. Вернулся — время до возвращения; срок прошёл, а он не
- * отметился — до срока (и помечаем «не отметился»); ещё идёт — до сейчас.
+ * отметился — до срока (и «не отметился»); ещё идёт — до сейчас. Месяц
+ * (window) режет минуты: отлучка через полночь 31-го считается по частям.
  */
-export function breakItem(away, now = new Date()) {
-  const returned = away.returnedAt ? new Date(away.returnedAt) : null
+export function breakItem(away, now = new Date(), window = null) {
   const until = new Date(away.until)
-  const ongoing = !returned && !away.endedAt && until > now
-  const end = returned ?? (ongoing ? now : (away.endedAt && new Date(away.endedAt) < until ? new Date(away.endedAt) : until))
+  const returnedRaw = away.returnedAt ? new Date(away.returnedAt) : null
+  const staleReturn = returnedRaw && minutes(until, returnedRaw) > STALE_RETURN_MIN
+  const returned = staleReturn ? null : returnedRaw
+  const endedEarly = away.endedAt && new Date(away.endedAt) < until ? new Date(away.endedAt) : null
+  const ongoing = !returnedRaw && !endedEarly && until > now
+  const end = returned ?? endedEarly ?? (ongoing ? now : until)
   const late = returned ? minutes(until, returned) : 0
+  const from = window ? later(away.from, window.start) : new Date(away.from)
+  const to = window ? earlier(end, window.end) : end
   return {
     kind: 'break',
     id: away.id,
-    at: away.from,
+    at: from,
+    startedBefore: from > new Date(away.from) ? away.from : null,
     until: away.until,
-    returnedAt: away.returnedAt ?? null,
-    minutes: minutes(away.from, end),
+    returnedAt: returned ? away.returnedAt : null,
+    minutes: minutes(from, to),
     lateMinutes: late > 1 ? late : 0,
     extensions: away.extensions ?? 0,
     ongoing,
-    unmarked: !returned && !ongoing && !away.endedAt,
+    unmarked: !returned && !endedEarly && !ongoing && (staleReturn || minutes(until, now) >= SILENT_AFTER_MIN),
     source: away.source,
   }
+}
+
+/** Форс-мажор в журнале: начался в прошлом месяце — день по началу этого. */
+export function forceMajeureItem(away, window = null) {
+  const from = window ? later(away.from, window.start) : new Date(away.from)
+  return {
+    kind: 'force_majeure',
+    id: away.id,
+    at: from,
+    startedBefore: from > new Date(away.from) ? away.from : null,
+    until: away.until,
+    endedAt: away.endedAt ?? null,
+    source: away.source,
+    by: away.createdBy?.name ?? null,
+    reason: away.reason ?? null,
+  }
+}
+
+/**
+ * Что можно показать смотрящему. Владельцу — всё. Руководителю — только
+ * факты: без причин, ответов на чек-ин, слов человека и того, кто решал.
+ */
+export function redact(item, full) {
+  if (full) return item
+  const { reason, answer, text, ...rest } = item
+  const out = { ...rest, reason: null, answer: null, text: null }
+  if (item.kind === 'force_majeure') out.by = null
+  if (item.data) {
+    const { taskTitle, taskId, startAt, until, approved } = item.data
+    out.data = { taskTitle, taskId, startAt, until, approved }
+  }
+  return out
 }
 
 /** Сводка за месяц по уже собранным строкам журнала. */

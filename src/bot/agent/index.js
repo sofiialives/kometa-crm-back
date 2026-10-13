@@ -51,5 +51,9 @@ export async function pruneNotices(now = new Date()) {
     },
   })
   const messages = await prisma.botMessage.deleteMany({ where: { createdAt: { lt: before } } })
-  if (notices.count || messages.count) console.log(`[агент] уборка: отметок ${notices.count}, сообщений ${messages.count}`)
+  // В журнале действий факт остаётся, а слова человека — нет.
+  const words = await prisma.botEvent.updateMany({ where: { at: { lt: before }, text: { not: null } }, data: { text: null } })
+  if (notices.count || messages.count || words.count) {
+    console.log(`[агент] уборка: отметок ${notices.count}, сообщений ${messages.count}, слов в журнале ${words.count}`)
+  }
 }

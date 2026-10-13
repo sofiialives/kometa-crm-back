@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { breakItem, groupByDay, summarize } from '../botJournalRules.js'
+import { breakItem, forceMajeureItem, groupByDay, redact, summarize } from '../botJournalRules.js'
 
 const T = (hm, day = '2026-11-03') => new Date(`${day}T${hm}:00+03:00`)
 const away = (extra) => ({ id: 'a', from: T('12:00'), until: T('12:30'), returnedAt: null, endedAt: null, extensions: 0, source: 'bot', ...extra })
@@ -26,6 +26,19 @@ describe('отлучка в журнале', () => {
     assert.ok(b.unmarked)
   })
 
+  test('первые 15 минут после срока — ещё не «не отметился», как и у бота', () => {
+    assert.ok(!breakItem(away(), T('12:40')).unmarked)
+    assert.ok(breakItem(away(), T('12:45')).unmarked)
+  })
+
+  test('не отметился, а вечером «ухожу домой» — не 6 часов и не опоздание', () => {
+    const b = breakItem(away({ from: T('14:00'), until: T('15:00'), returnedAt: T('18:30') }), T('19:00'))
+    assert.equal(b.minutes, 60)
+    assert.equal(b.lateMinutes, 0)
+    assert.ok(b.unmarked)
+    assert.equal(b.returnedAt, null)
+  })
+
   test('ещё идёт — до сейчас', () => {
     const b = breakItem(away(), T('12:10'))
     assert.equal(b.minutes, 10)
@@ -36,6 +49,47 @@ describe('отлучка в журнале', () => {
     const b = breakItem(away({ endedAt: T('12:15') }), T('15:00'))
     assert.equal(b.minutes, 15)
     assert.ok(!b.unmarked)
+  })
+})
+
+describe('граница месяца', () => {
+  const nov = { start: new Date('2026-11-01T00:00:00+03:00'), end: new Date('2026-12-01T00:00:00+03:00') }
+
+  test('отлучка через полночь 31-го — в ноябре только ноябрьская часть, день — 1 ноября', () => {
+    const b = breakItem(away({ from: T('23:50', '2026-10-31'), until: T('00:20', '2026-11-01'), returnedAt: T('00:18', '2026-11-01') }), T('12:00', '2026-11-01'), nov)
+    assert.equal(b.minutes, 18)
+    assert.ok(b.startedBefore)
+    assert.deepEqual(groupByDay([b]).map((d) => d.day), ['2026-11-01'])
+  })
+
+  test('форс-мажор с 28 октября — в ноябре с 1 ноября и с пометкой', () => {
+    const f = forceMajeureItem({ id: 'f', from: T('09:00', '2026-10-28'), until: T('18:00', '2026-11-03'), source: 'owner' }, nov)
+    assert.equal(groupByDay([f])[0].day, '2026-11-01')
+    assert.ok(f.startedBefore)
+  })
+})
+
+describe('что видит руководитель', () => {
+  test('без причин, ответов, слов и того, кто решал', () => {
+    const items = [
+      { kind: 'break', reason: 'к врачу' },
+      { kind: 'force_majeure', reason: 'заболел', by: 'Ян' },
+      { kind: 'checkin', answer: 'делаю отчёт' },
+      { kind: 'late', text: 'пробки', data: { until: 'x' } },
+      { kind: 'fm_decision', data: { approved: false, by: 'Ян' } },
+    ].map((i) => redact(i, false))
+    for (const i of items) {
+      assert.equal(i.reason, null)
+      assert.equal(i.answer, null)
+      assert.equal(i.text, null)
+    }
+    assert.equal(items[1].by, null)
+    assert.equal(items[4].data.by, undefined)
+    assert.equal(items[4].data.approved, false)
+  })
+
+  test('владелец видит всё', () => {
+    assert.equal(redact({ kind: 'break', reason: 'к врачу' }, true).reason, 'к врачу')
   })
 })
 
