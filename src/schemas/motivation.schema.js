@@ -41,6 +41,10 @@ export const userMonthSchema = z.object({
   query: z.object({ month: optional(month) }),
 })
 
+export const botJournalSchema = z.object({
+  query: z.object({ userId: objectId, month: optional(month) }),
+})
+
 export const userIdParamSchema = z.object({
   params: z.object({ id: objectId }),
 })

@@ -3,7 +3,7 @@ import { parseUntil } from '../parse.js'
 import { isQuietHour, isWorkday, mskDayKey } from '../plan.js'
 import { escapeHtml } from '../telegram.js'
 import { at, duration, endOfDay, hm, minutesBetween } from './format.js'
-import { claimNotice, hasNotice, nameOf, releaseNotice, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
+import { claimNotice, hasNotice, logEvent, nameOf, releaseNotice, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
 import * as state from './state.js'
 
 /**
@@ -159,7 +159,8 @@ export function hasEndedDay(userId, now = new Date()) {
 /** «Ухожу домой», «на сегодня всё» — закрываем отлучку, если была, и прощаемся. */
 export async function dayEnd(user, now = new Date()) {
   state.clear(user.id)
-  await claimNotice(`dayend:${mskDayKey(now)}:${user.id}`)
+  // В журнал — один раз за день, сколько бы раз ни прощался.
+  if (await claimNotice(`dayend:${mskDayKey(now)}:${user.id}`)) await logEvent(user.id, 'day_end', { at: now })
   const open = await openBreak(user.id, now)
   if (open) {
     await prisma.motivationAway.update({
@@ -221,10 +222,11 @@ export async function runningLate(user, { until = null, text = '' } = {}, now = 
     await tell(user.id, 'До скольки задерживаешься? Нажми кнопку или напиши время.', { buttons: BREAK_BUTTONS('ax') })
     return null
   }
-  // Одно «задерживаюсь» в 10 минут: десять подряд Яну не нужны.
+  // Одно «задерживаюсь» в 10 минут: десять подряд Яну и в журнал не нужны.
   const bucket = Math.floor(now.getTime() / (10 * 60000))
   const res = await sendOnce(`late:${user.id}:${bucket}`, () =>
     tellOwners(`⏳ ${nameOf(user)}: задержка${until ? ` до <b>${hm(until)}</b>` : ''} — «${escapeHtml(text.slice(0, 300))}»`))
+  if (!res.skipped) await logEvent(user.id, 'late', { at: now, text, data: until ? { until: until.toISOString() } : null })
   await tell(user.id, res.skipped ? 'Я уже передал Яну, что ты задерживаешься.' : 'Понял, передал Яну.')
   return null
 }
@@ -255,6 +257,7 @@ export async function reportForceMajeure(user, text, message, now = new Date()) 
     return
   }
   await claimNotice(`fm-open:${user.id}:${message.id}`)
+  await logEvent(user.id, 'fm_request', { at: now, text, data: { until: until.toISOString() } })
   await tell(user.id, 'Передал Яну. Как подтвердит — поставлю метку, и до её конца я тебя не трогаю. Выздоравливай / держись 🙏')
 }
 
@@ -279,6 +282,7 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
   if (!(await claimNotice(`fm:${messageId}`))) return { text: null, toast: 'Уже решено' }
   const user = message.user
   if (!approve) {
+    await logEvent(user.id, 'fm_decision', { at: now, data: { approved: false, by: owner.name } })
     await tell(user.id, 'Ян не подтвердил форс-мажор. Если что-то изменилось — напиши ему.')
     return { text: `❌ ${nameOf(user)}: форс-мажор не подтверждён.\n«${escapeHtml(message.text.slice(0, 300))}»`, rejectedUserId: user.id }
   }
@@ -292,6 +296,7 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
       where: { userId: user.id, status: 'skipped', answer: FM_PENDING },
       data: { answer: 'форс-мажор подтверждён' },
     })
+    await logEvent(user.id, 'fm_decision', { at: now, data: { approved: true, by: owner.name, until: current.until.toISOString() } })
     return { text: `✅ ${nameOf(user)}: форс-мажор уже стоит до ${at(current.until, now)} — оставил как есть.\n«${escapeHtml(message.text.slice(0, 300))}»` }
   }
   try {
@@ -316,6 +321,7 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
     where: { userId: user.id, status: 'skipped', answer: FM_PENDING },
     data: { answer: 'форс-мажор подтверждён' },
   })
+  await logEvent(user.id, 'fm_decision', { at: now, data: { approved: true, by: owner.name, until: until.toISOString() } })
   await tell(user.id, `Ян подтвердил форс-мажор до ${at(until, now)}. До этого времени я тебя не дёргаю.`)
   return { text: `✅ ${nameOf(user)}: форс-мажор до ${at(until, now)} — метка стоит в CRM.\n«${escapeHtml(message.text.slice(0, 300))}»` }
 }

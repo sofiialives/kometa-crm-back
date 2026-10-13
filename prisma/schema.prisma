@@ -104,6 +104,7 @@ model User {
   motivationWorkHints       MotivationWorkHint[]   @relation("MotivationWorkHintDecidedBy")
   botMessages               BotMessage[]
   botCheckinAnswers         BotCheckinAnswer[]
+  botEvents                 BotEvent[]
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -1104,6 +1105,31 @@ model BotMessage {
   createdAt DateTime @default(now())
 
   @@index([userId, createdAt])
+}
+
+// Действия человека в боте, которых нет в других таблицах: «задерживаюсь»
+// без отлучки, «не успеваю начать задачу», «беру в работу», «на сегодня
+// всё», заявка на форс-мажор и решение по ней. Отлучки и форс-мажоры лежат
+// в MotivationAway, чек-ины — в BotCheckinAnswer. Всё вместе — журнал
+// сотрудника во вкладке «Журнал бота».
+model BotEvent {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // late, task_late, task_take, day_end, fm_request, fm_decision.
+  type String
+  at   DateTime @default(now())
+
+  // Что человек написал своими словами — видит только владелец.
+  text String?
+  // Остальное: название задачи, до скольки, решение Яна.
+  data Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, at])
 }
 
 // Что бот уже отправил: «напомнил о задаче X», «написал про заявку Y».

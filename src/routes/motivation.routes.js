@@ -7,7 +7,7 @@ import {
   topUpSchema, updateEventTypeSchema, updateProfileSchema, userIdParamSchema, userMonthSchema, workLevelsSchema,
   writeOffSchema,
   reviewListSchema, approveReviewSchema, rejectReviewSchema,
-  callDaySchema, callMarkSchema, awaySchema, exportSchema,
+  callDaySchema, callMarkSchema, awaySchema, exportSchema, botJournalSchema,
 } from '../schemas/motivation.schema.js'
 import * as c from '../controllers/motivation.controller.js'
 
@@ -39,6 +39,9 @@ router.get('/team', viewer, validate(teamQuerySchema), c.getTeam)
 router.get('/team/months', viewer, c.getTeamMonths)
 router.get('/users/:id', viewer, validate(userMonthSchema), c.getEmployee)
 router.get('/users/:id/conditions', viewer, validate(userIdParamSchema), c.getEmployeeConditions)
+// Журнал бота: владелец — всех и с перепиской, руководитель — свой отдел, только факты.
+router.get('/bot-journal/people', viewer, c.getBotJournalPeople)
+router.get('/bot-journal', viewer, validate(botJournalSchema), c.getBotJournal)
 
 // Менять деньги и баллы, и все настройки — только владелец.
 const admin = authorize('admin')
