@@ -20,3 +20,9 @@ export function take(userId) {
 export function clear(userId) {
   waiting.delete(userId)
 }
+
+/** Ждёт ли бот ответа — не забирая ожидание. */
+export function peek(userId) {
+  const item = waiting.get(userId)
+  return item && item.until > Date.now() ? item : null
+}

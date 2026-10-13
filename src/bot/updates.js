@@ -44,6 +44,13 @@ async function handleMessage(msg) {
     return
   }
 
+  // Один чат — один человек: если этот телеграм был привязан к другому
+  // аккаунту CRM, там связь снимаем, иначе непонятно, кто нажимает кнопки.
+  await prisma.telegramLink.updateMany({
+    where: { chatId: String(chatId), userId: { not: link.userId } },
+    data: { chatId: null, username: null, linkedAt: null },
+  })
+
   // Код гасим сразу: ссылка одноразовая, иначе ею мог бы
   // воспользоваться кто-то ещё.
   await prisma.telegramLink.update({
@@ -74,7 +81,12 @@ async function handleMessage(msg) {
 /** Нажатие кнопки. Кто нажал — по связке чата с CRM. */
 async function handleCallback(cb) {
   const chatId = cb.message?.chat?.id
-  const user = chatId ? await userByChat(chatId) : null
+  // Нажал тот, чей это чат, и только в личной переписке.
+  if (!chatId || cb.message?.chat?.type !== 'private' || String(cb.from?.id) !== String(chatId)) {
+    await answerCallback(cb.id)
+    return
+  }
+  const user = await userByChat(chatId)
   if (!user) {
     await answerCallback(cb.id, 'Сначала подключите телеграм в CRM → Настройки')
     return

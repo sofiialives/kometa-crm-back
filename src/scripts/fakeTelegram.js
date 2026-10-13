@@ -39,7 +39,11 @@ async function body(req) {
   const chunks = []
   for await (const c of req) chunks.push(c)
   const raw = Buffer.concat(chunks).toString()
-  return raw ? JSON.parse(raw) : {}
+  try {
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
 }
 
 const chat = (chatId) => ({ id: Number(chatId), type: 'private' })
@@ -78,6 +82,8 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { ok: true, result: ready() })
   }
   if (method === 'sendMessage') {
+    // Чаты с номером от 9990000 — «бот заблокирован»: проверка недоставки.
+    if (Number(params.chat_id) >= 9990000) return json(res, 403, { ok: false, error_code: 403, description: 'Forbidden: bot was blocked by the user' })
     const id = messageId++
     // Как настоящий телеграм: HTML должен быть корректным, иначе отказ.
     const stripped = String(params.text).replace(/<\/?(b|i|u|s|code|pre|a)( [^>]*)?>/g, '')
@@ -100,4 +106,5 @@ const server = http.createServer(async (req, res) => {
   return json(res, 404, { ok: false, description: `Not Found: ${method}` })
 })
 
-server.listen(PORT, () => console.log(`[поддельный телеграм] http://localhost:${PORT}`))
+// Только своя машина: управляющие адреса (/_say, /_press) без пароля.
+server.listen(PORT, '127.0.0.1', () => console.log(`[поддельный телеграм] http://localhost:${PORT}`))

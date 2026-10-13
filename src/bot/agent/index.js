@@ -36,10 +36,15 @@ export async function runMorning(now = new Date()) {
   console.log(`[агент] утро: без задач на сегодня — ${sent}`)
 }
 
-/** Отметки «уже отправил» старше трёх месяцев больше не нужны. */
+/**
+ * Отметки «уже отправил» и переписка старше трёх месяцев больше не нужны.
+ * Переписку дольше и не храним: в ней бывает личное («заболел»).
+ */
 export async function pruneNotices(now = new Date()) {
-  const { count } = await prisma.botNotice.deleteMany({
-    where: { sentAt: { lt: new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000) }, NOT: { key: { startsWith: 'feed:' } } },
+  const before = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+  const notices = await prisma.botNotice.deleteMany({
+    where: { sentAt: { lt: before }, NOT: { key: { startsWith: 'feed:' } } },
   })
-  if (count) console.log(`[агент] старых отметок удалено: ${count}`)
+  const messages = await prisma.botMessage.deleteMany({ where: { createdAt: { lt: before } } })
+  if (notices.count || messages.count) console.log(`[агент] уборка: отметок ${notices.count}, сообщений ${messages.count}`)
 }

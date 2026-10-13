@@ -1087,8 +1087,8 @@ model MotivationWorkHint {
   @@index([status, createdAt])
 }
 
-// Переписка бота: память агента и лимит сообщений в день. Входящие — то,
-// что человек написал сам (нажатия кнопок сюда не пишутся).
+// Переписка бота: журнал по каждому человеку, память агента и лимит
+// сообщений в день. Хранится 90 дней, потом чистится.
 model BotMessage {
   id String @id @default(cuid())
 
@@ -1096,7 +1096,8 @@ model BotMessage {
   user   User?   @relation(fields: [userId], references: [id])
   chatId String
 
-  // in — от человека, out — от бота.
+  // out — от бота; in — человек написал сам; reply — ответ на вопрос бота;
+  // button — нажатая кнопка. В дневной лимит идут только in.
   direction String
   text      String
 

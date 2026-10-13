@@ -6,7 +6,7 @@ import { updateTaskStatus } from '../../services/task.service.js'
 import { dueInMinutes, isWorkday, mskDayKey } from '../plan.js'
 import { activeAway } from './away.js'
 import { hm, short } from './format.js'
-import { claimNotice, crmButton, firstName, nameOf, row, tell, tellOwners } from './notify.js'
+import { crmButton, firstName, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
 import * as state from './state.js'
 
 /**
@@ -36,10 +36,9 @@ export async function morningNoTasks(now = new Date()) {
   let sent = 0
   for (const person of people) {
     if (await activeAway(person.id, now)) continue
-    if (!(await claimNotice(`morning:${day}:${person.id}`))) continue
-    const res = await tell(person.id,
-      `${firstName(person.name)}, на сегодня у тебя в CRM нет ни одной задачи со сроком на сегодня. Проставь, пожалуйста, задачи на день 🙏`,
-      { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) })
+    const res = await sendOnce(`morning:${day}:${person.id}`, () => tell(person.id,
+      `${escapeHtml(firstName(person.name))}, на сегодня у тебя в CRM нет ни одной задачи со сроком на сегодня. Проставь, пожалуйста, задачи на день 🙏`,
+      { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) }))
     if (res.ok) sent += 1
   }
   return sent
@@ -56,10 +55,9 @@ export async function tickTaskStarts(now = new Date()) {
   for (const task of tasks) {
     if (!dueInMinutes(task.startAt, now, TASK_START_BEFORE_MIN)) continue
     if (await activeAway(task.ownerId, now)) continue
-    if (!(await claimNotice(`task-start:${task.id}:${task.startAt.getTime()}`))) continue
-    await tell(task.ownerId,
+    await sendOnce(`task-start:${task.id}:${task.startAt.getTime()}`, () => tell(task.ownerId,
       `Через 5 минут, в <b>${hm(task.startAt)}</b>, начинается задача\n«${escapeHtml(short(task.title, 120))}»\n\nКак начнёшь — перетащи её в «В процессе».`,
-      { buttons: [[{ text: '▶️ Беру в работу', data: `tk:go:${task.id}` }, { text: '⏳ Не успеваю', data: `tk:late:${task.id}` }]] })
+      { buttons: [[{ text: '▶️ Беру в работу', data: `tk:go:${task.id}` }, { text: '⏳ Не успеваю', data: `tk:late:${task.id}` }]] }))
   }
 }
 

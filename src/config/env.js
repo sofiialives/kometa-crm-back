@@ -24,6 +24,19 @@ function jwtSecret(name, devFallback) {
   return devFallback
 }
 
+// Адрес API телеграма. Токен уходит в путь запроса, поэтому подменить адрес
+// можно только локально и только на свою машину. На боевом сервере —
+// всегда настоящий телеграм: чужой адрес получил бы токен и мог бы слать
+// боту поддельные нажатия кнопок.
+const TELEGRAM_API = 'https://api.telegram.org/bot'
+function telegramApiBase() {
+  const value = (process.env.TELEGRAM_API_BASE || '').trim()
+  if (!value || value === TELEGRAM_API) return TELEGRAM_API
+  if (!isProduction && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(value)) return value
+  console.error('[бот] TELEGRAM_API_BASE не принят: на боевом сервере и для чужих адресов — только api.telegram.org')
+  return TELEGRAM_API
+}
+
 export const env = {
   port: process.env.PORT || 4000,
   databaseUrl: process.env.DATABASE_URL || '',
@@ -54,7 +67,7 @@ export const env = {
 
   // Адрес API телеграма. Меняют только для проверки на поддельном
   // телеграме (src/scripts/fakeTelegram.js) — боевой токен локально не нужен.
-  telegramApiBase: process.env.TELEGRAM_API_BASE || 'https://api.telegram.org/bot',
+  telegramApiBase: telegramApiBase(),
 
   // За сколько минут до звонка предупреждать.
   remindBeforeMin: Number(process.env.REMIND_BEFORE_MIN) || 15,

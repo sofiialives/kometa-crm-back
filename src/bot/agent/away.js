@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { parseUntil } from '../parse.js'
 import { escapeHtml } from '../telegram.js'
 import { at, duration, endOfDay, hm, minutesBetween } from './format.js'
-import { claimNotice, nameOf, tell, tellOwners } from './notify.js'
+import { claimNotice, hasNotice, nameOf, releaseNotice, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
 import * as state from './state.js'
 
 /**
@@ -18,6 +18,10 @@ import * as state from './state.js'
  */
 
 const DEFAULT_BREAK_MIN = 60
+// Отлучка из бота — не дольше 8 часов, как и во фразах (parse.js). Дольше —
+// это уже форс-мажор, его подтверждает Ян.
+const MAX_BREAK_MIN = 8 * 60
+export const BREAK_MINUTES = [15, 30, 60, 120]
 const SILENT_AFTER_MIN = 15
 const lockUser = (tx, userId) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`
 
@@ -31,6 +35,10 @@ const BREAK_BUTTONS = (prefix) => [[
   { text: '30 мин', data: `${prefix}:30` },
   { text: '1 час', data: `${prefix}:60` },
   { text: '2 часа', data: `${prefix}:120` },
+]]
+const RETURN_BUTTONS = (awayId) => [[
+  { text: '✅ Да, на месте', data: `rt:y:${awayId}` },
+  { text: '⏳ Задерживаюсь', data: `rt:l:${awayId}` },
 ]]
 
 /** Действующая метка человека — любая: отлучка или форс-мажор. */
@@ -60,6 +68,11 @@ function openBreak(userId, now, db = prisma) {
 export async function startBreak(user, { until = null, note = null } = {}, now = new Date()) {
   const timeGiven = Boolean(until)
   const end = until ?? new Date(now.getTime() + DEFAULT_BREAK_MIN * 60000)
+  const minutes = minutesBetween(now, end)
+  if (!(minutes >= 1 && minutes <= MAX_BREAK_MIN)) {
+    await tell(user.id, 'Такое время не подходит: отлучка — от минуты до 8 часов. Дольше — напиши «форс-мажор» и что случилось.')
+    return { type: 'invalid' }
+  }
 
   const result = await prisma.$transaction(async (tx) => {
     await lockUser(tx, user.id)
@@ -97,7 +110,7 @@ export async function startBreak(user, { until = null, note = null } = {}, now =
       state.expect(user.id, 'break_time', { awayId: away.id })
       await tell(user.id, 'На сколько отходишь? Нажми кнопку или напиши время, например «до 16:30». Не ответишь — считаю час.', { buttons: BREAK_BUTTONS('aw') })
     }
-    await tellOwners(`🚶 ${nameOf(user)}: отлучка до <b>${hm(away.until)}</b> (${left})${timeGiven ? '' : ', время не назвали — считаю час'}.${note ? `\n«${note.slice(0, 200)}»` : ''}`)
+    await tellOwners(`🚶 ${nameOf(user)}: отлучка до <b>${hm(away.until)}</b> (${left})${timeGiven ? '' : ', время не назвали — считаю час'}.${note ? `\n«${escapeHtml(note.slice(0, 200))}»` : ''}`)
     return result
   }
   if (result.type === 'clarified') {
@@ -110,9 +123,14 @@ export async function startBreak(user, { until = null, note = null } = {}, now =
   return result
 }
 
-/** Кнопка «15 мин / 30 мин…» под вопросом «на сколько?» или «до скольки задерживаешься?». */
+/**
+ * Кнопка «15 мин / 30 мин…» под вопросом «на сколько?» или «до скольки
+ * задерживаешься?». Данные кнопки присылает телефон, их можно подделать —
+ * поэтому только минуты с наших кнопок.
+ */
 export function setBreakMinutes(user, minutes, now = new Date()) {
   state.clear(user.id)
+  if (!BREAK_MINUTES.includes(minutes)) return null
   return startBreak(user, { until: new Date(now.getTime() + minutes * 60000) }, now)
 }
 
@@ -149,8 +167,11 @@ export async function runningLate(user, { until = null, text = '' } = {}, now = 
     await tell(user.id, 'До скольки задерживаешься? Нажми кнопку или напиши время.', { buttons: BREAK_BUTTONS('aw') })
     return null
   }
-  await tell(user.id, 'Понял, передал Яну.')
-  await tellOwners(`⏳ ${nameOf(user)}: задержка${until ? ` до <b>${hm(until)}</b>` : ''} — «${escapeHtml(text.slice(0, 300))}»`)
+  // Одно «задерживаюсь» в 10 минут: десять подряд Яну не нужны.
+  const bucket = Math.floor(now.getTime() / (10 * 60000))
+  const res = await sendOnce(`late:${user.id}:${bucket}`, () =>
+    tellOwners(`⏳ ${nameOf(user)}: задержка${until ? ` до <b>${hm(until)}</b>` : ''} — «${escapeHtml(text.slice(0, 300))}»`))
+  await tell(user.id, res.skipped ? 'Я уже передал Яну, что ты задерживаешься.' : 'Понял, передал Яну.')
   return null
 }
 
@@ -161,13 +182,21 @@ export async function runningLate(user, { until = null, text = '' } = {}, now = 
 export async function reportForceMajeure(user, text, message, now = new Date()) {
   state.clear(user.id)
   if (!message) return
-  await claimNotice(`fm-open:${user.id}:${message.id}`)
+  if (await hasOpenForceMajeure(user.id, now)) {
+    await tell(user.id, 'Твоя заявка на форс-мажор уже у Яна — жду его решения.')
+    return
+  }
   const until = parseUntil(text, now) ?? endOfDay(now)
-  await tell(user.id, 'Передал Яну. Как подтвердит — поставлю метку, и до её конца я тебя не трогаю. Выздоравливай / держись 🙏')
-  await tellOwners(
+  const res = await tellOwners(
     `⚠️ <b>${nameOf(user)}: форс-мажор</b>\n«${escapeHtml(text.slice(0, 500))}»\n\nМетка будет до ${at(until, now)}.`,
     { buttons: [[{ text: 'Подтвердить', data: `fm:y:${message.id}` }, { text: 'Не подтверждать', data: `fm:n:${message.id}` }]] },
   )
+  if (!res.ok) {
+    await tell(user.id, 'Не получилось передать Яну — напиши ему, пожалуйста, напрямую.')
+    return
+  }
+  await claimNotice(`fm-open:${user.id}:${message.id}`)
+  await tell(user.id, 'Передал Яну. Как подтвердит — поставлю метку, и до её конца я тебя не трогаю. Выздоравливай / держись 🙏')
 }
 
 /** Есть ли у человека нерешённая заявка на форс-мажор за последние сутки. */
@@ -176,35 +205,42 @@ export async function hasOpenForceMajeure(userId, now = new Date()) {
     where: { key: { startsWith: `fm-open:${userId}:` }, sentAt: { gt: new Date(now.getTime() - 24 * 60 * 60 * 1000) } },
     select: { key: true },
   })
-  for (const { key } of open) {
-    const messageId = key.split(':')[2]
-    if (!(await prisma.botNotice.findUnique({ where: { key: `fm:${messageId}` } }))) return true
-  }
-  return false
+  const decisions = open.map(({ key }) => `fm:${key.split(':')[2]}`)
+  return (await unsentKeys(decisions)).size > 0
 }
 
 /** Решение Яна по форс-мажору. Возвращает текст для его сообщения. */
 export async function decideForceMajeure(owner, messageId, approve, now = new Date()) {
+  if (owner?.role !== 'admin') return { text: null, toast: 'Это решает владелец' }
   const message = await prisma.botMessage.findUnique({ where: { id: messageId }, include: { user: { select: { id: true, name: true, active: true } } } })
-  if (!message?.user) return { text: 'Заявка не найдена.' }
+  // Заявка — только то сообщение человека, которое бот передал Яну.
+  if (!message?.user || !['in', 'reply'].includes(message.direction) || !(await hasNotice(`fm-open:${message.user.id}:${message.id}`))) {
+    return { text: 'Заявка не найдена.' }
+  }
   if (!(await claimNotice(`fm:${messageId}`))) return { text: null, toast: 'Уже решено' }
   const user = message.user
   if (!approve) {
     await tell(user.id, 'Ян не подтвердил форс-мажор. Если что-то изменилось — напиши ему.')
-    return { text: `❌ ${nameOf(user)}: форс-мажор не подтверждён.\n«${escapeHtml(message.text.slice(0, 300))}»` }
+    return { text: `❌ ${nameOf(user)}: форс-мажор не подтверждён.\n«${escapeHtml(message.text.slice(0, 300))}»`, rejectedUserId: user.id }
   }
   let until = parseUntil(message.text, message.createdAt) ?? endOfDay(message.createdAt)
   if (until <= now) until = endOfDay(now)
-  await prisma.$transaction(async (tx) => {
-    await lockUser(tx, user.id)
-    await tx.motivationAway.updateMany({ where: { userId: user.id, endedAt: null, until: { gt: now } }, data: { endedAt: now } })
-    await tx.motivationAway.create({
-      data: {
-        userId: user.id, from: message.createdAt < now ? message.createdAt : now, until,
-        reason: message.text.slice(0, 200), kind: 'force_majeure', source: 'bot', createdById: owner.id,
-      },
+  try {
+    await prisma.$transaction(async (tx) => {
+      await lockUser(tx, user.id)
+      await tx.motivationAway.updateMany({ where: { userId: user.id, endedAt: null, until: { gt: now } }, data: { endedAt: now } })
+      await tx.motivationAway.create({
+        data: {
+          userId: user.id, from: message.createdAt < now ? message.createdAt : now, until,
+          reason: message.text.slice(0, 200), kind: 'force_majeure', source: 'bot', createdById: owner.id,
+        },
+      })
     })
-  })
+  } catch (e) {
+    // Метка не встала — решение не засчитано, кнопку можно нажать снова.
+    await releaseNotice(`fm:${messageId}`)
+    throw e
+  }
   await tell(user.id, `Ян подтвердил форс-мажор до ${at(until, now)}. До этого времени я тебя не дёргаю.`)
   return { text: `✅ ${nameOf(user)}: форс-мажор до ${at(until, now)} — метка стоит в CRM.\n«${escapeHtml(message.text.slice(0, 300))}»` }
 }
@@ -225,9 +261,9 @@ export async function tickBreaks(now = new Date()) {
     if (minutesBetween(now, away.until) > askAt) continue
     const claimed = await prisma.motivationAway.updateMany({ where: { id: away.id, returnAskedAt: null }, data: { returnAskedAt: now } })
     if (!claimed.count || !away.user.active) continue
-    await tell(away.userId, `В ${hm(away.until)} заканчивается отлучка. Ты на месте?`, {
-      buttons: [[{ text: '✅ Да, на месте', data: `rt:y:${away.id}` }, { text: '⏳ Задерживаюсь', data: `rt:l:${away.id}` }]],
-    })
+    const res = await tell(away.userId, `В ${hm(away.until)} заканчивается отлучка. Ты на месте?`, { buttons: RETURN_BUTTONS(away.id) })
+    // Сбой временный — спросим на следующем проходе.
+    if (!res.ok && res.retry) await prisma.motivationAway.updateMany({ where: { id: away.id, returnAskedAt: now }, data: { returnAskedAt: null } })
   }
 
   const silent = await prisma.motivationAway.findMany({
@@ -238,11 +274,11 @@ export async function tickBreaks(now = new Date()) {
     include: { user: { select: { id: true, name: true, active: true } } },
   })
   for (const away of silent) {
-    if (!away.user.active || !(await claimNotice(`away-silent:${away.id}:${away.until.getTime()}`))) continue
-    await tell(away.userId, `Отлучка закончилась в ${hm(away.until)}. Ты на месте?`, {
-      buttons: [[{ text: '✅ Да, на месте', data: `rt:y:${away.id}` }, { text: '⏳ Задерживаюсь', data: `rt:l:${away.id}` }]],
-    })
-    await tellOwners(`❓ ${nameOf(away.user)}: отлучка кончилась в <b>${hm(away.until)}</b>, ответа нет (прошло ${duration(minutesBetween(away.until, now))}).`)
+    if (!away.user.active) continue
+    const res = await sendOnce(`away-silent:${away.id}:${away.until.getTime()}`, () =>
+      tellOwners(`❓ ${nameOf(away.user)}: отлучка кончилась в <b>${hm(away.until)}</b>, ответа нет (прошло ${duration(minutesBetween(away.until, now))}).`))
+    if (res.skipped) continue
+    await tell(away.userId, `Отлучка закончилась в ${hm(away.until)}. Ты на месте?`, { buttons: RETURN_BUTTONS(away.id) })
   }
 }
 

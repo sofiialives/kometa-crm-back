@@ -4,7 +4,7 @@ import { BANK_REASON_LABELS } from '../../services/motivation/bank.service.js'
 import { getSettingsRow } from '../../services/motivation/profiles.js'
 import { approveReview, rejectReview } from '../../services/motivation/review.service.js'
 import { points, short } from './format.js'
-import { claimNotice, crmButton, hasNotice, nameOf, ownerIds, row, tell } from './notify.js'
+import { claimNotice, crmButton, nameOf, ownerIds, releaseNotice, row, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
 
 /**
  * Лента: что изменилось в CRM — тому, кого касается.
@@ -46,6 +46,17 @@ async function readWatermark() {
     prisma.motivationEvent.findFirst({ orderBy: { createdAt: 'desc' }, select: { createdAt: true } }),
   ])
   const start = new Date(Math.max(bank?.createdAt?.getTime() ?? 0, event?.createdAt?.getTime() ?? 0, Date.now()))
+  // Записи последних минут до запуска тоже считаем старыми: проход берёт
+  // запас в 5 минут назад и иначе разослал бы их.
+  const recent = { gt: new Date(start.getTime() - 2 * OVERLAP_MS) }
+  const [entries, events] = await Promise.all([
+    prisma.motivationBankEntry.findMany({ where: { createdAt: recent }, select: { id: true } }),
+    prisma.motivationEvent.findMany({ where: { OR: [{ createdAt: recent }, { cancelledAt: recent }] }, select: { id: true } }),
+  ])
+  await prisma.botNotice.createMany({
+    data: [...entries.map((b) => ({ key: `bank:${b.id}` })), ...events.flatMap((e) => [{ key: `event:${e.id}` }, { key: `event-cancel:${e.id}` }])],
+    skipDuplicates: true,
+  })
   await prisma.botNotice.create({ data: { key: WATERMARK, sentAt: start } }).catch(() => {})
   return null
 }
@@ -72,48 +83,69 @@ function bankLine(b) {
   return `💰 Банк пополнен на $${dollars}${why ? ` — ${escapeHtml(why)}` : ''}`
 }
 
-/** Сотрудникам: банк и баллы. Возвращает новую отметку. */
+/**
+ * Сотрудникам: банк и баллы. Возвращает новую отметку; если что-то не ушло
+ * из-за временного сбоя — прежнюю, чтобы следующий проход взял это снова.
+ */
 async function employeeFeed(since, settings) {
   const from = new Date(since.getTime() - OVERLAP_MS)
   let mark = since.getTime()
   const seen = (...dates) => { for (const d of dates) if (d) mark = Math.max(mark, d.getTime()) }
   const byUser = new Map()
-  const push = (userId, line) => byUser.set(userId, [...(byUser.get(userId) ?? []), line])
+  const push = (userId, key, line) => {
+    const item = byUser.get(userId) ?? { keys: [], lines: [] }
+    item.keys.push(key)
+    if (line) item.lines.push(line)
+    byUser.set(userId, item)
+  }
 
-  if (settings.notifyBank) {
-    const entries = await prisma.motivationBankEntry.findMany({
-      where: { createdAt: { gt: from } },
-      orderBy: { createdAt: 'asc' },
-    })
-    for (const b of entries) {
-      seen(b.createdAt)
-      if (await claimNotice(`bank:${b.id}`)) push(b.userId, bankLine(b))
+  const [entries, events] = await Promise.all([
+    settings.notifyBank
+      ? prisma.motivationBankEntry.findMany({ where: { createdAt: { gt: from } }, orderBy: { createdAt: 'asc' } })
+      : [],
+    settings.notifyPoints
+      ? prisma.motivationEvent.findMany({
+        where: { OR: [{ createdAt: { gt: from } }, { cancelledAt: { gt: from } }] },
+        include: { eventType: { select: { systemKey: true } } },
+        orderBy: { createdAt: 'asc' },
+      })
+      : [],
+  ])
+  const unsent = await unsentKeys([
+    ...entries.map((b) => `bank:${b.id}`),
+    ...events.flatMap((e) => [`event:${e.id}`, `event-cancel:${e.id}`]),
+  ])
+
+  for (const b of entries) {
+    seen(b.createdAt)
+    if (unsent.has(`bank:${b.id}`)) push(b.userId, `bank:${b.id}`, bankLine(b))
+  }
+  for (const e of events) {
+    seen(e.createdAt, e.cancelledAt)
+    const told = !unsent.has(`event:${e.id}`)
+    if (e.cancelledAt) {
+      // Отмену сообщаем, только если о самих баллах человек уже знал;
+      // не знал — молча отмечаем, чтобы не сообщить о них позже.
+      if (told && unsent.has(`event-cancel:${e.id}`)) {
+        push(e.userId, `event-cancel:${e.id}`, `↩️ Отменено: ${points(e.prizePoints)} — ${escapeHtml(short(e.taskTitle ? `${e.title}: «${e.taskTitle}»` : e.title, 100))}${e.cancelReason ? `\n<i>${escapeHtml(short(e.cancelReason, 160))}</i>` : ''}`)
+      } else if (!told) await claimNotice(`event:${e.id}`)
+      continue
+    }
+    if (!told) push(e.userId, `event:${e.id}`, eventLine(e))
+  }
+
+  let failed = false
+  for (const [userId, { keys, lines }] of byUser) {
+    const claimed = []
+    for (const key of keys) if (await claimNotice(key)) claimed.push(key)
+    if (!claimed.length) continue
+    const res = await tell(userId, lines.join('\n\n'), { buttons: [row(crmButton('Моя мотивация', '/motivation'))].filter((r) => r.length) })
+    if (!res.ok && res.retry) {
+      failed = true
+      for (const key of claimed) await releaseNotice(key)
     }
   }
-  if (settings.notifyPoints) {
-    const events = await prisma.motivationEvent.findMany({
-      where: { OR: [{ createdAt: { gt: from } }, { cancelledAt: { gt: from } }] },
-      include: { eventType: { select: { systemKey: true } } },
-      orderBy: { createdAt: 'asc' },
-    })
-    for (const e of events) {
-      seen(e.createdAt, e.cancelledAt)
-      if (e.cancelledAt) {
-        // Отмену сообщаем, только если о самих баллах человек уже знал.
-        if (await hasNotice(`event:${e.id}`) && (await claimNotice(`event-cancel:${e.id}`))) {
-          push(e.userId, `↩️ Отменено: ${points(e.prizePoints)} — ${escapeHtml(short(e.taskTitle ? `${e.title}: «${e.taskTitle}»` : e.title, 100))}${e.cancelReason ? `\n<i>${escapeHtml(short(e.cancelReason, 160))}</i>` : ''}`)
-        } else {
-          await claimNotice(`event:${e.id}`)
-        }
-        continue
-      }
-      if (await claimNotice(`event:${e.id}`)) push(e.userId, eventLine(e))
-    }
-  }
-  for (const [userId, lines] of byUser) {
-    await tell(userId, lines.join('\n\n'), { buttons: [row(crmButton('Моя мотивация', '/motivation'))].filter((r) => r.length) })
-  }
-  return new Date(mark)
+  return failed ? since : new Date(mark)
 }
 
 const COMPLEXITY = { low: 'простая', medium: 'средняя', high: 'сложная' }
@@ -162,19 +194,22 @@ async function ownerFeed() {
     prisma.motivationWorkHint.findMany({ where: { status: 'pending' }, orderBy: { createdAt: 'asc' }, take: 100 }),
   ])
   if (await claimNotice(OWNER_INIT)) {
-    for (const r of reviews) await claimNotice(`review:${r.id}`)
-    for (const h of hints) await claimNotice(`hint:${h.id}`)
+    await prisma.botNotice.createMany({
+      data: [...reviews.map((r) => ({ key: `review:${r.id}` })), ...hints.map((h) => ({ key: `hint:${h.id}` }))],
+      skipDuplicates: true,
+    })
     return
   }
+  const unsent = await unsentKeys([...reviews.map((r) => `review:${r.id}`), ...hints.map((h) => `hint:${h.id}`)])
 
   for (const r of reviews) {
-    if (!(await claimNotice(`review:${r.id}`))) continue
-    for (const id of owners) await tell(id, reviewText(r), { buttons: reviewButtons(r) })
+    if (!unsent.has(`review:${r.id}`)) continue
+    await sendOnce(`review:${r.id}`, () => tellOwners(reviewText(r), { buttons: reviewButtons(r) }))
   }
   for (const h of hints) {
-    if (!(await claimNotice(`hint:${h.id}`))) continue
+    if (!unsent.has(`hint:${h.id}`)) continue
     const text = `🆕 <b>Новая работа в Иерархии</b>\n«${escapeHtml(short(h.workTitle, 140))}»${h.clientName ? `\nКлиент: ${escapeHtml(h.clientName)}` : ''}${h.departmentName ? ` · ${escapeHtml(h.departmentName)}` : ''}\n\nПополнить банк исполнителям?`
-    for (const id of owners) await tell(id, text, { buttons: [row(crmButton('Открыть «На проверке»', '/motivation?section=review'))].filter((r) => r.length) })
+    await sendOnce(`hint:${h.id}`, () => tellOwners(text, { buttons: [row(crmButton('Открыть «На проверке»', '/motivation?section=review'))].filter((r) => r.length) }))
   }
 }
 

@@ -14,6 +14,10 @@ export const nameOf = (user) => escapeHtml(user?.name || 'Сотрудник')
 /** Убрать теги для журнала: там нужен читаемый текст, а не разметка. */
 const plain = (text) => String(text ?? '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 
+/**
+ * direction: out — от бота; in — человек написал сам; reply — ответ на
+ * вопрос бота; button — нажатая кнопка. В дневной лимит идут только in.
+ */
 export function logMessage({ userId = null, chatId, direction, text }) {
   return prisma.botMessage.create({ data: { userId, chatId: String(chatId), direction, text: plain(text).slice(0, 4000) } })
     .catch((e) => {
@@ -33,8 +37,11 @@ export async function chatOf(userId) {
 
 /** Кто по этому чату: связка из CRM. */
 export async function userByChat(chatId) {
+  // Один чат — один человек: при привязке чат снимается с прежних связок.
+  // На случай старых двойных связок берём самую свежую.
   const link = await prisma.telegramLink.findFirst({
     where: { chatId: String(chatId) },
+    orderBy: { linkedAt: 'desc' },
     select: { user: { select: { id: true, name: true, role: true, active: true } } },
   })
   return link?.user?.active ? link.user : null
@@ -62,12 +69,25 @@ export async function ownerIds() {
   return rows.map((r) => r.id)
 }
 
-/** Отчёт владельцу. Никто из владельцев не подключил телеграм — пишем в лог. */
+/**
+ * Отчёт владельцу. Никто из владельцев не подключил телеграм — пишем в лог.
+ * { ok, retry }: ok — дошло хотя бы до одного; retry — не дошло ни до кого
+ * из-за временного сбоя, можно повторить.
+ */
 export async function tellOwners(text, opts = {}) {
   const ids = await ownerIds()
-  if (!ids.length) console.log(`[агент] отчёт владельцу не ушёл — у владельца нет телеграма: ${plain(text).slice(0, 120)}`)
-  for (const id of ids) await tell(id, text, opts)
-  return ids.length
+  if (!ids.length) {
+    console.log(`[агент] отчёт владельцу не ушёл — у владельца нет телеграма: ${plain(text).slice(0, 120)}`)
+    return { ok: false, retry: false }
+  }
+  let ok = false
+  let retry = false
+  for (const id of ids) {
+    const res = await tell(id, text, opts)
+    ok ||= res.ok
+    retry ||= Boolean(res.retry)
+  }
+  return { ok, retry: !ok && retry }
 }
 
 /**
@@ -84,6 +104,37 @@ export async function claimNotice(key) {
     if (e.code === 'P2002') return false
     throw e
   }
+}
+
+/** Вернуть ключ: отправка сорвалась временно, следующий проход попробует снова. */
+export async function releaseNotice(key) {
+  await prisma.botNotice.delete({ where: { key } }).catch(() => {})
+}
+
+/**
+ * Отправить один раз: занять ключ, отправить, при временном сбое — вернуть
+ * ключ. send — функция, которая отправляет и отдаёт { ok, retry }.
+ */
+export async function sendOnce(key, send) {
+  // Сначала смотрим — так повторные проходы не долбят базу заведомо
+  // неудачными вставками.
+  if ((await hasNotice(key)) || !(await claimNotice(key))) return { ok: false, skipped: true }
+  try {
+    const res = await send()
+    if (!res?.ok && res?.retry) await releaseNotice(key)
+    return res
+  } catch (e) {
+    await releaseNotice(key)
+    throw e
+  }
+}
+
+/** Какие из ключей ещё не отправлены — одним запросом, без лишних вставок. */
+export async function unsentKeys(keys) {
+  if (!keys.length) return new Set()
+  const taken = await prisma.botNotice.findMany({ where: { key: { in: keys } }, select: { key: true } })
+  const done = new Set(taken.map((t) => t.key))
+  return new Set(keys.filter((k) => !done.has(k)))
 }
 
 export async function hasNotice(key) {

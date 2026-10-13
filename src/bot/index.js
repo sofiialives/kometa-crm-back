@@ -67,8 +67,10 @@ export async function startBot() {
   try {
     username = await whoAmI()
   } catch (e) {
-    // Неверный токен не должен мешать работе CRM: ругаемся и живём дальше.
-    console.error('[бот] не запустился:', e.message)
+    // Неверный токен или телеграм недоступен не должны мешать работе CRM:
+    // ругаемся, живём дальше и пробуем снова через 5 минут.
+    console.error('[бот] не запустился, повтор через 5 минут:', e.message)
+    setTimeout(() => startBot().catch((err) => console.error('[бот] запуск:', err.message)), 5 * 60 * 1000)
     return
   }
 

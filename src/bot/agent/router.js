@@ -2,11 +2,12 @@ import { prisma } from '../../config/prisma.js'
 import { isParticipant } from '../../services/motivation/access.js'
 import { parseIntent, parseUntil } from '../parse.js'
 import { answerCallback, editMessage, escapeHtml } from '../telegram.js'
-import { comeBack, decideForceMajeure, MENU, reportForceMajeure, runningLate, setBreakMinutes, startBreak } from './away.js'
-import { recordAnswer } from './checkin.js'
+import { BREAK_MINUTES, comeBack, decideForceMajeure, MENU, reportForceMajeure, runningLate, setBreakMinutes, startBreak } from './away.js'
+import { isAskedNow, penalizeIfDeferred, recordAnswer } from './checkin.js'
 import { decideReview } from './feed.js'
-import { short } from './format.js'
-import { logMessage, tellChat } from './notify.js'
+import { points, short } from './format.js'
+import { logMessage, sendOnce, tellChat } from './notify.js'
+import { mskDayKey, mskDayStart } from '../plan.js'
 import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
 
@@ -19,6 +20,17 @@ import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
 const STAFF_HELP =
   'Я понимаю простые фразы: «отхожу на 30 минут», «буду в 16:30», «вернулся», ' +
   '«задерживаюсь до 17», «форс-мажор, заболел». Или нажми кнопку:'
+
+// Сколько сообщений в день человек может написать боту сам. Ответы на
+// вопросы бота и кнопки в лимит не идут. И не чаще нескольких в минуту —
+// иначе один человек засыпал бы Яна отчётами и занял бы бота для всех.
+const DAILY_LIMIT = 20
+const PER_MINUTE = 6
+const BUTTONS_PER_MINUTE = 20
+
+async function recentCount(userId, directions, since) {
+  return prisma.botMessage.count({ where: { userId, direction: { in: directions }, createdAt: { gt: since } } })
+}
 
 const OWNER_HELP =
   'Сюда приходят отчёты: кто отошёл и вернулся, форс-мажоры, внезапные чек-ины ' +
@@ -63,12 +75,27 @@ async function onWaiting(user, waiting, text, logged, now) {
 /** Текстовое сообщение от человека, который подключил телеграм в CRM. */
 export async function onText(user, chatId, text, now = new Date()) {
   const me = { ...user, chatId }
-  const logged = await logMessage({ userId: user.id, chatId, direction: 'in', text: text || '[не текст]' })
+  // Лимиты — по настоящим часам: это защита от потока сообщений.
+  const real = new Date()
+  if ((await recentCount(user.id, ['in', 'reply'], new Date(real.getTime() - 60000))) >= PER_MINUTE) return
+
+  const isReply = isParticipant(user) && Boolean(state.peek(user.id) || (await isAskedNow(user.id, now)))
+  const command = !text || /^\/(start|menu|help)\b/.test(text)
+  if (!isReply && !command && isParticipant(user)) {
+    const day = mskDayKey(real)
+    if ((await recentCount(user.id, ['in'], mskDayStart(day))) >= DAILY_LIMIT) {
+      await sendOnce(`limit:${user.id}:${day}`, () => tellChat(chatId,
+        `На сегодня я принял уже ${DAILY_LIMIT} сообщений. Отлучку, возвращение и форс-мажор можно отметить кнопками — они работают без лимита.`,
+        { userId: user.id, buttons: MENU }))
+      return
+    }
+  }
+  const logged = await logMessage({ userId: user.id, chatId, direction: isReply ? 'reply' : 'in', text: text || '[не текст]' })
   if (!isParticipant(user)) {
     await tellChat(chatId, OWNER_HELP, { userId: user.id })
     return
   }
-  if (!text || /^\/(start|menu|help)\b/.test(text)) {
+  if (command) {
     await tellChat(chatId, STAFF_HELP, { userId: user.id, buttons: MENU })
     return
   }
@@ -106,8 +133,9 @@ function closeButtons(cb, note) {
 /** Нажатие кнопки под сообщением бота. */
 export async function onCallback(cb, user, now = new Date()) {
   const chatId = cb.message?.chat?.id
-  const data = String(cb.data || '')
-  await logMessage({ userId: user.id, chatId, direction: 'in', text: `[кнопка] ${pressedText(cb)}` })
+  const data = String(cb.data || '').slice(0, 64)
+  if ((await recentCount(user.id, ['button'], new Date(Date.now() - 60000))) >= BUTTONS_PER_MINUTE) return answerCallback(cb.id)
+  await logMessage({ userId: user.id, chatId, direction: 'button', text: pressedText(cb) })
   const [kind, action, id] = data.split(':')
   const owner = user.role === 'admin'
 
@@ -120,7 +148,13 @@ export async function onCallback(cb, user, now = new Date()) {
     }
     const result = await decideForceMajeure(user, id, action === 'y', now)
     await answerCallback(cb.id, result.toast)
-    if (result.text) await editMessage(chatId, cb.message.message_id, result.text)
+    let text = result.text
+    if (result.rejectedUserId) {
+      // Из-за заявки человека не оштрафовали на чек-ине — теперь штраф ложится.
+      const penalty = await penalizeIfDeferred(result.rejectedUserId, now)
+      if (penalty !== null) text += `\n\nЧек-ин: ${points(penalty)} — штраф ждал вашего решения.`
+    }
+    if (text) await editMessage(chatId, cb.message.message_id, text)
     return null
   }
   if (!isParticipant(user)) return answerCallback(cb.id)
@@ -133,8 +167,10 @@ export async function onCallback(cb, user, now = new Date()) {
     return tellChat(chatId, 'Что случилось и до какого времени? Напиши одной строкой — передам Яну.', { userId: user.id })
   }
   if (kind === 'aw') {
-    await closeButtons(cb, `${action} мин`)
-    return setBreakMinutes(user, Number(action), now)
+    const minutes = Number(action)
+    if (!BREAK_MINUTES.includes(minutes)) return null
+    await closeButtons(cb, `${minutes} мин`)
+    return setBreakMinutes(user, minutes, now)
   }
   if (kind === 'rt') {
     await closeButtons(cb, action === 'y' ? 'на месте' : 'задерживаюсь')
