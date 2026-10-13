@@ -1,6 +1,7 @@
 import cron from 'node-cron'
 import { env } from '../config/env.js'
 import { broadcast, runRemindersOnce } from './reminders.js'
+import { pruneNotices, runAgentOnce, runMorning } from './agent/index.js'
 import { startPolling } from './updates.js'
 import { whoAmI } from './telegram.js'
 
@@ -40,6 +41,11 @@ const DAILY = [
     at: '45 18 * * 1-5',
     text: 'Напоминаю, вечерний звонок через 15 минут! Вот и конец дня, ты большой/ая молодец! Больше не напрягаю, хорошего вечера!',
   },
+  {
+    // Ян просил о звонке напоминать дважды: за 15 минут и за 5.
+    at: '55 18 * * 1-5',
+    text: 'Вечерний звонок через 5 минут — подключайся \u{1F64C}',
+  },
 ]
 
 /**
@@ -61,8 +67,10 @@ export async function startBot() {
   try {
     username = await whoAmI()
   } catch (e) {
-    // Неверный токен не должен мешать работе CRM: ругаемся и живём дальше.
-    console.error('[бот] не запустился:', e.message)
+    // Неверный токен или телеграм недоступен не должны мешать работе CRM:
+    // ругаемся, живём дальше и пробуем снова через 5 минут.
+    console.error('[бот] не запустился, повтор через 5 минут:', e.message)
+    setTimeout(() => startBot().catch((err) => console.error('[бот] запуск:', err.message)), 5 * 60 * 1000)
     return
   }
 
@@ -70,6 +78,15 @@ export async function startBot() {
 
   cron.schedule('* * * * *', () => {
     runRemindersOnce().catch((e) => console.error('[бот] напоминания:', e.message))
+    runAgentOnce().catch((e) => console.error('[агент] проход:', e.message))
+  }, MSK)
+
+  // 10:00 по будням — тем, у кого нет задач на сегодня.
+  cron.schedule('0 10 * * 1-5', () => {
+    runMorning().catch((e) => console.error('[агент] утро:', e.message))
+  }, MSK)
+  cron.schedule('30 3 * * *', () => {
+    pruneNotices().catch((e) => console.error('[агент] уборка:', e.message))
   }, MSK)
 
   for (const { at, text } of DAILY) {

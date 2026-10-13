@@ -16,11 +16,11 @@ const firstName = (full) => String(full || '').trim().split(/\s+/)[0] || 'При
  * Сообщение пишется каждому лично, поэтому и обращение личное, и список
  * участников — «с кем вы созваниваетесь», без себя самого.
  */
-export function buildReminder(call, person, everyone) {
+export function buildReminder(call, person, everyone, minutes = env.remindBeforeMin) {
   const others = everyone.filter((p) => p.id !== person.id).map((p) => escapeHtml(p.name))
 
   const lines = [
-    `${escapeHtml(firstName(person.name))}, через ${env.remindBeforeMin} мин звонок — <b>${mskTime(call.scheduledAt)}</b>`,
+    `${escapeHtml(firstName(person.name))}, через ${minutes} мин звонок — <b>${mskTime(call.scheduledAt)}</b>`,
     '',
     `<b>${escapeHtml(call.title)}</b>`,
   ]
@@ -31,15 +31,18 @@ export function buildReminder(call, person, everyone) {
   return lines.join('\n')
 }
 
+// Второе напоминание — за 5 минут: Ян просил, чтобы о звонке напоминали дважды.
+const LAST_CALL_MIN = 5
+
 /**
- * Звонки, до которых осталось ровно remindBeforeMin минут.
+ * Звонки, до которых осталось ровно minutes минут.
  *
  * Окно в минуту при запуске раз в минуту даёт ровно одно напоминание на
  * звонок: раньше он в окно не попадёт, позже уже выйдет из него. Отметки
  * «уже напомнили» в базе поэтому не нужно.
  */
-async function dueCalls() {
-  const from = new Date(Date.now() + env.remindBeforeMin * 60 * 1000)
+async function dueCalls(minutes) {
+  const from = new Date(Date.now() + minutes * 60 * 1000)
   const to = new Date(from.getTime() + 60 * 1000)
 
   return prisma.call.findMany({
@@ -57,8 +60,16 @@ async function dueCalls() {
  * непонятно, почему человек ничего не получает.
  */
 export async function runRemindersOnce() {
-  const calls = await dueCalls()
-  if (calls.length === 0) return { sent: 0 }
+  let sent = 0
+  for (const minutes of [...new Set([env.remindBeforeMin, LAST_CALL_MIN])]) {
+    sent += await remindAt(minutes)
+  }
+  return { sent }
+}
+
+async function remindAt(minutes) {
+  const calls = await dueCalls(minutes)
+  if (calls.length === 0) return 0
 
   let sent = 0
   const skipped = new Set()
@@ -71,14 +82,14 @@ export async function runRemindersOnce() {
         skipped.add(person.name)
         continue
       }
-      const res = await sendMessage(chatId, buildReminder(call, person, people))
+      const res = await sendMessage(chatId, buildReminder(call, person, people, minutes))
       if (res.ok) sent += 1
     }
   }
 
-  console.log(`[бот] звонков подошло: ${calls.length}, отправлено: ${sent}` +
+  console.log(`[бот] за ${minutes} мин: звонков ${calls.length}, отправлено ${sent}` +
     (skipped.size ? `, без телеграма: ${[...skipped].join(', ')}` : ''))
-  return { sent }
+  return sent
 }
 
 /** Сообщения по расписанию — всем, кто подключился. */

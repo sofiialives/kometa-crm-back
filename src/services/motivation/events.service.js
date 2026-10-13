@@ -20,8 +20,10 @@ import { monthKeyOf } from './month.js'
  */
 
 const PRODUCT_KEY = 'client_product'
-// События журнала звонка ставятся в журнале, а не этой формой.
-const FORM_EXCLUDED = new Set([PRODUCT_KEY, ...CALL_KEYS])
+// События журнала звонка ставятся в журнале, а штраф за чек-ин снимает
+// бот — не этой формой: иначе легко оштрафовать дважды.
+const CHECKIN_KEY = 'checkin_missed'
+const FORM_EXCLUDED = new Set([PRODUCT_KEY, CHECKIN_KEY, ...CALL_KEYS])
 
 const EVENT_INCLUDE = {
   createdBy: { select: { id: true, name: true } },
@@ -88,6 +90,7 @@ export async function addManual(actor, { userId, eventTypeId, prizePoints, level
     if (type.mode !== 'manual') throw ApiError.badRequest('Это событие начисляется автоматически по задачам')
     if (type.systemKey === PRODUCT_KEY) throw ApiError.badRequest('Покупку продукта отмечают кнопкой «Клиент купил новый продукт»')
     if (CALL_KEYS.includes(type.systemKey)) throw ApiError.badRequest('Звонок отмечают в журнале звонка')
+    if (type.systemKey === CHECKIN_KEY) throw ApiError.badRequest('Штраф за чек-ин снимает бот. Если нужно оштрафовать вручную — выберите «Ручную корректировку»')
     data = {
       kind: 'event',
       eventTypeId: type.id,

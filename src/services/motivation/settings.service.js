@@ -27,6 +27,8 @@ import { CALL_KEYS } from './callRules.js'
 const toCents = (dollars) => Math.round(Number(dollars) * 100)
 
 const PRODUCT_KEY = 'client_product'
+// Событие «Не ответил на внезапный чек-ин» — его снимает бот.
+const CHECKIN_KEY = 'checkin_missed'
 
 function profileView(profile, usage) {
   return {
@@ -93,6 +95,7 @@ export async function getSettings(actor) {
       notifyBank: settings.notifyBank,
       notifyPoints: settings.notifyPoints,
       autoTasksFrom: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
+      checkinFrom: settings.checkinFrom ? dayKeyOf(settings.checkinFrom) : null,
       taskPointsMode: settings.taskPointsMode,
       personalTaskDailyLimit: settings.personalTaskDailyLimit,
     },
@@ -206,6 +209,16 @@ export async function createProfile(actor, { title, copyFromId }) {
             mode: 'manual',
             systemKey: 'call_missed',
             position: 3,
+          },
+          {
+            profileId: profile.id,
+            title: 'Не ответил на внезапный чек-ин',
+            example: 'Бот спросил, чем вы заняты, а ответа не было 45 минут и вы не предупреждали, что отойдёте',
+            prizePoints: -3,
+            levelPoints: -3,
+            mode: 'manual',
+            systemKey: 'checkin_missed',
+            position: 4,
           },
         ],
       })
@@ -338,6 +351,9 @@ export async function updateEventType(actor, id, body) {
   if (CALL_KEYS.includes(type.systemKey) && mode !== 'manual') {
     throw ApiError.badRequest('Звонок отмечают в журнале звонка — автоматическим это событие быть не может')
   }
+  if (type.systemKey === CHECKIN_KEY && mode !== 'manual') {
+    throw ApiError.badRequest('Это событие снимает бот на внезапном чек-ине — правило по задачам к нему не подходит')
+  }
 
   const data = { mode, autoRule }
   if (body.title !== undefined) data.title = body.title.trim()
@@ -373,6 +389,9 @@ export async function deleteEventType(actor, id) {
   }
   if (CALL_KEYS.includes(type.systemKey)) {
     throw ApiError.badRequest('Это событие нужно журналу звонка. Его можно выключить, но не удалить')
+  }
+  if (type.systemKey === CHECKIN_KEY) {
+    throw ApiError.badRequest('Это событие нужно боту для внезапного чек-ина. Его можно выключить, но не удалить')
   }
   await prisma.$transaction([
     prisma.motivationEventType.delete({ where: { id } }),
@@ -472,19 +491,20 @@ export async function updateGeneral(actor, patch) {
   for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints', 'taskPointsMode', 'personalTaskDailyLimit']) {
     if (patch[key] !== undefined) data[key] = patch[key]
   }
-  // Дата включения автобаллов приходит днём «ГГГГ-ММ-ДД» и хранится
-  // московской полуночью этого дня. null — выключить. Задним числом не
-  // включаем: по уже прошедшим ночам разом легли бы штрафы. Уже
+  // Даты включения автобаллов и чек-инов приходят днём «ГГГГ-ММ-ДД» и
+  // хранятся московской полуночью этого дня. null — выключить. Задним
+  // числом не включаем: по уже прошедшим ночам разом легли бы штрафы. Уже
   // сохранённую дату можно прислать снова — она могла давно пройти.
-  if (patch.autoTasksFrom !== undefined) {
-    if (patch.autoTasksFrom !== null) {
-      const stored = (await getSettingsRow()).autoTasksFrom
-      const unchanged = stored && dayKeyOf(stored) === patch.autoTasksFrom
-      if (!unchanged && patch.autoTasksFrom < dayKeyOf(new Date())) {
-        throw ApiError.badRequest('Автобаллы включаются не раньше сегодняшнего дня')
+  const stored = await getSettingsRow()
+  for (const [key, label] of [['autoTasksFrom', 'Автобаллы'], ['checkinFrom', 'Чек-ины']]) {
+    if (patch[key] === undefined) continue
+    if (patch[key] !== null) {
+      const unchanged = stored[key] && dayKeyOf(stored[key]) === patch[key]
+      if (!unchanged && patch[key] < dayKeyOf(new Date())) {
+        throw ApiError.badRequest(`${label} включаются не раньше сегодняшнего дня`)
       }
     }
-    data.autoTasksFrom = patch.autoTasksFrom === null ? null : mskDateStart(patch.autoTasksFrom)
+    data[key] = patch[key] === null ? null : mskDateStart(patch[key])
   }
   const row = await prisma.motivationSettings.upsert({
     where: { id: 'global' },
@@ -497,6 +517,7 @@ export async function updateGeneral(actor, patch) {
     notifyBank: row.notifyBank,
     notifyPoints: row.notifyPoints,
     autoTasksFrom: row.autoTasksFrom ? dayKeyOf(row.autoTasksFrom) : null,
+    checkinFrom: row.checkinFrom ? dayKeyOf(row.checkinFrom) : null,
     taskPointsMode: row.taskPointsMode,
     personalTaskDailyLimit: row.personalTaskDailyLimit,
   }

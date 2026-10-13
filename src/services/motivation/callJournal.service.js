@@ -31,7 +31,7 @@ function assertDay(day, now) {
 }
 
 function awayCard(away) {
-  return away ? { id: away.id, from: away.from, until: away.until, reason: away.reason } : null
+  return away ? { id: away.id, from: away.from, until: away.until, reason: away.reason, kind: away.kind, source: away.source } : null
 }
 
 /** Действующие метки на «сейчас» — для таблицы команды и журнала. */
