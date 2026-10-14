@@ -88,6 +88,7 @@ describe('что делает бот по ответу ИИ', () => {
     assert.equal(decide({ action: 'question', minutes: null, until: null, reply: '   ', owner_note: null }, now).kind, 'none')
     assert.equal(decide({ action: 'unclear', minutes: null, until: null, reply: 'что?', owner_note: null }, now).kind, 'none')
     assert.equal(decide(null, now).kind, 'none')
+    assert.equal(decide({ action: 'smalltalk', minutes: null, until: null, reply: '', owner_note: 'важно' }, now).kind, 'none')
   })
   test('«передал Яну» решает бот, а не модель', () => {
     const d = decide({ action: 'report', minutes: null, until: null, reply: 'Передал Яну, он одобрил премию', owner_note: 'сайт упал' }, now)

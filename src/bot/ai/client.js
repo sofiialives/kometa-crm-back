@@ -33,8 +33,9 @@ function fail() {
   failures += 1
   if (failures >= 3) {
     pausedUntil = Date.now() + 10 * 60000
-    failures = 0
-    console.error('[ИИ] три сбоя подряд — пауза 10 минут, бот работает по правилам')
+    // После паузы — одна проба: снова сбой — снова пауза.
+    failures = 2
+    console.error('[ИИ] сбои подряд — пауза 10 минут, бот работает по правилам')
   }
 }
 
@@ -91,7 +92,7 @@ export async function askJson({ userId, kind, system, user, schema, maxTokens = 
       console.error(`[ИИ] ошибка Anthropic ${e.status ?? ''} ${e.constructor.name}`)
       fail()
     } else {
-      console.error(`[ИИ] сбой: ${e.name}`)
+      console.error(`[ИИ] сбой: ${e.name}${e.code ? ` ${e.code}` : ''}`)
       fail()
     }
     return null

@@ -220,7 +220,8 @@ async function ownerFeed() {
   for (const r of reviews) {
     if (!unsent.has(`review:${r.id}`)) continue
     // Сложность личной задачи — по смыслу, если ИИ включён; иначе по длине описания.
-    const complexity = aiRatings-- > 0 ? await aiRateReview(r) : r.complexity
+    // Счётчик — только на личные задачи: остальные ИИ не оценивает.
+    const complexity = r.complexity && aiRatings-- > 0 ? await aiRateReview(r) : r.complexity
     const card = { ...r, complexity }
     await sendOnce(`review:${r.id}`, () => tellOwners(reviewText(card), { buttons: reviewButtons(card) }))
   }

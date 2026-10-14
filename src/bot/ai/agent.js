@@ -1,7 +1,7 @@
 import { prisma } from '../../config/prisma.js'
 import { parseUntil } from '../parse.js'
 import { escapeHtml } from '../telegram.js'
-import { comeBack, dayEnd, MENU, runningLate, startBreak } from '../agent/away.js'
+import { comeBack, dayEnd, runningLate, startBreak } from '../agent/away.js'
 import { nameOf, tellChat, tellOwners } from '../agent/notify.js'
 import { isQuietHour, mskDayKey } from '../plan.js'
 import { aiEnabled, askJson, hasAiBudget } from './client.js'
@@ -58,7 +58,8 @@ export function decide(out, now = new Date()) {
       return { kind: 'say', action: 'report', reply: '', ownerNote }
     case 'question':
     case 'smalltalk':
-      if (!reply && !ownerNote) return { kind: 'none' }
+      // Без ответа человеку — подсказка как без ИИ (заметку Яну тогда не шлём).
+      if (!reply) return { kind: 'none' }
       return { kind: 'say', action: out.action, reply, ownerNote }
     default:
       return { kind: 'none' }
@@ -108,6 +109,8 @@ export async function aiStaffText(user, chatId, text, logged, now = new Date(), 
     if (plan.kind === 'none') return false
 
     if (plan.kind === 'act') {
+      // На «до скольки задерживаешься?» нужен срок: без него — «не понял время».
+      if (extend && plan.action === 'away' && !plan.until) return false
       if (plan.action === 'away') await startBreak(user, { until: plan.until, note: text, extend }, now)
       else if (plan.action === 'back') await comeBack(user, now)
       else await runningLate(user, { until: plan.until, text }, now)
