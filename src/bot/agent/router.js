@@ -45,7 +45,12 @@ const STAFF_QUESTION =
 // Сколько сообщений в день человек может написать боту сам. Ответы на
 // вопросы бота и кнопки в лимит не идут. И не чаще нескольких в минуту —
 // иначе один человек засыпал бы Яна отчётами и занял бы бота для всех.
-const DAILY_LIMIT = 20
+// Потолок от спама на все сообщения за день. Вопросы к ИИ ограничены
+// отдельно (AI_LIMITS), команды по правилам ничего не стоят.
+const DAILY_LIMIT = 200
+const LIMIT_TEXT =
+  'Лимит сообщений на сегодня закончился.\nОн обновится в 00:00 по Москве.\n\n' +
+  'Кнопки «Отхожу», «Я на месте» и «Форс-мажор» работают без лимита.'
 const PER_MINUTE = 10
 const BUTTONS_PER_MINUTE = 20
 
@@ -141,9 +146,9 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   if (!isReply && !command && isParticipant(user)) {
     const day = mskDayKey(real)
     if ((await recentCount(user.id, ['in'], mskDayStart(day))) >= DAILY_LIMIT) {
-      await sendOnce(`limit:${user.id}:${day}`, () => tellChat(chatId,
-        `На сегодня я принял уже ${DAILY_LIMIT} сообщений.\nОтлучку, возвращение и форс-мажор можно отметить кнопками, они работают без лимита.`,
-        { userId: user.id, buttons: MENU }))
+      // Не молча, иначе человек решит, что бот сломался. Раз в час: это спам.
+      const hour = Math.floor(real.getTime() / 3600000)
+      await sendOnce(`limit:${user.id}:${day}:${hour}`, () => tellChat(chatId, LIMIT_TEXT, { userId: user.id, buttons: MENU }))
       return
     }
   }
