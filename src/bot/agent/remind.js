@@ -1,18 +1,24 @@
 import { prisma } from '../../config/prisma.js'
 import { escapeHtml } from '../telegram.js'
 import { at, short } from './format.js'
-import { claimNotice, tell } from './notify.js'
+import { tell } from './notify.js'
 import * as state from './state.js'
 
 /**
  * Напоминания по просьбе человека: «напомни в 15:00 позвонить клиенту»,
- * «через 20 минут напомни про отчёт». Время не назвал — бот переспрашивает
- * кнопками. Уходит один раз, отменить можно кнопкой. Яну не пишем — это
- * личное дело человека.
+ * «через 20 минут напомни про отчёт», «напомни завтра в 10 про звонок».
+ * Сегодня или завтра — дальше не держим. Время не назвал — бот
+ * переспрашивает. Уходит один раз, отменить можно кнопкой. Яну не пишем —
+ * это личное дело человека.
  */
 
 const MAX_ACTIVE = 10
-const MAX_AHEAD_MS = 24 * 60 * 60 * 1000
+// «Завтра в 23:00», сказанное сразу после полуночи, — почти двое суток.
+const MAX_AHEAD_MS = 48 * 60 * 60 * 1000
+// Бот лежал дольше — старое напоминание уже не к месту, закрываем без отправки.
+const STALE_MS = 6 * 60 * 60 * 1000
+// Опоздали больше чем на 15 минут — честно пишем, на когда было.
+const LATE_NOTE_MS = 15 * 60 * 1000
 export const REMIND_MINUTES = [15, 30, 60, 120]
 
 /** Текст напоминания без «напомни мне» и без времени в начале. */
@@ -20,7 +26,9 @@ export function reminderText(text) {
   const t = String(text ?? '')
     .replace(/(пожалуйста,?\s*)?напомни(те|ть)?(\s+(мне|нам))?[\s,:]*/gi, ' ')
     .trim()
+    .replace(/^(сегодня|завтра)[\s,]+/i, '')
     .replace(/^(в|к|около|через|до)\s+\S+(\s+(минут\w*|час\w*|мин))?[\s,]*/i, '')
+    .replace(/^(сегодня|завтра)[\s,]+/i, '')
     .replace(/^(чтобы|что|про|о|об)\s+/i, '')
     .trim()
   return short(t || 'то, о чём просил(а)', 300)
@@ -30,8 +38,12 @@ export function reminderText(text) {
 export async function createReminder(user, when, text, now = new Date()) {
   state.clear(user.id)
   const ms = new Date(when).getTime() - now.getTime()
-  if (!(ms >= 60000 && ms <= MAX_AHEAD_MS)) {
-    await tell(user.id, 'Напомнить могу в пределах суток — напиши время, например «напомни в 16:30 позвонить клиенту».')
+  if (!(ms >= 60000)) {
+    await tell(user.id, 'Это уже прямо сейчас 🙂 Назови время хотя бы через минуту.')
+    return null
+  }
+  if (ms > MAX_AHEAD_MS) {
+    await tell(user.id, FAR_TEXT)
     return null
   }
   const active = await prisma.botReminder.count({ where: { userId: user.id, sentAt: null, cancelledAt: null, at: { gt: now } } })
@@ -46,9 +58,24 @@ export async function createReminder(user, when, text, now = new Date()) {
   return reminder
 }
 
-/** Время не названо — спросить кнопками (текст держим в ожидании ответа). */
-export async function askReminderTime(user, text) {
-  state.expect(user.id, 'remind_time', { text })
+const FAR_TEXT = 'Напомнить могу сегодня или завтра — дальше не держу. Напиши, например, «напомни завтра в 10:00 позвонить клиенту».'
+
+/** «В пятницу», «через неделю» — так далеко не напоминаем. */
+export async function tooFarReminder(user) {
+  state.clear(user.id)
+  await tell(user.id, FAR_TEXT)
+}
+
+/**
+ * Время не названо — спросить (текст держим в ожидании ответа). Сказал
+ * «завтра» без времени — кнопки «через 15 мин» не к месту, просим время.
+ */
+export async function askReminderTime(user, text, { tomorrow = false } = {}) {
+  state.expect(user.id, 'remind_time', { text, tomorrow })
+  if (tomorrow) {
+    await tell(user.id, 'Во сколько завтра напомнить? Напиши время, например «в 10:00».')
+    return
+  }
   await tell(user.id, 'Когда напомнить? Нажми кнопку или напиши время, например «в 16:30».', {
     buttons: [[
       { text: 'через 15 мин', data: 'rmt:15' },
@@ -68,7 +95,12 @@ export async function cancelReminder(user, id, now = new Date()) {
   return updated.count > 0
 }
 
-/** Раз в минуту: подошедшие напоминания. Проспанные больше 6 часов — молча закрываем. */
+/**
+ * Раз в минуту: подошедшие напоминания. Захват — атомарный updateMany по
+ * sentAt: два процесса одно напоминание не отправят. Временный сбой
+ * телеграма — снимаем отметку, повторим на следующем проходе. Проспанные
+ * больше 6 часов закрываем без отправки.
+ */
 export async function tickReminders(now = new Date()) {
   const due = await prisma.botReminder.findMany({
     where: { sentAt: null, cancelledAt: null, at: { lte: now } },
@@ -78,8 +110,10 @@ export async function tickReminders(now = new Date()) {
   for (const r of due) {
     const claimed = await prisma.botReminder.updateMany({ where: { id: r.id, sentAt: null }, data: { sentAt: now } })
     if (!claimed.count) continue
-    if (now.getTime() - r.at.getTime() > 6 * 60 * 60 * 1000) continue
-    if (!(await claimNotice(`reminder:${r.id}`))) continue
-    await tell(r.userId, `⏰ Напоминаю: ${escapeHtml(r.text)}`)
+    const lateMs = now.getTime() - r.at.getTime()
+    if (lateMs > STALE_MS) continue
+    const note = lateMs > LATE_NOTE_MS ? ` <i>(с опозданием — было на ${at(r.at, now)})</i>` : ''
+    const res = await tell(r.userId, `⏰ Напоминаю: ${escapeHtml(r.text)}${note}`)
+    if (!res?.ok && res?.retry) await prisma.botReminder.updateMany({ where: { id: r.id, sentAt: now }, data: { sentAt: null } })
   }
 }

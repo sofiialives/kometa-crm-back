@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { isBareTime, parseIntent, parseUntil } from '../parse.js'
+import { isBareTime, parseIntent, parseRemindAt, parseUntil } from '../parse.js'
 
 // Сейчас — 14:00 по Москве.
 const now = new Date('2026-11-03T14:00:00+03:00')
@@ -148,5 +148,33 @@ describe('только время', () => {
     assert.ok(isBareTime('16:30'))
     assert.ok(!isBareTime('встреча в 15:00, не беспокоить'))
     assert.ok(!isBareTime('сдам отчёт до 17'))
+  })
+})
+
+describe('когда напомнить', () => {
+  const evening = new Date('2026-11-03T18:00:00+03:00')
+  const morning = new Date('2026-11-03T08:00:00+03:00')
+  const tomorrowAt = (time) => new Date(`2026-11-04T${time}:00+03:00`).toISOString()
+
+  test('«завтра в 10» — завтра, даже утром', () => {
+    assert.equal(parseIntent('напомни завтра в 10:00 про звонок', morning).until.toISOString(), tomorrowAt('10:00'))
+    assert.equal(parseIntent('напомни завтра в 9', evening).until.toISOString(), tomorrowAt('09:00'))
+  })
+  test('время сегодня уже прошло — значит завтра', () => {
+    assert.equal(parseIntent('напомни в 9 позвонить', evening).until.toISOString(), tomorrowAt('09:00'))
+    assert.equal(parseIntent('напомни в 15:00 позвонить', now).until.toISOString(), msk('15:00'))
+  })
+  test('«завтра» без времени — спросить время', () => {
+    const r = parseIntent('напомни завтра про отчёт', now)
+    assert.equal(r.until, null)
+    assert.equal(r.tomorrow, true)
+    assert.equal(parseRemindAt('в 10', morning, { tomorrow: true }).until.toISOString(), tomorrowAt('10:00'))
+    assert.equal(parseRemindAt('10:30', morning, { tomorrow: true }).until.toISOString(), tomorrowAt('10:30'))
+  })
+  test('дальше завтра — не держим', () => {
+    for (const text of ['напомни в пятницу про отчёт', 'напомни послезавтра', 'напомни через неделю', 'напомни через 2 дня']) {
+      assert.equal(parseIntent(text, now).far, true, text)
+    }
+    assert.equal(parseIntent('напомни через 20 минут', now).far, false)
   })
 })
