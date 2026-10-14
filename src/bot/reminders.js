@@ -70,6 +70,7 @@ export async function runRemindersOnce() {
 async function remindAt(minutes) {
   const calls = await dueCalls(minutes)
   if (calls.length === 0) return 0
+  const away = await forceMajeureIds()
 
   let sent = 0
   const skipped = new Set()
@@ -77,6 +78,7 @@ async function remindAt(minutes) {
   for (const call of calls) {
     const people = [call.owner, ...call.participants].filter((p) => p?.active)
     for (const person of people) {
+      if (away.has(person.id)) continue
       const chatId = person.telegram?.chatId
       if (!chatId) {
         skipped.add(person.name)
@@ -92,12 +94,28 @@ async function remindAt(minutes) {
   return sent
 }
 
-/** Сообщения по расписанию — всем, кто подключился. */
-export async function broadcast(text) {
-  const links = await prisma.telegramLink.findMany({
-    where: { chatId: { not: null }, user: { active: true } },
-    select: { chatId: true },
+/**
+ * У кого сейчас форс-мажор: таких бот не дёргает — ни рассылкой, ни
+ * напоминанием о звонке, пока метка действует.
+ */
+export async function forceMajeureIds(now = new Date()) {
+  const rows = await prisma.motivationAway.findMany({
+    where: { kind: 'force_majeure', endedAt: null, from: { lte: now }, until: { gt: now } },
+    select: { userId: true },
   })
-  for (const l of links) await sendMessage(l.chatId, text)
-  console.log(`[бот] рассылка по расписанию: ${links.length}`)
+  return new Set(rows.map((r) => r.userId))
+}
+
+/** Сообщения по расписанию — всем, кто подключился, кроме тех, у кого форс-мажор. */
+export async function broadcast(text) {
+  const [links, away] = await Promise.all([
+    prisma.telegramLink.findMany({
+      where: { chatId: { not: null }, user: { active: true } },
+      select: { chatId: true, userId: true },
+    }),
+    forceMajeureIds(),
+  ])
+  const targets = links.filter((l) => !away.has(l.userId))
+  for (const l of targets) await sendMessage(l.chatId, text)
+  console.log(`[бот] рассылка по расписанию: ${targets.length}${away.size ? `, с форс-мажором пропущено ${links.length - targets.length}` : ''}`)
 }

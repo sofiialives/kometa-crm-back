@@ -106,6 +106,7 @@ model User {
   botCheckinAnswers         BotCheckinAnswer[]
   botEvents                 BotEvent[]
   aiUsage                   AiUsage[]
+  botReminders              BotReminder[]
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -1156,6 +1157,26 @@ model AiUsage {
 
   @@unique([userId, day, kind])
   @@index([day])
+}
+
+// Напоминание, которое человек попросил у бота: «напомни в 15:00
+// позвонить клиенту». Уходит один раз; можно отменить кнопкой.
+model BotReminder {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  at   DateTime
+  text String
+
+  sentAt      DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([at])
+  @@index([userId, at])
 }
 
 // Что бот уже отправил: «напомнил о задаче X», «написал про заявку Y».

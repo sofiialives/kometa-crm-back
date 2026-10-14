@@ -3,6 +3,7 @@ import { parseUntil } from '../parse.js'
 import { escapeHtml } from '../telegram.js'
 import { comeBack, dayEnd, runningLate, startBreak } from '../agent/away.js'
 import { nameOf, tellChat, tellOwners } from '../agent/notify.js'
+import { askReminderTime, createReminder } from '../agent/remind.js'
 import { isQuietHour, mskDayKey } from '../plan.js'
 import { aiEnabled, askJson, hasAiBudget } from './client.js'
 import { cut, MAX_OUTPUT_TOKENS_OWNER } from './limits.js'
@@ -50,6 +51,7 @@ export function decide(out, now = new Date()) {
     case 'away':
     case 'back':
     case 'late':
+    case 'remind':
       return { kind: 'act', action: out.action, until, reply, ownerNote: null }
     case 'force_majeure':
     case 'day_end':
@@ -113,6 +115,7 @@ export async function aiStaffText(user, chatId, text, logged, now = new Date(), 
       if (extend && plan.action === 'away' && !plan.until) return false
       if (plan.action === 'away') await startBreak(user, { until: plan.until, note: text, extend }, now)
       else if (plan.action === 'back') await comeBack(user, now)
+      else if (plan.action === 'remind') await (plan.until ? createReminder(user, plan.until, text, now) : askReminderTime(user, text))
       else await runningLate(user, { until: plan.until, text }, now)
       return true
     }

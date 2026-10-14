@@ -3,7 +3,7 @@ import { escapeHtml } from '../telegram.js'
 import { PARTICIPANT_ROLES } from '../../services/motivation/access.js'
 import { mskDateStart } from '../../services/motivation/taskRules.js'
 import { updateTaskStatus } from '../../services/task.service.js'
-import { dueInMinutes, isWorkday, mskDayKey } from '../plan.js'
+import { dueInMinutes, isQuietHour, isWorkday, mskDayKey } from '../plan.js'
 import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
 import { crmButton, firstName, logEvent, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
@@ -61,6 +61,41 @@ export async function tickTaskStarts(now = new Date()) {
   }
 }
 
+// Через сколько минут после начала, если задачу не взяли в работу, бот
+// сам спрашивает человека и сообщает Яну.
+const NOT_STARTED_AFTER_MIN = 15
+
+/**
+ * Раз в минуту: задача должна была начаться 15 минут назад, а она всё ещё
+ * «На сегодня». Человеку — вопрос с кнопками, Яну — отчёт. Не трогаем, если
+ * человек уже сказал «не успеваю», отошёл, у него форс-мажор или он
+ * закончил день. Ночью не пишем.
+ */
+export async function tickNotStarted(now = new Date()) {
+  if (isQuietHour(now)) return
+  const from = new Date(now.getTime() - (NOT_STARTED_AFTER_MIN + 1) * 60000)
+  const to = new Date(now.getTime() - NOT_STARTED_AFTER_MIN * 60000)
+  const tasks = await prisma.task.findMany({
+    where: { status: 'today', startAt: { gt: from, lte: to }, owner: { active: true, role: { in: PARTICIPANT_ROLES } } },
+    select: { id: true, title: true, startAt: true, ownerId: true, owner: { select: { id: true, name: true } } },
+  })
+  for (const task of tasks) {
+    if ((await activeAway(task.ownerId, now)) || (await hasEndedDay(task.ownerId, now))) continue
+    const warned = await prisma.botEvent.findFirst({
+      where: { userId: task.ownerId, type: 'task_late', data: { path: ['taskId'], equals: task.id } },
+      select: { id: true },
+    })
+    if (warned) continue
+    const res = await sendOnce(`task-nostart:${task.id}:${task.startAt.getTime()}`, () =>
+      tellOwners(`⏰ ${nameOf(task.owner)} не начал(а) задачу «${escapeHtml(short(task.title, 120))}» — по плану в ${hm(task.startAt)}, прошло ${NOT_STARTED_AFTER_MIN} минут.`))
+    if (res.skipped) continue
+    await logEvent(task.ownerId, 'task_not_started', { at: now, data: { taskId: task.id, taskTitle: task.title, startAt: task.startAt.toISOString() } })
+    await tell(task.ownerId,
+      `Задача «${escapeHtml(short(task.title, 120))}» должна была начаться в <b>${hm(task.startAt)}</b>. Как дела?`,
+      { buttons: [[{ text: '▶️ Беру в работу', data: `tk:go:${task.id}` }, { text: '⏳ Не успеваю', data: `tk:late:${task.id}` }]] })
+  }
+}
+
 /**
  * Кнопка «Беру в работу»: задача уходит в «В процессе». Только из «На
  * сегодня»: кнопка живёт под сообщением, и нажатая вечером на закрытой
@@ -72,8 +107,8 @@ export async function takeTask(user, taskId, now = new Date()) {
   if (task.status === 'progress') return `«${escapeHtml(short(task.title, 120))}» уже в процессе.`
   if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта 👍`
   try {
+    // В журнал «взял в работу» запишет сам сервис задач.
     const task = await updateTaskStatus(taskId, 'progress', user)
-    await logEvent(user.id, 'task_take', { at: now, data: { taskId, taskTitle: task.title } })
     return `▶️ «${escapeHtml(short(task.title, 120))}» — в процессе. Удачи!`
   } catch (e) {
     return e.status ? `Не получилось: ${e.message}` : 'Не получилось — открой задачу в CRM.'

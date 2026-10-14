@@ -123,6 +123,24 @@ describe('что не отлучка и не форс-мажор', () => {
   })
 })
 
+describe('напоминания', () => {
+  const now = new Date('2026-11-03T12:00:00+03:00')
+  test('«напомни в 15:00 позвонить клиенту» — напоминание на 15:00', () => {
+    const r = parseIntent('напомни мне в 15:00 позвонить клиенту', now)
+    assert.equal(r.type, 'remind')
+    assert.equal(r.until.toISOString(), new Date('2026-11-03T15:00:00+03:00').toISOString())
+  })
+  test('«через 20 минут напомни про отчёт» — через 20 минут', () => {
+    const r = parseIntent('через 20 минут напомни про отчёт', now)
+    assert.equal(r.type, 'remind')
+    assert.equal(r.until.toISOString(), new Date('2026-11-03T12:20:00+03:00').toISOString())
+  })
+  test('без времени — напоминание без срока, «напоминание» — не просьба', () => {
+    assert.equal(parseIntent('напомни позвонить клиенту', now).until, null)
+    assert.equal(parseIntent('спасибо за напоминание', now), null)
+  })
+})
+
 describe('только время', () => {
   test('«до 16:30», «к 17», «16:30» — да; фраза со временем — нет', () => {
     assert.ok(isBareTime('до 16:30'))

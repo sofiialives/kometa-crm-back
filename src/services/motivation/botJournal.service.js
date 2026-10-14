@@ -36,7 +36,8 @@ export async function getBotJournal(actor, { userId, month }, now = new Date()) 
   const window = monthRange(monthKey)
   const { start, end } = window
 
-  const [aways, answers, events, latest, linked] = await Promise.all([
+  const OVERDUE = ['task_overdue', 'personal_task_overdue']
+  const [aways, answers, events, latest, linked, overdueReviews, overdueAuto] = await Promise.all([
     // Пересекает месяц и не снята до его начала.
     prisma.motivationAway.findMany({
       where: { userId, from: { lt: end }, until: { gt: start }, OR: [{ endedAt: null }, { endedAt: { gt: start } }] },
@@ -59,6 +60,16 @@ export async function getBotJournal(actor, { userId, month }, now = new Date()) 
       })
       : [],
     prisma.telegramLink.findUnique({ where: { userId }, select: { chatId: true } }),
+    // Просрочки — из заявок «На проверке» и из автоматических штрафов: сами
+    // закрытые задачи CRM ночью убирает, а след о просрочке остаётся.
+    prisma.motivationReview.findMany({
+      where: { userId, rule: { in: OVERDUE }, occurredAt: { gte: start, lt: end } },
+      select: { id: true, taskTitle: true, occurredAt: true, nights: true, prizePoints: true, status: true },
+    }),
+    prisma.motivationEvent.findMany({
+      where: { userId, occurredAt: { gte: start, lt: end }, OR: OVERDUE.map((r) => ({ dedupeKey: { startsWith: `auto:${r}:` } })) },
+      select: { id: true, taskTitle: true, occurredAt: true, prizePoints: true, cancelledAt: true },
+    }),
   ])
   const messages = latest.slice(0, MESSAGES_LIMIT).reverse()
 
@@ -89,6 +100,12 @@ export async function getBotJournal(actor, { userId, month }, now = new Date()) 
     })
   }
   for (const e of events) items.push({ kind: e.type, id: e.id, at: e.at, text: e.text, data: e.data ?? null })
+  for (const r of overdueReviews) {
+    items.push({ kind: 'task_overdue', id: r.id, at: r.occurredAt, text: null, data: { taskTitle: r.taskTitle, nights: r.nights.length, points: r.status === 'rejected' ? null : r.prizePoints } })
+  }
+  for (const e of overdueAuto) {
+    items.push({ kind: 'task_overdue', id: e.id, at: e.occurredAt, text: null, data: { taskTitle: e.taskTitle, nights: 1, points: e.cancelledAt ? null : e.prizePoints } })
+  }
 
   return {
     employee: employeeCard(employee),

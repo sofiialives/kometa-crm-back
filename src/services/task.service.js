@@ -3,6 +3,7 @@ import { ApiError } from '../utils/ApiError.js'
 import { syncTaskStatus } from './motivation/autoTasks.service.js'
 import { getSettingsRow } from './motivation/profiles.js'
 import { mskDayStart } from './motivation/taskRules.js'
+import { logTaskEvent } from './taskJournal.js'
 
 const OWNER_INCLUDE = { owner: { select: { id: true, name: true, avatarUrl: true, avatarColor: true } } }
 
@@ -130,6 +131,10 @@ export async function createTask({ title, description, deadline, startAt, workId
     ))
   })
 
+  // Кто поставил, если не сам себе: задачи из Иерархии ставит руководитель.
+  for (const t of created) {
+    await logTaskEvent(t.ownerId, 'task_created', t, { deadline: t.deadline.toISOString(), by: t.ownerId === user.id ? null : user.name ?? null })
+  }
   return created
 }
 
@@ -209,6 +214,11 @@ export async function updateTaskStatus(id, status, user) {
     include: OWNER_INCLUDE,
   })
   await syncTaskStatus(task, updated)
+  if (task.status !== updated.status) {
+    if (updated.status === 'progress' && task.status === 'today') await logTaskEvent(task.ownerId, 'task_started', updated)
+    else if (updated.status === 'done') await logTaskEvent(task.ownerId, 'task_done', updated, { onTime: updated.doneAt <= updated.deadline, deadline: updated.deadline.toISOString() })
+    else if (task.status === 'done') await logTaskEvent(task.ownerId, 'task_reopened', updated)
+  }
   return updated
 }
 
@@ -230,7 +240,13 @@ export async function extendDeadline(id, deadline, user) {
     (user.role === 'lead' && task.departmentId === user.departmentId)
   if (!canExtend) throw ApiError.forbidden('Продлевать срок можно только своим задачам или задачам своего отдела')
 
-  return prisma.task.update({ where: { id }, data: { deadline }, include: OWNER_INCLUDE })
+  const updated = await prisma.task.update({ where: { id }, data: { deadline }, include: OWNER_INCLUDE })
+  if (task.deadline.getTime() !== updated.deadline.getTime()) {
+    await logTaskEvent(task.ownerId, 'task_extended', updated, {
+      from: task.deadline.toISOString(), to: updated.deadline.toISOString(), by: task.ownerId === user.id ? null : user.name ?? null,
+    })
+  }
+  return updated
 }
 
 /**

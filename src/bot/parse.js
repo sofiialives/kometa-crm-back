@@ -31,6 +31,8 @@ const COMING_BACK = /(обед|вернусь|буду|через|перерыв
 // «вернулся с перерыва» — это возвращение.
 const AWAY_STRONG = /(отхожу|отойду|отлучусь|отлучаюсь|отъеду|отъезжаю)/
 const AWAY = /(ухожу|уйду|ушел|ушла|буду через|вернусь|на обед|перерыв)/
+// «Напомни мне в 15:00 позвонить клиенту» — просьба о напоминании.
+const REMIND = /(^|\s)напомни(те|ть)?(\s|[,!:]|$)/
 const LATE = /(задерживаюсь|задержусь|опаздываю|опоздаю|не успеваю|не успею|позже начну|начну позже)/
 
 /** «16:30» по Москве сегодня, или null, если такое время уже прошло. */
@@ -82,11 +84,12 @@ export function parseUntil(text, now = new Date()) {
  * Что человек хочет сказать. Возвращает { type, until } или null.
  * type: back — вернулся; force_majeure — форс-мажор; away — отходит;
  * late — задерживается (с задачей или после отлучки); day_end — ушёл
- * домой, на сегодня всё.
+ * домой, на сегодня всё; remind — просит напомнить о чём-то.
  */
 export function parseIntent(text, now = new Date()) {
   const t = normalize(text)
   if (!t) return null
+  if (REMIND.test(t)) return { type: 'remind', until: parseUntil(t, now) }
   if (FORCE.test(t)) return { type: 'force_majeure', until: parseUntil(t, now) }
   if (AWAY_STRONG.test(t)) return { type: 'away', until: parseUntil(t, now) }
   if (LATE.test(t)) return { type: 'late', until: parseUntil(t, now) }

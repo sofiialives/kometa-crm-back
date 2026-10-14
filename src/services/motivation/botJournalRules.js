@@ -75,8 +75,8 @@ export function redact(item, full) {
   const out = { ...rest, reason: null, answer: null, text: null }
   if (item.kind === 'force_majeure') out.by = null
   if (item.data) {
-    const { taskTitle, taskId, startAt, until, approved } = item.data
-    out.data = { taskTitle, taskId, startAt, until, approved }
+    const { taskTitle, taskId, startAt, until, approved, deadline, onTime, from, to, nights, points } = item.data
+    out.data = { taskTitle, taskId, startAt, until, approved, deadline, onTime, from, to, nights, points }
   }
   return out
 }
@@ -102,7 +102,12 @@ export function summarize(items) {
       skipped: count('skipped'),
     },
     lateReports: of('late').length + of('task_late').length,
-    tasksTaken: of('task_take').length,
+    tasksTaken: of('task_take').length + of('task_started').length,
+    tasksDone: of('task_done').length,
+    tasksDoneLate: of('task_done').filter((i) => i.data?.onTime === false).length,
+    tasksOverdue: of('task_overdue').length,
+    tasksExtended: of('task_extended').length,
+    tasksNotStarted: of('task_not_started').length,
     dayEnds: of('day_end').length,
   }
 }

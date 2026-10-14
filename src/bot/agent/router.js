@@ -10,6 +10,7 @@ import { logMessage, sendOnce, tellChat } from './notify.js'
 import { mskDayKey, mskDayStart } from '../plan.js'
 import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
+import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES } from './remind.js'
 import { aiOwnerText, aiStaffText } from '../ai/agent.js'
 
 /**
@@ -43,6 +44,7 @@ async function onIntent(user, intent, text, logged, now) {
   if (intent.type === 'back') return comeBack(user, now)
   if (intent.type === 'late') return runningLate(user, { until: intent.until, text }, now)
   if (intent.type === 'force_majeure') return reportForceMajeure(user, text, logged, now)
+  if (intent.type === 'remind') return intent.until ? createReminder(user, intent.until, text, now) : askReminderTime(user, text)
   return null
 }
 
@@ -50,6 +52,12 @@ async function onIntent(user, intent, text, logged, now) {
 async function onWaiting(user, waiting, text, logged, now) {
   if (waiting.type === 'fm_text') {
     await reportForceMajeure(user, text, logged, now)
+    return true
+  }
+  if (waiting.type === 'remind_time') {
+    const until = parseUntil(text, now)
+    if (!until) return false
+    await createReminder(user, until, waiting.payload.text, now)
     return true
   }
   if (waiting.type === 'task_late') {
@@ -190,6 +198,17 @@ export async function onCallback(cb, user, now = new Date()) {
   if (kind === 'm' && action === 'fm') {
     state.expect(user.id, 'fm_text')
     return tellChat(chatId, 'Что случилось и до какого времени? Напиши одной строкой — передам Яну.', { userId: user.id })
+  }
+  if (kind === 'rm') {
+    const ok = await cancelReminder(user, id, now)
+    return closeButtons(cb, ok ? 'отменено' : 'уже не актуально')
+  }
+  if (kind === 'rmt') {
+    const minutes = Number(action)
+    const waiting = state.take(user.id)
+    if (!REMIND_MINUTES.includes(minutes) || waiting?.type !== 'remind_time') return closeButtons(cb, 'напиши ещё раз, о чём напомнить')
+    await closeButtons(cb, `через ${minutes} мин`)
+    return createReminder(user, new Date(now.getTime() + minutes * 60000), waiting.payload.text, now)
   }
   if (kind === 'ai') {
     // Подтверждение того, что понял ИИ: конец дня и заявка на форс-мажор.

@@ -7,7 +7,7 @@ import { fitPrompt, MAX_MESSAGE_CHARS, plain } from './limits.js'
 
 const nullable = (type) => ({ anyOf: [{ type }, { type: 'null' }] })
 
-export const STAFF_ACTIONS = ['away', 'back', 'late', 'force_majeure', 'day_end', 'question', 'report', 'smalltalk', 'unclear']
+export const STAFF_ACTIONS = ['away', 'back', 'late', 'force_majeure', 'day_end', 'remind', 'question', 'report', 'smalltalk', 'unclear']
 
 export const STAFF_SCHEMA = {
   type: 'object',
@@ -46,6 +46,7 @@ const STAFF_SYSTEM = `Ты — бот агентства KOMETA в телегр�
 - late — задерживается: опаздывает к началу работы, задачи или после отлучки. until или minutes — если сказано.
 - force_majeure — заболел, ЧП, сегодня не сможет работать.
 - day_end — закончил рабочий день, ушёл домой.
+- remind — просит напомнить ему о чём-то. minutes или until — когда, если сказано.
 - question — спрашивает о своих задачах, баллах, банке, звонках, отлучке. Ответь в reply по данным CRM ниже. Чего в данных нет — так и скажи, не придумывай.
 - report — важная рабочая новость для руководителя: проблема с клиентом, блокер, срыв срока, нужна помощь. reply оставь пустым: бот сам скажет, передал ли.
 - smalltalk — не о работе. Ответь одной вежливой фразой и напомни, что ты помогаешь с отлучками, задачами и баллами.
