@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { AI_LIMITS, cut, fitPrompt, MAX_INPUT_CHARS, MAX_MESSAGE_CHARS, MAX_OUTPUT_TOKENS } from '../ai/limits.js'
-import { ownerPrompt, STAFF_SCHEMA, staffPrompt, taskPrompt, TASK_SCHEMA } from '../ai/prompts.js'
+import { OWNER_SCHEMA, ownerPrompt, STAFF_SCHEMA, staffPrompt, taskPrompt, TASK_SCHEMA } from '../ai/prompts.js'
 import { decide, noLinks, untilFrom } from '../ai/agent.js'
 import { plain } from '../ai/limits.js'
 
@@ -51,7 +51,7 @@ describe('размер запроса', () => {
 
 describe('схемы ответа — строгий JSON', () => {
   test('все поля обязательны, лишних нет', () => {
-    for (const s of [STAFF_SCHEMA, TASK_SCHEMA]) {
+    for (const s of [STAFF_SCHEMA, OWNER_SCHEMA, TASK_SCHEMA]) {
       assert.equal(s.additionalProperties, false)
       assert.deepEqual([...s.required].sort(), Object.keys(s.properties).sort())
     }
@@ -126,5 +126,19 @@ describe('стиль и деньги на ключе', () => {
     assert.equal(isOutOfMoney({ status: 400, message: 'You have reached your specified API usage limits.' }), true)
     assert.equal(isOutOfMoney({ status: 400, message: 'max_tokens: must be positive' }), false)
     assert.equal(isOutOfMoney({ status: 500, message: 'credit balance' }), false)
+  })
+})
+
+describe('списки от ИИ — столбиком', () => {
+  test('пункты из отдельного поля, по одному в строку', async () => {
+    const { decide } = await import('../ai/agent.js')
+    const plan = decide({ action: 'question', reply: 'Задачи на сегодня', points: ['- Баннеры, до 14:00', '2) Отчёт, до 18:00', ' '], owner_note: null })
+    assert.equal(plan.reply, 'Задачи на сегодня\n• Баннеры, до 14:00\n• Отчёт, до 18:00')
+    assert.equal(decide({ action: 'question', reply: 'Задачи', points: ['10 постов под форумы'], owner_note: null }).reply, 'Задачи\n• 10 постов под форумы')
+  })
+  test('без пунктов — как раньше', async () => {
+    const { decide } = await import('../ai/agent.js')
+    assert.equal(decide({ action: 'smalltalk', reply: 'Привет', points: null, owner_note: null }).reply, 'Привет')
+    assert.equal(decide({ action: 'question', reply: '', points: null, owner_note: null }).kind, 'none')
   })
 })

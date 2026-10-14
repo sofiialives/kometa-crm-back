@@ -12,6 +12,7 @@ import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
 import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES, tooFarReminder } from './remind.js'
 import { aiOwnerText, aiStaffText } from '../ai/agent.js'
+import { listIntent, listText } from './lists.js'
 
 /**
  * Что человек пишет и нажимает. Без ИИ — простыми правилами (parse.js):
@@ -175,6 +176,13 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   const until = isBareTime(text) ? parseUntil(text, now) : null
   if (until && (await hasOpenBreak(user.id, now, { recentMin: 30 }))) {
     await startBreak(user, { until, extend: true }, now)
+    return
+  }
+  // «Что у меня на сегодня», «мои задачи», «что по звонкам» — список из CRM
+  // столбиком, без ИИ: бесплатно и не превращается в сплошной абзац.
+  const list = listIntent(text)
+  if (list) {
+    await tellChat(chatId, await listText(list, user.id, now), { userId: user.id })
     return
   }
   // Правила не поняли — ИИ. Нет ключа, лимит, сбой — подсказка, как раньше.

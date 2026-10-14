@@ -21,8 +21,25 @@ const MEDIA = [
   ['sticker', 'стикер'], ['audio', 'аудио'], ['location', 'геопозиция'], ['contact', 'контакт'], ['poll', 'опрос'], ['dice', 'кубик'],
 ]
 
+// Чужим, кого нет в CRM, отвечаем подсказкой не чаще раза в сутки, а
+// остальное молча пропускаем: ни ИИ, ни журнала, ни потока ответов на спам.
+// В памяти, а не в базе: чужие не должны писать в базу.
+const STRANGER_REPLY_MS = 24 * 60 * 60 * 1000
+const STRANGERS_MAX = 5000
+const strangers = new Map()
+
+export function shouldAnswerStranger(chatId, now = Date.now()) {
+  const last = strangers.get(String(chatId))
+  if (last && now - last < STRANGER_REPLY_MS) return false
+  if (strangers.size >= STRANGERS_MAX) strangers.clear()
+  strangers.set(String(chatId), now)
+  return true
+}
+
 async function handleMessage(msg) {
   const chatId = msg.chat?.id
+  // Другие боты нам не пишут — не отвечаем.
+  if (msg.from?.is_bot) return
   // Подпись к фото — тоже текст.
   const text = String(msg.text || msg.caption || '').trim()
   const media = MEDIA.find(([key]) => msg[key])?.[1] ?? null
@@ -34,7 +51,7 @@ async function handleMessage(msg) {
     // Уже подключённый человек — дальше разговор ведёт агент.
     const user = await userByChat(chatId)
     if (user) return onText(user, chatId, text, new Date(), { media })
-    await sendMessage(chatId, HELP)
+    if (shouldAnswerStranger(chatId)) await sendMessage(chatId, HELP)
     return
   }
 
