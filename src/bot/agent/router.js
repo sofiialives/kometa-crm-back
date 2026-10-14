@@ -69,7 +69,7 @@ async function onWaiting(user, waiting, text, logged, now) {
       return true
     }
     // Правила время не нашли («минут через сорок», «к концу обеда») — ИИ.
-    if (await aiStaffText(user, user.chatId, text, logged, now, { kind: 'reply' })) return true
+    if (await aiStaffText(user, user.chatId, text, logged, now, { kind: 'reply', extend: Boolean(waiting.payload.extend) })) return true
     await tellChat(user.chatId, 'Не понял время. Оставляю как есть — поправить можно кнопкой или фразой «до 16:30».', { userId: user.id })
     return true
   }
@@ -107,7 +107,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   const logged = await logMessage({ userId: user.id, chatId, direction: isReply ? 'reply' : 'in', text: answerText || '[не текст]' })
   if (!isParticipant(user)) {
     // Ян спрашивает о команде — отвечает ИИ (только чтение).
-    if (!command && (await aiOwnerText(user, chatId, text, logged, now))) return
+    if (!command && !isCommandText && (await aiOwnerText(user, chatId, text, logged, now))) return
     await tellChat(chatId, OWNER_HELP, { userId: user.id })
     return
   }
@@ -136,7 +136,8 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     return
   }
   // Правила не поняли — ИИ. Нет ключа, лимит, сбой — подсказка, как раньше.
-  if (await aiStaffText(user, chatId, text, logged, now)) return
+  // Незнакомые команды (/что-то) на ИИ не тратим.
+  if (!isCommandText && (await aiStaffText(user, chatId, text, logged, now))) return
   await tellChat(chatId, STAFF_HELP, { userId: user.id, buttons: MENU })
 }
 
@@ -189,6 +190,21 @@ export async function onCallback(cb, user, now = new Date()) {
   if (kind === 'm' && action === 'fm') {
     state.expect(user.id, 'fm_text')
     return tellChat(chatId, 'Что случилось и до какого времени? Напиши одной строкой — передам Яну.', { userId: user.id })
+  }
+  if (kind === 'ai') {
+    // Подтверждение того, что понял ИИ: конец дня и заявка на форс-мажор.
+    if (cb.message?.date && Date.now() / 1000 - cb.message.date > 3 * 60 * 60) return closeButtons(cb, 'кнопка устарела')
+    if (action === 'de') {
+      await closeButtons(cb, 'да')
+      return dayEnd(user, now)
+    }
+    if (action === 'fm') {
+      const message = await prisma.botMessage.findUnique({ where: { id } })
+      if (!message || message.userId !== user.id || !['in', 'reply'].includes(message.direction)) return closeButtons(cb, 'не нашёл сообщение')
+      await closeButtons(cb, 'да')
+      return reportForceMajeure(user, message.text, message, now)
+    }
+    return closeButtons(cb, 'нет, ничего не делаю')
   }
   if (kind === 'aw' || kind === 'ax') {
     // Кнопка со вчерашнего сообщения — не повод ставить отлучку сегодня.

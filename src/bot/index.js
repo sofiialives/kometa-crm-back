@@ -96,5 +96,6 @@ export async function startBot() {
   }
 
   console.log(`[бот] @${username} запущен, напоминание за ${env.remindBeforeMin} мин`)
-  console.log(env.anthropicApiKey ? `[ИИ] включён, модель ${env.aiModel}` : '[ИИ] ключа нет — бот работает по правилам')
+  if (env.anthropicKeyMalformed) console.error('[ИИ] ANTHROPIC_API_KEY в неверном формате (пробелы или лишние символы) — ИИ выключен')
+  else console.log(env.anthropicApiKey ? `[ИИ] ключ задан, модель ${env.aiModel}` : '[ИИ] ключа нет — бот работает по правилам')
 }

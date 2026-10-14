@@ -72,9 +72,17 @@ export const env = {
   // ИИ в боте (Claude). Пока ключа нет, бот работает по своим правилам,
   // как раньше. Модель и общий дневной потолок запросов можно поменять
   // переменными, не трогая код.
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+  // Ключ — только печатные символы без пробелов; иначе SDK кладёт его в
+  // текст ошибки, и он оказался бы в логах. Кривой ключ — ИИ выключен.
+  anthropicApiKey: /^[\x21-\x7E]+$/.test((process.env.ANTHROPIC_API_KEY || '').trim()) ? process.env.ANTHROPIC_API_KEY.trim() : '',
+  anthropicKeyMalformed: Boolean((process.env.ANTHROPIC_API_KEY || '').trim()) && !/^[\x21-\x7E]+$/.test(process.env.ANTHROPIC_API_KEY.trim()),
   aiModel: process.env.AI_MODEL || 'claude-haiku-5-5',
-  aiDailyCap: Number(process.env.AI_DAILY_CAP) || 600,
+  // 0 — ИИ выключен совсем (аварийный выключатель без удаления ключа).
+  aiDailyCap: /^\d+$/.test(process.env.AI_DAILY_CAP ?? '') ? Number(process.env.AI_DAILY_CAP) : 600,
+  // Ещё один потолок — по объёму текста за день на всех (вход + выход).
+  // 2,5 млн по цене Haiku 5.5 ($0,10 за млн на входе) — не больше ~$0,3 в
+  // день, даже если в запросах окажется больше текста, чем рассчитано.
+  aiDailyTokens: /^\d+$/.test(process.env.AI_DAILY_TOKENS ?? '') ? Number(process.env.AI_DAILY_TOKENS) : 2_500_000,
 
   // За сколько минут до звонка предупреждать.
   remindBeforeMin: Number(process.env.REMIND_BEFORE_MIN) || 15,

@@ -215,10 +215,12 @@ async function ownerFeed() {
   }
   const unsent = await unsentKeys([...reviews.map((r) => `review:${r.id}`), ...hints.map((h) => `hint:${h.id}`)])
 
+  // Оценок ИИ за проход — не больше трёх: рассылка заявок не должна ждать ИИ.
+  let aiRatings = 3
   for (const r of reviews) {
     if (!unsent.has(`review:${r.id}`)) continue
     // Сложность личной задачи — по смыслу, если ИИ включён; иначе по длине описания.
-    const complexity = await aiRateReview(r)
+    const complexity = aiRatings-- > 0 ? await aiRateReview(r) : r.complexity
     const card = { ...r, complexity }
     await sendOnce(`review:${r.id}`, () => tellOwners(reviewText(card), { buttons: reviewButtons(card) }))
   }
