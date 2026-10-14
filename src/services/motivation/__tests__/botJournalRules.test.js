@@ -123,6 +123,16 @@ describe('сводка и дни', () => {
     assert.equal(s.tasksExtended, 1)
   })
 
+  test('продление руководителем не идёт человеку в «Продлевал сроки»', () => {
+    const s = summarize([
+      { kind: 'task_extended', at: T('17:00'), data: {} },
+      { kind: 'task_extended', at: T('17:10'), data: { byOther: true } },
+    ])
+    assert.equal(s.tasksExtended, 1)
+    const seen = redact({ kind: 'task_extended', at: T('17:10'), data: { byOther: true, taskTitle: 'Отчёт' } }, false)
+    assert.equal(seen.data.byOther, true)
+  })
+
   test('дни по Москве, свежие сверху, внутри — по времени', () => {
     const days = groupByDay(items, [{ at: T('12:00'), direction: 'in', text: 'отхожу' }])
     assert.deepEqual(days.map((d) => d.day), ['2026-11-05', '2026-11-04', '2026-11-03'])

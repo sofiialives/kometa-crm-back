@@ -1120,7 +1120,9 @@ model BotEvent {
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  // late, task_late, task_take, day_end, fm_request, fm_decision.
+  // late, task_late, task_take, day_end, fm_request, fm_decision; задачи из
+  // CRM: task_created, task_started, task_done, task_reopened, task_extended,
+  // task_not_started.
   type String
   at   DateTime @default(now())
 
