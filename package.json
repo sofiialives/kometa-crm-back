@@ -18,6 +18,7 @@
     "clients:duplicates": "node src/scripts/findDuplicateClients.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
     "@aws-sdk/client-s3": "^3.1139.0",
     "@prisma/client": "^5.18.0",
     "bcryptjs": "^2.4.3",

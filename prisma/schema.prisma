@@ -105,6 +105,8 @@ model User {
   botMessages               BotMessage[]
   botCheckinAnswers         BotCheckinAnswer[]
   botEvents                 BotEvent[]
+  aiUsage                   AiUsage[]
+  botReminders              BotReminder[]
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -1118,7 +1120,9 @@ model BotEvent {
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  // late, task_late, task_take, day_end, fm_request, fm_decision.
+  // late, task_late, task_take, day_end, fm_request, fm_decision; задачи из
+  // CRM: task_created, task_started, task_done, task_reopened, task_extended,
+  // task_not_started.
   type String
   at   DateTime @default(now())
 
@@ -1129,6 +1133,51 @@ model BotEvent {
 
   createdAt DateTime @default(now())
 
+  @@index([userId, at])
+}
+
+// Расход ИИ в боте: сколько запросов к Claude и сколько текста ушло и
+// пришло, по человеку, дню и виду. По нему же бот держит лимиты (40
+// запросов на человека в день) — и по нему видно, во что обходится месяц.
+model AiUsage {
+  id String @id @default(cuid())
+
+  // Чей запрос: кто написал боту или чью задачу оценивали.
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Московский день «ГГГГ-ММ-ДД».
+  day String
+  // own — своё сообщение, reply — ответ на вопрос бота, task — оценка задачи.
+  kind String
+
+  calls        Int @default(0)
+  inputTokens  Int @default(0)
+  outputTokens Int @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, day, kind])
+  @@index([day])
+}
+
+// Напоминание, которое человек попросил у бота: «напомни в 15:00
+// позвонить клиенту». Уходит один раз; можно отменить кнопкой.
+model BotReminder {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  at   DateTime
+  text String
+
+  sentAt      DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([at])
   @@index([userId, at])
 }
 

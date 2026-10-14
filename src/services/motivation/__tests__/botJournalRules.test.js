@@ -102,6 +102,10 @@ describe('сводка и дни', () => {
     { kind: 'late', at: T('09:50') },
     { kind: 'task_late', at: T('17:26') },
     { kind: 'force_majeure', at: T('09:00', '2026-11-05') },
+    { kind: 'task_done', at: T('16:00'), data: { onTime: true } },
+    { kind: 'task_done', at: T('19:00'), data: { onTime: false } },
+    { kind: 'task_overdue', at: T('23:59'), data: { nights: 1 } },
+    { kind: 'task_extended', at: T('17:00'), data: {} },
   ]
 
   test('сводка за месяц', () => {
@@ -113,12 +117,26 @@ describe('сводка и дни', () => {
     assert.deepEqual(s.checkins, { asked: 2, answered: 1, penalized: 1, skipped: 0 })
     assert.equal(s.lateReports, 2)
     assert.equal(s.forceMajeure, 1)
+    assert.equal(s.tasksDone, 2)
+    assert.equal(s.tasksDoneLate, 1)
+    assert.equal(s.tasksOverdue, 1)
+    assert.equal(s.tasksExtended, 1)
+  })
+
+  test('продление руководителем не идёт человеку в «Продлевал сроки»', () => {
+    const s = summarize([
+      { kind: 'task_extended', at: T('17:00'), data: {} },
+      { kind: 'task_extended', at: T('17:10'), data: { byOther: true } },
+    ])
+    assert.equal(s.tasksExtended, 1)
+    const seen = redact({ kind: 'task_extended', at: T('17:10'), data: { byOther: true, taskTitle: 'Отчёт' } }, false)
+    assert.equal(seen.data.byOther, true)
   })
 
   test('дни по Москве, свежие сверху, внутри — по времени', () => {
     const days = groupByDay(items, [{ at: T('12:00'), direction: 'in', text: 'отхожу' }])
     assert.deepEqual(days.map((d) => d.day), ['2026-11-05', '2026-11-04', '2026-11-03'])
-    assert.deepEqual(days[2].items.map((i) => i.kind), ['late', 'break', 'checkin', 'task_late'])
+    assert.deepEqual(days[2].items.map((i) => i.kind), ['late', 'break', 'checkin', 'task_done', 'task_extended', 'task_late', 'task_done', 'task_overdue'])
     assert.equal(days[2].messages.length, 1)
   })
 

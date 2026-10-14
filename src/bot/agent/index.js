@@ -2,7 +2,8 @@ import { prisma } from '../../config/prisma.js'
 import { tickBreaks } from './away.js'
 import { tickCheckin } from './checkin.js'
 import { tickFeed } from './feed.js'
-import { morningNoTasks, tickTaskStarts } from './tasks.js'
+import { morningNoTasks, tickNotStarted, tickTaskStarts } from './tasks.js'
+import { tickReminders } from './remind.js'
 
 /**
  * Агент — часть бота напоминаний: раз в минуту обходит отлучки, задачи,
@@ -15,6 +16,8 @@ let running = false
 const STEPS = [
   ['отлучки', tickBreaks],
   ['задачи', tickTaskStarts],
+  ['не начатые задачи', tickNotStarted],
+  ['напоминания', tickReminders],
   ['чек-ин', tickCheckin],
   ['лента', tickFeed],
 ]
@@ -51,6 +54,7 @@ export async function pruneNotices(now = new Date()) {
     },
   })
   const messages = await prisma.botMessage.deleteMany({ where: { createdAt: { lt: before } } })
+  await prisma.botReminder.deleteMany({ where: { at: { lt: before } } })
   // В журнале действий факт остаётся, а слова человека — нет.
   const words = await prisma.botEvent.updateMany({ where: { at: { lt: before }, text: { not: null } }, data: { text: null } })
   if (notices.count || messages.count || words.count) {

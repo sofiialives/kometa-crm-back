@@ -31,13 +31,15 @@ const COMING_BACK = /(обед|вернусь|буду|через|перерыв
 // «вернулся с перерыва» — это возвращение.
 const AWAY_STRONG = /(отхожу|отойду|отлучусь|отлучаюсь|отъеду|отъезжаю)/
 const AWAY = /(ухожу|уйду|ушел|ушла|буду через|вернусь|на обед|перерыв)/
+// «Напомни мне в 15:00 позвонить клиенту» — просьба о напоминании.
+const REMIND = /(^|\s)напомни(те|ть)?(\s|[,!:]|$)/
 const LATE = /(задерживаюсь|задержусь|опаздываю|опоздаю|не успеваю|не успею|позже начну|начну позже)/
 
-/** «16:30» по Москве сегодня, или null, если такое время уже прошло. */
-function atToday(hours, minutes, now) {
+/** «16:30» по Москве сегодня (или через days дней), null — если уже прошло. */
+function atToday(hours, minutes, now, days = 0) {
   if (hours > 23 || minutes > 59) return null
   const msk = new Date(new Date(now).getTime() + MSK_OFFSET_MS)
-  const target = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(), hours, minutes) - MSK_OFFSET_MS
+  const target = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate() + days, hours, minutes) - MSK_OFFSET_MS
   return target > new Date(now).getTime() ? new Date(target) : null
 }
 
@@ -58,9 +60,11 @@ export function isBareTime(text) {
  * 20 мин», «на полчаса», «на полтора часа», «на 2 часа». Возвращает Date или
  * null, если время не названо или уже прошло.
  */
+const CLOCK = /(?:^|\s)(?:в|до|к|около)\s+(\d{1,2})(?:[:.](\d{2}))?(?:\s*(?:час|ч)\w*)?(?:\s|[.!,]|$)/
+
 export function parseUntil(text, now = new Date()) {
   const t = normalize(text)
-  const clock = /(?:^|\s)(?:в|до|к|около)\s+(\d{1,2})(?:[:.](\d{2}))?(?:\s*(?:час|ч)\w*)?(?:\s|[.!,]|$)/.exec(t)
+  const clock = CLOCK.exec(t)
   if (clock) return atToday(Number(clock[1]), Number(clock[2] ?? 0), now)
 
   const base = new Date(now).getTime()
@@ -82,11 +86,12 @@ export function parseUntil(text, now = new Date()) {
  * Что человек хочет сказать. Возвращает { type, until } или null.
  * type: back — вернулся; force_majeure — форс-мажор; away — отходит;
  * late — задерживается (с задачей или после отлучки); day_end — ушёл
- * домой, на сегодня всё.
+ * домой, на сегодня всё; remind — просит напомнить о чём-то.
  */
 export function parseIntent(text, now = new Date()) {
   const t = normalize(text)
   if (!t) return null
+  if (REMIND.test(t)) return { type: 'remind', ...parseRemindAt(t, now) }
   if (FORCE.test(t)) return { type: 'force_majeure', until: parseUntil(t, now) }
   if (AWAY_STRONG.test(t)) return { type: 'away', until: parseUntil(t, now) }
   if (LATE.test(t)) return { type: 'late', until: parseUntil(t, now) }
@@ -98,4 +103,28 @@ export function parseIntent(text, now = new Date()) {
   }
   if (AWAY.test(t)) return { type: 'away', until: parseUntil(t, now) }
   return null
+}
+
+const TOMORROW = /(^|\s)завтра(\s|[.!,]|$)/
+// Дальше завтрашнего дня бот не напоминает — честно об этом говорим.
+const FAR_DAY = /(послезавтра|понедельник|вторник|в среду|четверг|пятниц|суббот|воскресень|через (\d+ |[а-я]+ )?(дн|ден|недел|месяц))/
+
+/**
+ * Когда напомнить: { until, tomorrow, far }. «В 9» вечером — это завтра в 9
+ * (сегодняшнее уже прошло). «Завтра в 10» — завтра. «Завтра» без времени —
+ * tomorrow: true, бот спросит время. «В пятницу», «через неделю» — far: true.
+ * tomorrow в opts — человек уже сказал «завтра», теперь отвечает временем.
+ */
+export function parseRemindAt(text, now = new Date(), opts = {}) {
+  const t = normalize(text)
+  if (FAR_DAY.test(t)) return { until: null, tomorrow: false, far: true }
+  const tomorrow = Boolean(opts.tomorrow) || TOMORROW.test(t)
+  const clock = CLOCK.exec(t) || (isBareTime(t) ? /(\d{1,2})(?:[:.](\d{2}))?/.exec(t) : null)
+  if (clock) {
+    const [h, m] = [Number(clock[1]), Number(clock[2] ?? 0)]
+    const until = tomorrow ? atToday(h, m, now, 1) : atToday(h, m, now) ?? atToday(h, m, now, 1)
+    return { until, tomorrow, far: false }
+  }
+  if (tomorrow) return { until: null, tomorrow: true, far: false }
+  return { until: parseUntil(t, now), tomorrow: false, far: false }
 }

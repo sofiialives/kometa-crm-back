@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { isParticipant } from '../../services/motivation/access.js'
-import { isBareTime, parseIntent, parseUntil } from '../parse.js'
+import { isBareTime, parseIntent, parseRemindAt, parseUntil } from '../parse.js'
 import { answerCallback, editMessage, escapeHtml } from '../telegram.js'
 import { BREAK_MINUTES, comeBack, dayEnd, decideForceMajeure, hasOpenBreak, MENU, reportForceMajeure, runningLate, setBreakMinutes, startBreak } from './away.js'
 import { isAskedNow, penalizeIfDeferred, recordAnswer } from './checkin.js'
@@ -10,6 +10,8 @@ import { logMessage, sendOnce, tellChat } from './notify.js'
 import { mskDayKey, mskDayStart } from '../plan.js'
 import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
+import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES, tooFarReminder } from './remind.js'
+import { aiOwnerText, aiStaffText } from '../ai/agent.js'
 
 /**
  * Что человек пишет и нажимает. Без ИИ — простыми правилами (parse.js):
@@ -42,6 +44,11 @@ async function onIntent(user, intent, text, logged, now) {
   if (intent.type === 'back') return comeBack(user, now)
   if (intent.type === 'late') return runningLate(user, { until: intent.until, text }, now)
   if (intent.type === 'force_majeure') return reportForceMajeure(user, text, logged, now)
+  if (intent.type === 'remind') {
+    if (intent.until) return createReminder(user, intent.until, text, now)
+    if (intent.far) return tooFarReminder(user)
+    return askReminderTime(user, text, { tomorrow: intent.tomorrow })
+  }
   return null
 }
 
@@ -49,6 +56,15 @@ async function onIntent(user, intent, text, logged, now) {
 async function onWaiting(user, waiting, text, logged, now) {
   if (waiting.type === 'fm_text') {
     await reportForceMajeure(user, text, logged, now)
+    return true
+  }
+  if (waiting.type === 'remind_time') {
+    // «Заболел, до 18:00 не выйду» — это заявка на форс-мажор, а не время напоминания.
+    const intent = parseIntent(text, now)
+    if (intent && intent.type !== 'remind') return false
+    const { until } = parseRemindAt(text, now, { tomorrow: Boolean(waiting.payload.tomorrow) })
+    if (!until) return false
+    await createReminder(user, until, waiting.payload.text, now)
     return true
   }
   if (waiting.type === 'task_late') {
@@ -67,6 +83,8 @@ async function onWaiting(user, waiting, text, logged, now) {
       await startBreak(user, { until, extend: Boolean(waiting.payload.extend) }, now)
       return true
     }
+    // Правила время не нашли («минут через сорок», «к концу обеда») — ИИ.
+    if (await aiStaffText(user, user.chatId, text, logged, now, { kind: 'reply', extend: Boolean(waiting.payload.extend) })) return true
     await tellChat(user.chatId, 'Не понял время. Оставляю как есть — поправить можно кнопкой или фразой «до 16:30».', { userId: user.id })
     return true
   }
@@ -103,6 +121,8 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   }
   const logged = await logMessage({ userId: user.id, chatId, direction: isReply ? 'reply' : 'in', text: answerText || '[не текст]' })
   if (!isParticipant(user)) {
+    // Ян спрашивает о команде — отвечает ИИ (только чтение).
+    if (!command && !isCommandText && (await aiOwnerText(user, chatId, text, logged, now))) return
     await tellChat(chatId, OWNER_HELP, { userId: user.id })
     return
   }
@@ -130,6 +150,9 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     await startBreak(user, { until, extend: true }, now)
     return
   }
+  // Правила не поняли — ИИ. Нет ключа, лимит, сбой — подсказка, как раньше.
+  // Незнакомые команды (/что-то) на ИИ не тратим.
+  if (!isCommandText && (await aiStaffText(user, chatId, text, logged, now))) return
   await tellChat(chatId, STAFF_HELP, { userId: user.id, buttons: MENU })
 }
 
@@ -183,6 +206,34 @@ export async function onCallback(cb, user, now = new Date()) {
     state.expect(user.id, 'fm_text')
     return tellChat(chatId, 'Что случилось и до какого времени? Напиши одной строкой — передам Яну.', { userId: user.id })
   }
+  if (kind === 'rm') {
+    const ok = await cancelReminder(user, id, now)
+    return closeButtons(cb, ok ? 'отменено' : 'уже не актуально')
+  }
+  if (kind === 'rmt') {
+    const minutes = Number(action)
+    // Старая кнопка не должна съесть другое ожидание («что случилось?»).
+    const waiting = state.peek(user.id)
+    if (!REMIND_MINUTES.includes(minutes) || waiting?.type !== 'remind_time') return closeButtons(cb, 'напиши ещё раз, о чём напомнить')
+    state.take(user.id)
+    await closeButtons(cb, `через ${minutes} мин`)
+    return createReminder(user, new Date(now.getTime() + minutes * 60000), waiting.payload.text, now)
+  }
+  if (kind === 'ai') {
+    // Подтверждение того, что понял ИИ: конец дня и заявка на форс-мажор.
+    if (cb.message?.date && Date.now() / 1000 - cb.message.date > 3 * 60 * 60) return closeButtons(cb, 'кнопка устарела')
+    if (action === 'de') {
+      await closeButtons(cb, 'да')
+      return dayEnd(user, now)
+    }
+    if (action === 'fm') {
+      const message = await prisma.botMessage.findUnique({ where: { id } })
+      if (!message || message.userId !== user.id || !['in', 'reply'].includes(message.direction)) return closeButtons(cb, 'не нашёл сообщение')
+      await closeButtons(cb, 'да')
+      return reportForceMajeure(user, message.text, message, now)
+    }
+    return closeButtons(cb, 'нет, ничего не делаю')
+  }
   if (kind === 'aw' || kind === 'ax') {
     // Кнопка со вчерашнего сообщения — не повод ставить отлучку сегодня.
     if (cb.message?.date && Date.now() / 1000 - cb.message.date > 3 * 60 * 60) {
@@ -199,7 +250,7 @@ export async function onCallback(cb, user, now = new Date()) {
     return action === 'y' ? comeBack(user, now) : runningLate(user, {}, now)
   }
   if (kind === 'tk') {
-    const text = action === 'go' ? await takeTask(user, id, now) : await lateForTask(user, id)
+    const text = action === 'go' ? await takeTask(user, id) : await lateForTask(user, id)
     return closeButtons(cb, text)
   }
   if (kind === 'ci') {
