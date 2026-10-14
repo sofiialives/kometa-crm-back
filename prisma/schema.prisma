@@ -105,6 +105,7 @@ model User {
   botMessages               BotMessage[]
   botCheckinAnswers         BotCheckinAnswer[]
   botEvents                 BotEvent[]
+  aiUsage                   AiUsage[]
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -1130,6 +1131,31 @@ model BotEvent {
   createdAt DateTime @default(now())
 
   @@index([userId, at])
+}
+
+// Расход ИИ в боте: сколько запросов к Claude и сколько текста ушло и
+// пришло, по человеку, дню и виду. По нему же бот держит лимиты (40
+// запросов на человека в день) — и по нему видно, во что обходится месяц.
+model AiUsage {
+  id String @id @default(cuid())
+
+  // Чей запрос: кто написал боту или чью задачу оценивали.
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Московский день «ГГГГ-ММ-ДД».
+  day String
+  // own — своё сообщение, reply — ответ на вопрос бота, task — оценка задачи.
+  kind String
+
+  calls        Int @default(0)
+  inputTokens  Int @default(0)
+  outputTokens Int @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, day, kind])
+  @@index([day])
 }
 
 // Что бот уже отправил: «напомнил о задаче X», «написал про заявку Y».

@@ -10,6 +10,7 @@ import { logMessage, sendOnce, tellChat } from './notify.js'
 import { mskDayKey, mskDayStart } from '../plan.js'
 import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
+import { aiOwnerText, aiStaffText } from '../ai/agent.js'
 
 /**
  * Что человек пишет и нажимает. Без ИИ — простыми правилами (parse.js):
@@ -67,6 +68,8 @@ async function onWaiting(user, waiting, text, logged, now) {
       await startBreak(user, { until, extend: Boolean(waiting.payload.extend) }, now)
       return true
     }
+    // Правила время не нашли («минут через сорок», «к концу обеда») — ИИ.
+    if (await aiStaffText(user, user.chatId, text, logged, now, { kind: 'reply' })) return true
     await tellChat(user.chatId, 'Не понял время. Оставляю как есть — поправить можно кнопкой или фразой «до 16:30».', { userId: user.id })
     return true
   }
@@ -103,6 +106,8 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   }
   const logged = await logMessage({ userId: user.id, chatId, direction: isReply ? 'reply' : 'in', text: answerText || '[не текст]' })
   if (!isParticipant(user)) {
+    // Ян спрашивает о команде — отвечает ИИ (только чтение).
+    if (!command && (await aiOwnerText(user, chatId, text, logged, now))) return
     await tellChat(chatId, OWNER_HELP, { userId: user.id })
     return
   }
@@ -130,6 +135,8 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     await startBreak(user, { until, extend: true }, now)
     return
   }
+  // Правила не поняли — ИИ. Нет ключа, лимит, сбой — подсказка, как раньше.
+  if (await aiStaffText(user, chatId, text, logged, now)) return
   await tellChat(chatId, STAFF_HELP, { userId: user.id, buttons: MENU })
 }
 

@@ -69,6 +69,13 @@ export const env = {
   // телеграме (src/scripts/fakeTelegram.js) — боевой токен локально не нужен.
   telegramApiBase: telegramApiBase(),
 
+  // ИИ в боте (Claude). Пока ключа нет, бот работает по своим правилам,
+  // как раньше. Модель и общий дневной потолок запросов можно поменять
+  // переменными, не трогая код.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+  aiModel: process.env.AI_MODEL || 'claude-haiku-5-5',
+  aiDailyCap: Number(process.env.AI_DAILY_CAP) || 600,
+
   // За сколько минут до звонка предупреждать.
   remindBeforeMin: Number(process.env.REMIND_BEFORE_MIN) || 15,
 

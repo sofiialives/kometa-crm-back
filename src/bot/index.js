@@ -96,4 +96,5 @@ export async function startBot() {
   }
 
   console.log(`[бот] @${username} запущен, напоминание за ${env.remindBeforeMin} мин`)
+  console.log(env.anthropicApiKey ? `[ИИ] включён, модель ${env.aiModel}` : '[ИИ] ключа нет — бот работает по правилам')
 }

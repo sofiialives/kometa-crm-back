@@ -5,6 +5,7 @@ import { getSettingsRow } from '../../services/motivation/profiles.js'
 import { approveReview, rejectReview } from '../../services/motivation/review.service.js'
 import { isQuietHour } from '../plan.js'
 import { points, short } from './format.js'
+import { aiRateReview } from '../ai/agent.js'
 import { claimNotice, crmButton, nameOf, ownerIds, releaseNotice, row, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
 
 /**
@@ -216,7 +217,10 @@ async function ownerFeed() {
 
   for (const r of reviews) {
     if (!unsent.has(`review:${r.id}`)) continue
-    await sendOnce(`review:${r.id}`, () => tellOwners(reviewText(r), { buttons: reviewButtons(r) }))
+    // Сложность личной задачи — по смыслу, если ИИ включён; иначе по длине описания.
+    const complexity = await aiRateReview(r)
+    const card = { ...r, complexity }
+    await sendOnce(`review:${r.id}`, () => tellOwners(reviewText(card), { buttons: reviewButtons(card) }))
   }
   for (const h of hints) {
     if (!unsent.has(`hint:${h.id}`)) continue
