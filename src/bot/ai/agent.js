@@ -71,14 +71,25 @@ export function decide(out, now = new Date()) {
 const say = (user, chatId, text, opts = {}, max = REPLY_MAX) => tellChat(chatId, escapeHtml(plainStyle(cut(text, max))), { userId: user.id, ...opts })
 
 /**
- * Ответ ИИ — в стиле остальных сообщений бота: без длинных тире. Модель
- * просим об этом в подсказке, а тут подчищаем, если всё же поставила.
+ * Ответ ИИ в стиле остальных сообщений бота. Модель просим об этом в
+ * подсказке, а тут подчищаем, если всё же написала по-своему: смайлики,
+ * длинные тире, скобки, восклицания, двоеточия перед пояснением, списки
+ * через дефис.
  */
 export function plainStyle(text) {
   return String(text ?? '')
-    .replace(/^\s*[—–]\s*/gm, '')
-    .replace(/\s+[—–]\s+/g, ', ')
-    .replace(/,\s*,/g, ',')
+    .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, '')
+    .replace(/^[ \t]*[-—–*•][ \t]+/gm, '• ')
+    .replace(/[ \t]+[—–][ \t]+/g, ', ')
+    .replace(/[ \t]*\(([^()\n]{1,80})\)/g, ', $1')
+    .replace(/!+/g, '.')
+    .replace(/\?\./g, '?')
+    .replace(/([^\d\s]):[ \t]*\n/g, '$1\n')
+    .replace(/([^\d\s]):[ \t]+/g, '$1, ')
+    .replace(/,\s*([,.?])/g, '$1')
+    .replace(/\.{2,}/g, '.')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
 }
 
 /** Без ссылок и упоминаний: телеграм делает их кликабельными. */
@@ -101,7 +112,7 @@ async function noteToOwner(user, note, text, now = new Date()) {
   if (today.some((n) => Date.now() - n.sentAt.getTime() < NOTE_EVERY_MS)) return false
   await prisma.botNotice.create({ data: { key: `ai-note:${user.id}:${day}:${today.length + 1}` } })
   const res = await tellOwners(
-    `💬 <b>${nameOf(user)}</b> · пересказ ИИ\n${escapeHtml(plainStyle(noLinks(cut(note, 300))))}\n\n<i>${escapeHtml(noLinks(cut(text, 300)))}</i>`,
+    `<b>Пересказ ИИ</b>\n${nameOf(user)}\n${escapeHtml(plainStyle(noLinks(cut(note, 300))))}\n\n<i>${escapeHtml(noLinks(cut(text, 300)))}</i>`,
   )
   return res.ok
 }

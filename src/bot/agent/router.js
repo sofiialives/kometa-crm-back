@@ -28,11 +28,11 @@ const PHRASES =
   '• <i>заболел, форс-мажор</i>\n' +
   '• <i>напомни в 15:00 позвонить клиенту</i>\n\n' +
   'Или нажми кнопку ниже'
-const STAFF_MENU = `Я на связи 👋\n\n${PHRASES}`
+const STAFF_MENU = `Я на связи.\n\n${PHRASES}`
 // Не понял — коротко, без всего списка: несколько непонятых подряд не
 // должны превращаться в простыню. Полный список — в /menu.
 const STAFF_HELP =
-  'Не совсем понял тебя 🙂\n' +
+  'Не понял тебя.\n' +
   'Напиши, например, <i>отхожу на 30 минут</i>, или нажми кнопку ниже.\n\n' +
   'Все фразы, которые я понимаю, есть в /menu'
 // Вопрос без ИИ (нет ключа, кончился лимит) — честно, что пока не отвечаю.
@@ -45,7 +45,7 @@ const STAFF_QUESTION =
 // вопросы бота и кнопки в лимит не идут. И не чаще нескольких в минуту —
 // иначе один человек засыпал бы Яна отчётами и занял бы бота для всех.
 const DAILY_LIMIT = 20
-const PER_MINUTE = 6
+const PER_MINUTE = 10
 const BUTTONS_PER_MINUTE = 20
 
 async function recentCount(userId, directions, since) {
@@ -128,7 +128,12 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
 
   // Лимиты — по настоящим часам: это защита от потока сообщений.
   const real = new Date()
-  if ((await recentCount(user.id, ['in', 'reply'], new Date(real.getTime() - 60000))) >= PER_MINUTE) return
+  if ((await recentCount(user.id, ['in', 'reply'], new Date(real.getTime() - 60000))) >= PER_MINUTE) {
+    // Не молча: человек должен знать, что сообщение не принято. Раз в минуту.
+    const bucket = Math.floor(real.getTime() / 60000)
+    await sendOnce(`flood:${user.id}:${bucket}`, () => tellChat(chatId, 'Слишком много сообщений подряд.\nПодожди минуту и напиши ещё раз.', { userId: user.id }))
+    return
+  }
 
   const isReply = answered || (isParticipant(user) && Boolean(state.peek(user.id) || (await isAskedNow(user.id, now))))
   const command = !text || /^\/(start|menu|help)\b/.test(text)
@@ -148,7 +153,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     await tellChat(chatId, OWNER_HELP, { userId: user.id })
     return
   }
-  const thanks = () => tellChat(chatId, 'Записал ✍️ Спасибо!', { userId: user.id })
+  const thanks = () => tellChat(chatId, 'Записал, спасибо.', { userId: user.id })
   if (command) {
     if (answered) return thanks()
     await tellChat(chatId, STAFF_MENU, { userId: user.id, buttons: MENU })

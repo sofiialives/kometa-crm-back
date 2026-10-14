@@ -32,8 +32,8 @@ const SILENT_AFTER_MIN = 15
 const lockUser = (tx, userId) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`
 
 export const MENU = [
-  [{ text: '🚶 Отхожу', data: 'm:away' }, { text: '✅ Я на месте', data: 'm:back' }],
-  [{ text: '⚠️ Форс-мажор', data: 'm:fm' }],
+  [{ text: 'Отхожу', data: 'm:away' }, { text: 'Я на месте', data: 'm:back' }],
+  [{ text: 'Форс-мажор', data: 'm:fm' }],
 ]
 
 const BREAK_BUTTONS = (prefix) => [[
@@ -43,8 +43,8 @@ const BREAK_BUTTONS = (prefix) => [[
   { text: '2 часа', data: `${prefix}:120` },
 ]]
 const RETURN_BUTTONS = (awayId) => [[
-  { text: '✅ Да, на месте', data: `rt:y:${awayId}` },
-  { text: '⏳ Задерживаюсь', data: `rt:l:${awayId}` },
+  { text: 'Да, на месте', data: `rt:y:${awayId}` },
+  { text: 'Задерживаюсь', data: `rt:l:${awayId}` },
 ]]
 
 /** Действующая метка человека — любая: отлучка или форс-мажор. */
@@ -129,16 +129,16 @@ export async function startBreak(user, { until = null, note = null, extend = fal
       state.expect(user.id, 'break_time', { awayId: away.id })
       await tell(user.id, 'На сколько отходишь?\nНажми кнопку или напиши время, например <i>до 16:30</i>.\nЕсли не ответишь, поставлю час.', { buttons: BREAK_BUTTONS('aw') })
     }
-    await tellOwners(`🚶 ${nameOf(user)} отходит до <b>${hm(away.until)}</b>${timeGiven ? '' : '\nВремя не назвали, поставил час'}${note ? `\n<i>${escapeHtml(note.slice(0, 200))}</i>` : ''}`)
+    await tellOwners(`<b>Отлучка до ${hm(away.until)}</b>\n${nameOf(user)}${timeGiven ? '' : '\nВремя не назвали, поставил час'}${note ? `\n<i>${escapeHtml(note.slice(0, 200))}</i>` : ''}`)
     return result
   }
   if (result.type === 'clarified') {
     await tell(user.id, `Принято, жду к <b>${hm(away.until)}</b>.`)
-    await tellOwners(`🕑 ${nameOf(user)} уточняет, вернётся к <b>${hm(away.until)}</b>`)
+    await tellOwners(`<b>Отлучка до ${hm(away.until)}</b>\n${nameOf(user)}\nУточнение времени`)
     return result
   }
   await tell(user.id, `Хорошо, жду к <b>${hm(away.until)}</b>.`)
-  await tellOwners(`⏳ ${nameOf(user)} продлевает отлучку до <b>${hm(away.until)}</b>\nЭто уже ${away.extensions}-й раз`)
+  await tellOwners(`<b>Отлучка продлена до ${hm(away.until)}</b>\n${nameOf(user)}\nПродление ${away.extensions}-е`)
   return result
 }
 
@@ -167,7 +167,7 @@ export async function dayEnd(user, now = new Date()) {
       data: { returnedAt: now, endedAt: open.until > now ? now : null },
     })
   }
-  await tell(user.id, 'Хорошего вечера! Отметил, что на сегодня всё 👋')
+  await tell(user.id, 'Отметил, что на сегодня всё.\nХорошего вечера.')
 }
 
 /**
@@ -197,17 +197,17 @@ export async function comeBack(user, now = new Date()) {
     })
   })
   if (!away) {
-    await tell(user.id, 'Отметил, ты на месте 👍')
+    await tell(user.id, 'Отметил, ты на месте.')
     return null
   }
   const late = minutesBetween(away.until, now)
   if (late > STALE_BREAK_MIN) {
-    await tell(user.id, 'Отметил, ты на месте 👍')
+    await tell(user.id, 'Отметил, ты на месте.')
     return away
   }
   const gone = duration(minutesBetween(away.from, now))
-  await tell(user.id, `С возвращением! Тебя не было ${gone}.`)
-  await tellOwners(`✅ ${nameOf(user)} на месте\nНе было ${gone}${late > 1 ? `\nОпоздание ${duration(late)}, ждали к ${hm(away.until)}` : ''}`)
+  await tell(user.id, `С возвращением. Тебя не было ${gone}.`)
+  await tellOwners(`<b>Снова на месте</b>\n${nameOf(user)}\nНе было ${gone}${late > 1 ? `\nОпоздание ${duration(late)}, ждали к ${hm(away.until)}` : ''}`)
   return away
 }
 
@@ -224,7 +224,7 @@ export async function runningLate(user, { until = null, text = '' } = {}, now = 
   // Одно «задерживаюсь» в 10 минут: десять подряд Яну и в журнал не нужны.
   const bucket = Math.floor(now.getTime() / (10 * 60000))
   const res = await sendOnce(`late:${user.id}:${bucket}`, () =>
-    tellOwners(`⏳ ${nameOf(user)} задерживается${until ? ` до <b>${hm(until)}</b>` : ''}\n<i>${escapeHtml(text.slice(0, 300))}</i>`))
+    tellOwners(`<b>Задержка${until ? ` до ${hm(until)}` : ''}</b>\n${nameOf(user)}\n<i>${escapeHtml(text.slice(0, 300))}</i>`))
   if (!res.skipped) await logEvent(user.id, 'late', { at: now, text, data: until ? { until: until.toISOString() } : null })
   await tell(user.id, res.skipped ? 'Я уже передал Яну, что ты задерживаешься.' : 'Понял, передал Яну.')
   return null
@@ -248,7 +248,7 @@ export async function reportForceMajeure(user, text, message, now = new Date()) 
   }
   const until = parseUntil(text, now) ?? endOfDay(now)
   const res = await tellOwners(
-    `⚠️ <b>Форс-мажор</b>\n${nameOf(user)}\n<i>${escapeHtml(text.slice(0, 500))}</i>\n\nМетка будет до ${at(until, now)}`,
+    `<b>Форс-мажор</b>\n${nameOf(user)}\n<i>${escapeHtml(text.slice(0, 500))}</i>\n\nМетка будет до ${at(until, now)}`,
     { buttons: [[{ text: 'Подтвердить', data: `fm:y:${message.id}` }, { text: 'Не подтверждать', data: `fm:n:${message.id}` }]] },
   )
   if (!res.ok) {
@@ -257,7 +257,7 @@ export async function reportForceMajeure(user, text, message, now = new Date()) 
   }
   await claimNotice(`fm-open:${user.id}:${message.id}`)
   await logEvent(user.id, 'fm_request', { at: now, text, data: { until: until.toISOString() } })
-  await tell(user.id, 'Передал Яну.\nКак подтвердит, поставлю метку и до её конца не буду тебя трогать.\nДержись 🙏')
+  await tell(user.id, 'Передал Яну.\nКак подтвердит, поставлю метку и до её конца не буду тебя трогать.')
 }
 
 /** Есть ли у человека нерешённая заявка на форс-мажор за последние сутки. */
@@ -283,7 +283,7 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
   if (!approve) {
     await logEvent(user.id, 'fm_decision', { at: now, data: { approved: false, by: owner.name } })
     await tell(user.id, 'Ян не подтвердил форс-мажор.\nЕсли что-то изменилось, напиши ему.')
-    return { text: `❌ <b>Форс-мажор не подтверждён</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>`, rejectedUserId: user.id }
+    return { text: `<b>Форс-мажор не подтверждён</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>`, rejectedUserId: user.id }
   }
   let until = parseUntil(message.text, message.createdAt) ?? endOfDay(message.createdAt)
   if (until <= now) until = endOfDay(now)
@@ -296,7 +296,7 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
       data: { answer: 'форс-мажор подтверждён' },
     })
     await logEvent(user.id, 'fm_decision', { at: now, data: { approved: true, by: owner.name, until: current.until.toISOString() } })
-    return { text: `✅ <b>Форс-мажор уже стоит до ${at(current.until, now)}</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>\n\nОставил как есть` }
+    return { text: `<b>Форс-мажор уже стоит до ${at(current.until, now)}</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>\n\nОставил как есть` }
   }
   try {
     await prisma.$transaction(async (tx) => {
@@ -322,7 +322,7 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
   })
   await logEvent(user.id, 'fm_decision', { at: now, data: { approved: true, by: owner.name, until: until.toISOString() } })
   await tell(user.id, `Ян подтвердил форс-мажор до ${at(until, now)}.\nДо этого времени я тебя не дёргаю.`)
-  return { text: `✅ <b>Форс-мажор до ${at(until, now)}</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>\n\nМетка стоит в CRM` }
+  return { text: `<b>Форс-мажор подтверждён до ${at(until, now)}</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>\n\nМетка стоит в CRM` }
 }
 
 /**
@@ -359,7 +359,7 @@ export async function tickBreaks(now = new Date()) {
   for (const away of silent) {
     if (!away.user.active) continue
     const res = await sendOnce(`away-silent:${away.id}:${away.until.getTime()}`, () =>
-      tellOwners(`❓ ${nameOf(away.user)} не отвечает\nОтлучка закончилась в <b>${hm(away.until)}</b>, прошло ${duration(minutesBetween(away.until, now))}`))
+      tellOwners(`<b>Нет ответа после отлучки</b>\n${nameOf(away.user)}\nОтлучка закончилась в ${hm(away.until)}, прошло ${duration(minutesBetween(away.until, now))}`))
     if (res.skipped) continue
     await tell(away.userId, `Отлучка закончилась в ${hm(away.until)}. Ты на месте?`, { buttons: RETURN_BUTTONS(away.id) })
   }

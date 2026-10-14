@@ -61,7 +61,7 @@ async function taskButtons(userId) {
     take: 3,
     select: { id: true, title: true },
   })
-  return tasks.map((t) => [{ text: `🔨 ${short(t.title, 36)}`, data: `ci:${t.id}` }])
+  return tasks.map((t) => [{ text: short(t.title, 40), data: `ci:${t.id}` }])
 }
 
 async function start(checkin, now) {
@@ -91,7 +91,7 @@ async function start(checkin, now) {
     })
     if (skip) continue
     const res = await tell(person.id,
-      `👋 <b>Внезапный чек-ин</b>\n\nЧем сейчас занимаешься?\nОтветь одной строкой до <b>${hm(deadline)}</b> или нажми задачу, над которой работаешь.\n\n<i>Если не ответить за 45 минут, снимется 3 балла.</i>`,
+      `<b>Внезапный чек-ин</b>\n\nЧем сейчас занимаешься?\nОтветь одной строкой до <b>${hm(deadline)}</b> или нажми задачу, над которой работаешь.\n\n<i>Если не ответить за 45 минут, снимется 3 балла.</i>`,
       { buttons: await taskButtons(person.id) })
     if (res.ok) asked += 1
     // Вопрос не дошёл (бот заблокирован, сбой телеграма) — за молчание не
@@ -226,7 +226,7 @@ async function report(checkin) {
       lines.penalized.push(`• ${nameOf(a.user)}, ${p !== undefined ? points(p) : 'баллы не сняты, в профиле нет события'}`)
     } else lines.skipped.push(`• ${nameOf(a.user)}, ${escapeHtml(a.answer || 'пропущен')}`)
   }
-  const parts = [`📋 <b>Чек-ин в ${hm(checkin.startedAt)}, кто чем занят</b>`]
+  const parts = [`<b>Чек-ин в ${hm(checkin.startedAt)}, кто чем занят</b>`]
   if (lines.answered.length) parts.push(lines.answered.join('\n'))
   if (lines.penalized.length) parts.push(`<b>Не ответили</b>\n${lines.penalized.join('\n')}`)
   if (lines.skipped.length) parts.push(`<b>Не спрашивал или не штрафовал</b>\n${lines.skipped.join('\n')}`)

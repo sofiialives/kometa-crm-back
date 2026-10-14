@@ -51,7 +51,7 @@ export async function createReminder(user, when, text, now = new Date()) {
   state.clear(user.id)
   const ms = new Date(when).getTime() - now.getTime()
   if (!(ms >= 60000)) {
-    await tell(user.id, 'Это уже прямо сейчас 🙂\nНазови время хотя бы через минуту.')
+    await tell(user.id, 'Это уже сейчас.\nНазови время хотя бы через минуту.')
     return null
   }
   if (ms > MAX_AHEAD_MS) {
@@ -64,7 +64,7 @@ export async function createReminder(user, when, text, now = new Date()) {
     return null
   }
   const reminder = await prisma.botReminder.create({ data: { userId: user.id, at: new Date(when), text: reminderText(text) } })
-  await tell(user.id, `⏰ Напомню в <b>${at(reminder.at, now)}</b>\n${escapeHtml(reminder.text)}`, {
+  await tell(user.id, `Напомню в <b>${at(reminder.at, now)}</b>\n${escapeHtml(reminder.text)}`, {
     buttons: [[{ text: 'Отменить', data: `rm:x:${reminder.id}` }]],
   })
   return reminder
@@ -125,7 +125,7 @@ export async function tickReminders(now = new Date()) {
     const lateMs = now.getTime() - r.at.getTime()
     if (lateMs > STALE_MS) continue
     const note = lateMs > LATE_NOTE_MS ? `\n<i>С опозданием, было на ${at(r.at, now)}</i>` : ''
-    const res = await tell(r.userId, `⏰ Напоминаю\n${escapeHtml(r.text)}${note}`)
+    const res = await tell(r.userId, `<b>Напоминаю</b>\n${escapeHtml(r.text)}${note}`)
     if (!res?.ok && res?.retry) await prisma.botReminder.updateMany({ where: { id: r.id, sentAt: now }, data: { sentAt: null } })
   }
 }

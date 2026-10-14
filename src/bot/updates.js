@@ -5,7 +5,7 @@ import { MENU } from './agent/away.js'
 import { userByChat } from './agent/notify.js'
 
 const HELP =
-  'Привет! Я бот KOMETA.\n\n' +
+  'Привет. Я бот KOMETA.\n\n' +
   'Чтобы я знал, кому писать, зайдите в CRM, откройте Настройки и нажмите «Подключить телеграм».\n' +
   'Оттуда вы вернётесь сюда, и всё свяжется само.'
 
@@ -74,7 +74,7 @@ async function handleMessage(msg) {
 
   await sendMessage(
     chatId,
-    `Готово, ${escapeHtml(String(link.user.name || '').split(' ')[0] || 'коллега')} 👋\n\n` +
+    `Готово, ${escapeHtml(String(link.user.name || '').split(' ')[0] || 'коллега')}.\n\n` +
     'Теперь я напомню о каждом звонке за 15 и за 5 минут.\n\n' +
     (link.user.role === 'admin'
       ? 'Сюда же будут приходить отчёты по команде.\nРешения принимаются кнопками под сообщениями.'
