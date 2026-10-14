@@ -45,6 +45,8 @@ export function untilFrom({ until, minutes }, now = new Date()) {
  * ошибиться); say — только ответ; none — ответить нечего, пусть будет
  * подсказка как без ИИ.
  */
+export const AI_LIMIT_TEXT = 'Лимит вопросов на сегодня закончился.\nОн обновится в 00:00 по Москве.'
+
 // Пункты от модели — не больше 15, каждый в одну строку.
 const MAX_POINTS = 15
 export function pointsOf(out) {
@@ -143,7 +145,14 @@ export async function aiStaffText(user, chatId, text, logged, now = new Date(), 
   // привязка чата, но проверяем и здесь, прямо перед запросом.
   if (!aiEnabled() || !text || !user?.active || !isParticipant(user)) return false
   try {
-    if (!(await hasAiBudget(user.id, kind))) return false
+    if (!(await hasAiBudget(user.id, kind))) {
+      // Вопросы к ИИ на сегодня кончились — говорим прямо и когда обновится,
+      // а не «не понял тебя»: иначе кажется, что бот сломался. На ответ на
+      // вопрос бота («до скольки?») — как раньше, по правилам.
+      if (kind !== 'own') return false
+      await tellChat(chatId, `${AI_LIMIT_TEXT}\n\nОтлучки, напоминания и списки задач работают как обычно.`, { userId: user.id })
+      return true
+    }
     const [context, history] = await Promise.all([staffContext(user.id, now), recentHistory(user.id, logged?.id, { take: 4 })])
     const out = await askJson({ userId: user.id, kind, ...staffPrompt({ context, history, message: text }), schema: STAFF_SCHEMA }, now)
     const plan = decide(out, now)
@@ -192,7 +201,10 @@ export async function aiOwnerText(user, chatId, text, logged, now = new Date()) 
   // Сводка по команде — только владельцу.
   if (user?.role !== 'admin' || !user.active || !aiEnabled() || !text) return false
   try {
-    if (!(await hasAiBudget(user.id, 'own'))) return false
+    if (!(await hasAiBudget(user.id, 'own'))) {
+      await tellChat(chatId, AI_LIMIT_TEXT, { userId: user.id })
+      return true
+    }
     const [context, history] = await Promise.all([ownerContext(now), recentHistory(user.id, logged?.id, { ownOnly: true, take: 4 })])
     const out = await askJson({ userId: user.id, kind: 'own', ...ownerPrompt({ context, history, message: text }), schema: OWNER_SCHEMA, maxTokens: MAX_OUTPUT_TOKENS_OWNER }, now)
     const reply = withPoints(out?.reply, pointsOf(out))
