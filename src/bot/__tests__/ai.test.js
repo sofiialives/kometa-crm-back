@@ -111,3 +111,20 @@ describe('защита от подставного текста', () => {
   })
 })
 
+describe('стиль и деньги на ключе', () => {
+  test('ответ ИИ без смайликов, тире, скобок и восклицаний', async () => {
+    const { plainStyle } = await import('../ai/agent.js')
+    assert.equal(plainStyle('Привет — всё в порядке'), 'Привет, всё в порядке')
+    assert.equal(plainStyle('Привет, Антон! Если что-то нужно — пиши 👍'), 'Привет, Антон. Если что-то нужно, пиши')
+    assert.equal(plainStyle('Задачи на сегодня:\n- Баннеры\n- Отчёт'), 'Задачи на сегодня\n• Баннеры\n• Отчёт')
+    assert.equal(plainStyle('Спрошу за 10 минут (примерно в 02:06).'), 'Спрошу за 10 минут, примерно в 02:06.')
+    assert.equal(plainStyle('с 10–11'), 'с 10–11')
+  })
+  test('кончились деньги или лимит расходов — пауза, а не сбой', async () => {
+    const { isOutOfMoney } = await import('../ai/client.js')
+    assert.equal(isOutOfMoney({ status: 400, message: 'Your credit balance is too low to access the Anthropic API.' }), true)
+    assert.equal(isOutOfMoney({ status: 400, message: 'You have reached your specified API usage limits.' }), true)
+    assert.equal(isOutOfMoney({ status: 400, message: 'max_tokens: must be positive' }), false)
+    assert.equal(isOutOfMoney({ status: 500, message: 'credit balance' }), false)
+  })
+})

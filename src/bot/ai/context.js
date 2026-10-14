@@ -105,7 +105,7 @@ export async function staffContext(userId, now = new Date()) {
     awayLine(aways.get(userId), now),
   ]
   if (checkin) lines.push(`Ждёт ответа на внезапный чек-ин до ${hm(checkin.checkin.deadlineAt)}.`)
-  const taskLine = (t) => `- «${plain(t.title, 80)}» — ${STATUS[t.status]}, срок ${t.deadline >= dayStart && t.deadline < dayEnd ? hm(t.deadline) : new Date(t.deadline).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' })}${t.startAt && t.status === 'today' ? `, начало ${hm(t.startAt)}` : ''}`
+  const taskLine = (t) => `- «${plain(t.title, 80)}», ${STATUS[t.status]}, срок ${t.deadline >= dayStart && t.deadline < dayEnd ? hm(t.deadline) : new Date(t.deadline).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' })}${t.startAt && t.status === 'today' ? `, начало ${hm(t.startAt)}` : ''}`
   lines.push(today.length ? `Задачи на сегодня:\n${today.map(taskLine).join('\n')}` : 'Задач на сегодня нет.')
   if (overdue.length) lines.push(`Просроченные задачи:\n${overdue.map(taskLine).join('\n')}`)
   lines.push(calls.length ? `Звонки сегодня: ${calls.map((c) => `${hm(c.scheduledAt)} «${plain(c.title, 60)}»`).join(', ')}.` : 'Звонков сегодня больше нет.')
@@ -146,7 +146,7 @@ export async function ownerContext(now = new Date()) {
 
   const lines = [nowLine(now), `На проверке ждут решения заявок: ${pending}.`]
   if (rowsFailed) lines.push('Баллы и банки сейчас недоступны.')
-  lines.push(`Команда (${users.length} чел.):`)
+  lines.push(`Команда, ${users.length} чел.:`)
   for (const u of users) {
     const r = rowOf.get(u.id)?.result
     const parts = [`${plain(u.name, 40)}${u.department ? ` (${plain(u.department.name, 40)}${u.role === 'lead' ? ', руководитель' : ''})` : ''}`]
@@ -156,7 +156,7 @@ export async function ownerContext(now = new Date()) {
     const own = breaks.filter((b) => b.userId === u.id)
     if (own.length) {
       const minutes = own.reduce((s, b) => s + Math.max(0, ((b.returnedAt ?? (b.until < now ? b.until : now)) - b.from) / 60000), 0)
-      parts.push(`отлучек сегодня ${own.length} (${duration(minutes)})`)
+      parts.push(`отлучек сегодня ${own.length}, всего ${duration(minutes)}`)
     }
     const a = answers.find((x) => x.userId === u.id)
     if (a) parts.push(`чек-ин: ${CHECKIN[a.status]}${a.status === 'answered' && a.answer ? ` «${plain(a.answer, 80)}»` : ''}`)

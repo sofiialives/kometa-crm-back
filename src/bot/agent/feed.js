@@ -56,9 +56,9 @@ async function readWatermark() {
 }
 
 const SPECIAL = {
-  call_missed: (p) => `Тебя не было на вечернем звонке — ${points(p)}. Ждём на следующем 🙌`,
-  call_attended: (p) => `Спасибо за вечерний звонок — ${points(p)} 👍`,
-  checkin_missed: (p) => `На внезапный чек-ин не было ответа — ${points(p)}. Если отходишь, просто напиши мне «отхожу на 30 минут» — тогда не спрашиваю.`,
+  call_missed: (p) => `Тебя не было на вечернем звонке, ${points(p)}.\nЖдём на следующем.`,
+  call_attended: (p) => `Спасибо за вечерний звонок, ${points(p)}.`,
+  checkin_missed: (p) => `На внезапный чек-ин не было ответа, ${points(p)}.\nЕсли отходишь, просто напиши мне <i>отхожу на 30 минут</i>, и я не буду спрашивать.`,
 }
 
 export function eventLine(e) {
@@ -67,20 +67,19 @@ export function eventLine(e) {
   if (e.prizePoints === 0) {
     // Корректировка только уровня работы — без «0 баллов».
     if (!e.levelPoints) return null
-    return `📈 ${e.levelPoints > 0 ? '+' : '−'}${Math.abs(e.levelPoints)} к уровню работы — ${escapeHtml(e.title)}`
+    return `${e.levelPoints > 0 ? '+' : '−'}${Math.abs(e.levelPoints)} к уровню работы\n${escapeHtml(e.title)}`
   }
-  const icon = e.prizePoints >= 0 ? '⭐' : '🔻'
-  const what = e.taskTitle ? `${e.title}: «${short(e.taskTitle, 80)}»` : e.title
-  return `${icon} ${points(e.prizePoints)} — ${escapeHtml(what)}${e.comment ? `\n<i>${escapeHtml(short(e.comment, 160))}</i>` : ''}`
+  const what = e.taskTitle ? `${e.title} «${short(e.taskTitle, 80)}»` : e.title
+  return `${points(e.prizePoints)}\n${escapeHtml(what)}${e.comment ? `\n<i>${escapeHtml(short(e.comment, 160))}</i>` : ''}`
 }
 
 export function bankLine(b) {
   // Списание лежит в журнале с минусом — в тексте «списано» минус лишний.
   const dollars = (Math.abs(b.amountCents) / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })
-  if (b.kind === 'start') return `💰 Новый месяц: в банке $${dollars}`
-  if (b.kind === 'write_off') return `💸 Из банка списано $${dollars}${b.comment ? ` — ${escapeHtml(short(b.comment, 120))}` : ''}`
+  if (b.kind === 'start') return `Новый месяц, в банке $${dollars}`
+  if (b.kind === 'write_off') return `Из банка списано $${dollars}${b.comment ? `\n${escapeHtml(short(b.comment, 120))}` : ''}`
   const why = [BANK_REASON_LABELS[b.reason], b.clientName && `«${b.clientName}»`].filter(Boolean).join(' ')
-  return `💰 Банк пополнен на $${dollars}${why ? ` — ${escapeHtml(why)}` : ''}`
+  return `Банк пополнен на $${dollars}${why ? `\n${escapeHtml(why)}` : ''}`
 }
 
 /**
@@ -130,7 +129,7 @@ async function employeeFeed(since, settings) {
       if (told && e.prizePoints === 0 && !e.levelPoints) await claimNotice(`event-cancel:${e.id}`)
       else if (told && unsent.has(`event-cancel:${e.id}`)) {
         const what = e.prizePoints === 0 ? `${e.levelPoints > 0 ? '+' : '−'}${Math.abs(e.levelPoints)} к уровню работы` : points(e.prizePoints)
-        push(e.userId, `event-cancel:${e.id}`, `↩️ Отменено: ${what} — ${escapeHtml(short(e.taskTitle ? `${e.title}: «${e.taskTitle}»` : e.title, 100))}${e.cancelReason ? `\n<i>${escapeHtml(short(e.cancelReason, 160))}</i>` : ''}`)
+        push(e.userId, `event-cancel:${e.id}`, `Отменено ${what}\n${escapeHtml(short(e.taskTitle ? `${e.title} «${e.taskTitle}»` : e.title, 100))}${e.cancelReason ? `\n<i>${escapeHtml(short(e.cancelReason, 160))}</i>` : ''}`)
       } else if (!told) await claimNotice(`event:${e.id}`)
       continue
     }
@@ -169,13 +168,13 @@ const RULE_TEXT = {
 
 export function reviewText(r) {
   const lines = [
-    `🧾 <b>На проверке: ${nameOf(r.user)}</b>`,
+    `<b>На проверке</b>\n${nameOf(r.user)}`,
     `${RULE_TEXT[r.rule] || escapeHtml(r.title)}${r.taskTitle ? `\n«${escapeHtml(short(r.taskTitle, 140))}»` : ''}`,
   ]
   const facts = []
-  if (r.complexity) facts.push(`сложность: ${COMPLEXITY[r.complexity]}`)
-  if (r.nights?.length > 1) facts.push(`просрочено ночей: ${r.nights.length}`)
-  facts.push(`подсказка: <b>${points(r.prizePoints)}</b>`)
+  if (r.complexity) facts.push(`сложность ${COMPLEXITY[r.complexity]}`)
+  if (r.nights?.length > 1) facts.push(`просрочено ночей ${r.nights.length}`)
+  facts.push(`предлагаю <b>${points(r.prizePoints)}</b>`)
   lines.push(facts.join(' · '))
   return lines.join('\n')
 }
@@ -227,7 +226,7 @@ async function ownerFeed() {
   }
   for (const h of hints) {
     if (!unsent.has(`hint:${h.id}`)) continue
-    const text = `🆕 <b>Новая работа в Иерархии</b>\n«${escapeHtml(short(h.workTitle, 140))}»${h.clientName ? `\nКлиент: ${escapeHtml(h.clientName)}` : ''}${h.departmentName ? ` · ${escapeHtml(h.departmentName)}` : ''}\n\nПополнить банк исполнителям?`
+    const text = `<b>Новая работа в Иерархии</b>\n«${escapeHtml(short(h.workTitle, 140))}»${h.clientName ? `\nКлиент ${escapeHtml(h.clientName)}` : ''}${h.departmentName ? ` · ${escapeHtml(h.departmentName)}` : ''}\n\nПополнить банк исполнителям?`
     await sendOnce(`hint:${h.id}`, () => tellOwners(text, { buttons: [row(crmButton('Открыть «На проверке»', '/motivation?section=review'))].filter((r) => r.length) }))
   }
 }
@@ -251,21 +250,21 @@ export async function decideReview(owner, data, now = new Date()) {
   try {
     if (action === 'a') {
       const r = await approveReview(owner, id, { seenPrizePoints: Number(seen) }, now)
-      return { text: `${reviewText({ ...(await load()), prizePoints: r.awarded?.prizePoints ?? r.prizePoints })}\n\n✅ ${r.prizePoints < 0 ? 'Снято' : 'Начислено'}` }
+      return { text: `${reviewText({ ...(await load()), prizePoints: r.awarded?.prizePoints ?? r.prizePoints })}\n\n<b>${r.prizePoints < 0 ? 'Снято' : 'Начислено'}</b>` }
     }
     await rejectReview(owner, id, {}, now)
     const r = await load()
-    return { text: `${reviewText(r)}\n\n❌ ${r.prizePoints < 0 ? 'Не снимать' : 'Не начислять'}` }
+    return { text: `${reviewText(r)}\n\n<b>${r.prizePoints < 0 ? 'Не снимать' : 'Не начислять'}</b>` }
   } catch (e) {
     const r = await load()
-    if (!r) return { text: 'Заявка не найдена — возможно, задачу удалили.' }
+    if (!r) return { text: 'Заявка не найдена, возможно, задачу удалили.' }
     // Пока Ян читал, ночь добавила штраф — показываем новое число и новые кнопки.
     if (e.status === 409 && r.status === 'pending') {
-      return { text: `${reviewText(r)}\n\n<i>Заявка обновилась — проверьте новое число.</i>`, buttons: reviewButtons(r) }
+      return { text: `${reviewText(r)}\n\n<i>Заявка обновилась, проверьте новое число.</i>`, buttons: reviewButtons(r) }
     }
-    const done = { approved: '✅ Уже начислено', rejected: '❌ Уже отклонено', withdrawn: '↩️ Заявку сняла система: задачу вернули или удалили' }[r.status]
+    const done = { approved: 'Уже начислено', rejected: 'Уже отклонено', withdrawn: 'Заявку сняла система, задачу вернули или удалили' }[r.status]
     if (!done) console.error('[агент] решение по заявке:', e.message)
-    return { text: `${reviewText(r)}\n\n${done || (e.status ? `Не получилось: ${escapeHtml(e.message)}` : 'Не получилось — решите во вкладке «На проверке».')}` }
+    return { text: `${reviewText(r)}\n\n${done || (e.status ? `Не получилось. ${escapeHtml(e.message)}` : 'Не получилось, решите во вкладке «На проверке».')}` }
   }
 }
 

@@ -25,24 +25,24 @@ describe('длинные сообщения', () => {
 
 describe('лента для сотрудника', () => {
   test('списание — без минуса перед суммой', () => {
-    assert.equal(bankLine({ kind: 'write_off', amountCents: -5000, comment: null }), '💸 Из банка списано $50')
+    assert.equal(bankLine({ kind: 'write_off', amountCents: -5000, comment: null }), 'Из банка списано $50')
   })
 
   test('пополнение с причиной и клиентом, текст экранирован', () => {
-    assert.equal(bankLine({ kind: 'top_up', amountCents: 2550, reason: 'new_client', clientName: 'A<B' }), '💰 Банк пополнен на $25,5 — Новый клиент «A&lt;B»')
+    assert.equal(bankLine({ kind: 'top_up', amountCents: 2550, reason: 'new_client', clientName: 'A<B' }), 'Банк пополнен на $25,5\nНовый клиент «A&lt;B»')
   })
 
   test('корректировка только уровня — без «0 баллов»', () => {
-    assert.equal(eventLine({ prizePoints: 0, levelPoints: 3, title: 'Ручная корректировка' }), '📈 +3 к уровню работы — Ручная корректировка')
+    assert.equal(eventLine({ prizePoints: 0, levelPoints: 3, title: 'Ручная корректировка' }), '+3 к уровню работы\nРучная корректировка')
     assert.equal(eventLine({ prizePoints: 0, levelPoints: 0, title: 'Пусто' }), null)
   })
 
   test('пропуск звонка — человеческим текстом', () => {
-    assert.match(eventLine({ prizePoints: -1, levelPoints: -1, title: 'Пропустил звонок', eventType: { systemKey: 'call_missed' } }), /не было на вечернем звонке — −1 балл/)
+    assert.match(eventLine({ prizePoints: -1, levelPoints: -1, title: 'Пропустил звонок', eventType: { systemKey: 'call_missed' } }), /не было на вечернем звонке, −1 балл/)
   })
 
   test('баллы за задачу — с названием, без HTML от человека', () => {
-    assert.equal(eventLine({ prizePoints: 2, levelPoints: 2, title: 'Задача в срок', taskTitle: '<b>Лендинг</b>' }), '⭐ +2 балла — Задача в срок: «&lt;b&gt;Лендинг&lt;/b&gt;»')
+    assert.equal(eventLine({ prizePoints: 2, levelPoints: 2, title: 'Задача в срок', taskTitle: '<b>Лендинг</b>' }), '+2 балла\nЗадача в срок «&lt;b&gt;Лендинг&lt;/b&gt;»')
   })
 })
 
