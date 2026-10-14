@@ -6,7 +6,7 @@ import { updateTaskStatus } from '../../services/task.service.js'
 import { dueInMinutes, isQuietHour, isWorkday, mskDayKey } from '../plan.js'
 import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
-import { crmButton, firstName, logEvent, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
+import { crmButton, firstName, hasNotice, logEvent, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
 import * as state from './state.js'
 
 /**
@@ -57,42 +57,114 @@ export async function tickTaskStarts(now = new Date()) {
     if ((await activeAway(task.ownerId, now)) || (await hasEndedDay(task.ownerId, now))) continue
     await sendOnce(`task-start:${task.id}:${task.startAt.getTime()}`, () => tell(task.ownerId,
       `Через 5 минут, в <b>${hm(task.startAt)}</b>, начинается задача\n«${escapeHtml(short(task.title, 120))}»\n\nКак начнёшь — перетащи её в «В процессе».`,
-      { buttons: [[{ text: '▶️ Беру в работу', data: `tk:go:${task.id}` }, { text: '⏳ Не успеваю', data: `tk:late:${task.id}` }]] }))
+      { buttons: [taskButtons(task, false)] }))
   }
 }
 
 // Через сколько минут после начала, если задачу не взяли в работу, бот
-// сам спрашивает человека и сообщает Яну.
+// сам спрашивает человека и сообщает Яну. Окно — полчаса: пропущенный
+// проход или временный сбой телеграма отчёт не теряют, повторов не даёт
+// sendOnce.
 const NOT_STARTED_AFTER_MIN = 15
+const NOT_STARTED_WINDOW_MIN = 30
+// Сказал «задерживаюсь до 11:30» — до 11:45 не трогаем; «опаздываю» без
+// времени — три часа.
+const LATE_GRACE_MS = 15 * 60000
+const LATE_NO_TIME_MS = 3 * 60 * 60000
+
+const taskButtons = (task, many) => [
+  { text: many ? `▶️ ${short(task.title, 24)}` : '▶️ Беру в работу', data: `tk:go:${task.id}` },
+  { text: '⏳ Не успеваю', data: `tk:late:${task.id}` },
+]
+
+/** Человек сам предупредил о задержке, и срок ещё не вышел. */
+export function excusedByLate(lates, now) {
+  return lates.some((e) => {
+    const until = e.data?.until ? new Date(e.data.until).getTime() : null
+    return until ? until + LATE_GRACE_MS > now.getTime() : now.getTime() - new Date(e.at).getTime() < LATE_NO_TIME_MS
+  })
+}
 
 /**
- * Раз в минуту: задача должна была начаться 15 минут назад, а она всё ещё
+ * Задачи по людям и времени начала: пять задач на 10:00 — одно сообщение,
+ * а не пять. Задачи, заведённые уже после начала (задним числом), не берём:
+ * их и не могли начать вовремя.
+ */
+export function notStartedGroups(tasks) {
+  const groups = new Map()
+  for (const task of tasks) {
+    if (task.createdAt && task.createdAt.getTime() > task.startAt.getTime()) continue
+    const key = `${task.ownerId}:${task.startAt.getTime()}`
+    if (!groups.has(key)) groups.set(key, { key, ownerId: task.ownerId, owner: task.owner, startAt: task.startAt, tasks: [] })
+    groups.get(key).tasks.push(task)
+  }
+  return [...groups.values()]
+}
+
+/**
+ * Раз в минуту: задача должна была начаться 15+ минут назад, а она всё ещё
  * «На сегодня». Человеку — вопрос с кнопками, Яну — отчёт. Не трогаем, если
- * человек уже сказал «не успеваю», отошёл, у него форс-мажор или он
- * закончил день. Ночью не пишем.
+ * у человека нет бота, он сказал «не успеваю» или «задерживаюсь», отошёл,
+ * у него форс-мажор, он закончил день или ещё ведёт предыдущую задачу.
+ * Ночью не пишем.
  */
 export async function tickNotStarted(now = new Date()) {
   if (isQuietHour(now)) return
-  const from = new Date(now.getTime() - (NOT_STARTED_AFTER_MIN + 1) * 60000)
+  const from = new Date(now.getTime() - (NOT_STARTED_AFTER_MIN + NOT_STARTED_WINDOW_MIN) * 60000)
   const to = new Date(now.getTime() - NOT_STARTED_AFTER_MIN * 60000)
   const tasks = await prisma.task.findMany({
-    where: { status: 'today', startAt: { gt: from, lte: to }, owner: { active: true, role: { in: PARTICIPANT_ROLES } } },
-    select: { id: true, title: true, startAt: true, ownerId: true, owner: { select: { id: true, name: true } } },
+    where: {
+      status: 'today',
+      startAt: { gt: from, lte: to },
+      owner: { active: true, role: { in: PARTICIPANT_ROLES }, telegram: { chatId: { not: null } } },
+    },
+    select: { id: true, title: true, startAt: true, createdAt: true, ownerId: true, owner: { select: { id: true, name: true } } },
+    orderBy: { startAt: 'asc' },
   })
-  for (const task of tasks) {
-    if ((await activeAway(task.ownerId, now)) || (await hasEndedDay(task.ownerId, now))) continue
-    const warned = await prisma.botEvent.findFirst({
-      where: { userId: task.ownerId, type: 'task_late', data: { path: ['taskId'], equals: task.id } },
+  for (const group of notStartedGroups(tasks)) {
+    const key = `task-nostart:${group.key}`
+    if (await hasNotice(key)) continue
+    const userId = group.ownerId
+    if ((await activeAway(userId, now)) || (await hasEndedDay(userId, now))) continue
+    const lates = await prisma.botEvent.findMany({
+      where: { userId, type: 'late', at: { gte: new Date(now.getTime() - 12 * 60 * 60000) } },
+      select: { at: true, data: true },
+    })
+    if (excusedByLate(lates, now)) continue
+    // Предыдущая сегодняшняя задача ещё в работе — цепочка 10–11, 11–12 не
+    // повод для отчёта. Только сегодняшняя и со временем начала: забытая
+    // в «В процессе» старая задача не должна глушить отчёты навсегда.
+    const busy = await prisma.task.findFirst({
+      where: { ownerId: userId, status: 'progress', startAt: { gte: mskDateStart(mskDayKey(now)), lt: group.startAt } },
       select: { id: true },
     })
-    if (warned) continue
-    const res = await sendOnce(`task-nostart:${task.id}:${task.startAt.getTime()}`, () =>
-      tellOwners(`⏰ ${nameOf(task.owner)} не начал(а) задачу «${escapeHtml(short(task.title, 120))}» — по плану в ${hm(task.startAt)}, прошло ${NOT_STARTED_AFTER_MIN} минут.`))
+    if (busy) continue
+    const warned = await prisma.botEvent.findMany({
+      where: { userId, type: 'task_late', OR: group.tasks.map((t) => ({ data: { path: ['taskId'], equals: t.id } })) },
+      select: { data: true },
+    })
+    const warnedIds = new Set(warned.map((e) => e.data?.taskId))
+    const list = group.tasks.filter((t) => !warnedIds.has(t.id))
+    if (!list.length) continue
+
+    const minutes = Math.round((now.getTime() - group.startAt.getTime()) / 60000)
+    const titles = list.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
+    const many = list.length > 1
+    const bullets = titles.map((t) => `• ${t}`).join('\n')
+    const res = await sendOnce(key, () => tellOwners(many
+      ? `⏰ ${nameOf(group.owner)} не начал(а) задачи, назначенные на ${hm(group.startAt)} (прошло ${minutes} мин):\n${bullets}`
+      : `⏰ ${nameOf(group.owner)} не начал(а) задачу ${titles[0]} — по плану в ${hm(group.startAt)}, прошло ${minutes} мин.`))
     if (res.skipped) continue
-    await logEvent(task.ownerId, 'task_not_started', { at: now, data: { taskId: task.id, taskTitle: task.title, startAt: task.startAt.toISOString() } })
-    await tell(task.ownerId,
-      `Задача «${escapeHtml(short(task.title, 120))}» должна была начаться в <b>${hm(task.startAt)}</b>. Как дела?`,
-      { buttons: [[{ text: '▶️ Беру в работу', data: `tk:go:${task.id}` }, { text: '⏳ Не успеваю', data: `tk:late:${task.id}` }]] })
+    // Временный сбой — ключ освобождён, повторим на следующем проходе целиком.
+    if (!res.ok && res.retry) continue
+    for (const t of list) {
+      await logEvent(userId, 'task_not_started', { at: now, data: { taskId: t.id, taskTitle: t.title, startAt: t.startAt.toISOString(), told: res.ok } })
+    }
+    await tell(userId,
+      many
+        ? `Эти задачи должны были начаться в <b>${hm(group.startAt)}</b>:\n${bullets}\n\nКак дела?`
+        : `Задача ${titles[0]} должна была начаться в <b>${hm(group.startAt)}</b>. Как дела?`,
+      { buttons: list.slice(0, 5).map((t) => taskButtons(t, many)) })
   }
 }
 
@@ -101,7 +173,7 @@ export async function tickNotStarted(now = new Date()) {
  * сегодня»: кнопка живёт под сообщением, и нажатая вечером на закрытой
  * задаче она вернула бы её из «Готово» и сняла бы баллы за срок.
  */
-export async function takeTask(user, taskId, now = new Date()) {
+export async function takeTask(user, taskId) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { title: true, status: true, ownerId: true } })
   if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
   if (task.status === 'progress') return `«${escapeHtml(short(task.title, 120))}» уже в процессе.`
