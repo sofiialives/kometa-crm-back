@@ -1,4 +1,5 @@
 import { prisma } from '../../config/prisma.js'
+import { isParticipant } from '../../services/motivation/access.js'
 import { parseUntil } from '../parse.js'
 import { escapeHtml } from '../telegram.js'
 import { comeBack, dayEnd, runningLate, startBreak } from '../agent/away.js'
@@ -19,7 +20,8 @@ import { OWNER_SCHEMA, ownerPrompt, STAFF_SCHEMA, staffPrompt, TASK_SCHEMA, task
  */
 
 const MAX_BREAK_MIN = 8 * 60
-const REPLY_MAX = 700
+// Со списком в пунктах ответ длиннее одной фразы.
+const REPLY_MAX = 1200
 const OWNER_REPLY_MAX = 1500
 const NOTE_EVERY_MS = 10 * 60000
 const NOTES_PER_DAY = 5
@@ -43,8 +45,21 @@ export function untilFrom({ until, minutes }, now = new Date()) {
  * ошибиться); say — только ответ; none — ответить нечего, пусть будет
  * подсказка как без ИИ.
  */
+// Пункты от модели — не больше 15, каждый в одну строку.
+const MAX_POINTS = 15
+export function pointsOf(out) {
+  if (!Array.isArray(out?.points)) return []
+  return out.points.map((p) => String(p ?? '').replace(/\s+/g, ' ').replace(/^\s*(?:[-—–*•]|\d{1,2}[.)])\s*/, '').trim()).filter(Boolean).slice(0, MAX_POINTS)
+}
+
+/** Вводная строка и пункты столбиком. */
+export function withPoints(reply, points) {
+  return [String(reply ?? '').trim(), ...points.map((p) => `• ${p}`)].filter(Boolean).join('\n')
+}
+
 export function decide(out, now = new Date()) {
-  const reply = String(out?.reply ?? '').trim()
+  const points = pointsOf(out)
+  const reply = withPoints(out?.reply, points)
   const ownerNote = String(out?.owner_note ?? '').trim() || null
   const until = untilFrom(out ?? {}, now)
   switch (out?.action) {
@@ -124,7 +139,9 @@ async function noteToOwner(user, note, text, now = new Date()) {
  * и бот ответил; false — пусть бот ответит как без ИИ.
  */
 export async function aiStaffText(user, chatId, text, logged, now = new Date(), { kind = 'own', extend = false } = {}) {
-  if (!aiEnabled() || !text) return false
+  // Токены — только на активных сотрудников из CRM. Чужих сюда не пускает
+  // привязка чата, но проверяем и здесь, прямо перед запросом.
+  if (!aiEnabled() || !text || !user?.active || !isParticipant(user)) return false
   try {
     if (!(await hasAiBudget(user.id, kind))) return false
     const [context, history] = await Promise.all([staffContext(user.id, now), recentHistory(user.id, logged?.id, { take: 4 })])
@@ -173,12 +190,12 @@ export async function aiStaffText(user, chatId, text, logged, now = new Date(), 
 /** Вопрос Яна о команде. Только чтение: бот ничего не меняет. */
 export async function aiOwnerText(user, chatId, text, logged, now = new Date()) {
   // Сводка по команде — только владельцу.
-  if (user?.role !== 'admin' || !aiEnabled() || !text) return false
+  if (user?.role !== 'admin' || !user.active || !aiEnabled() || !text) return false
   try {
     if (!(await hasAiBudget(user.id, 'own'))) return false
     const [context, history] = await Promise.all([ownerContext(now), recentHistory(user.id, logged?.id, { ownOnly: true, take: 4 })])
     const out = await askJson({ userId: user.id, kind: 'own', ...ownerPrompt({ context, history, message: text }), schema: OWNER_SCHEMA, maxTokens: MAX_OUTPUT_TOKENS_OWNER }, now)
-    const reply = String(out?.reply ?? '').trim()
+    const reply = withPoints(out?.reply, pointsOf(out))
     if (!reply) return false
     await say(user, chatId, reply, {}, OWNER_REPLY_MAX)
     return true
