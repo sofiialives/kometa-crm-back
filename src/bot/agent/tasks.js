@@ -37,7 +37,7 @@ export async function morningNoTasks(now = new Date()) {
   for (const person of people) {
     if (await activeAway(person.id, now)) continue
     const res = await sendOnce(`morning:${day}:${person.id}`, () => tell(person.id,
-      `${escapeHtml(firstName(person.name))}, на сегодня у тебя в CRM нет ни одной задачи со сроком на сегодня. Проставь, пожалуйста, задачи на день 🙏`,
+      `${escapeHtml(firstName(person.name))}, на сегодня у тебя в CRM нет задач.\nПроставь, пожалуйста, задачи на день 🙏`,
       { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) }))
     if (res.ok) sent += 1
   }
@@ -56,7 +56,7 @@ export async function tickTaskStarts(now = new Date()) {
     if (!dueInMinutes(task.startAt, now, TASK_START_BEFORE_MIN)) continue
     if ((await activeAway(task.ownerId, now)) || (await hasEndedDay(task.ownerId, now))) continue
     await sendOnce(`task-start:${task.id}:${task.startAt.getTime()}`, () => tell(task.ownerId,
-      `Через 5 минут, в <b>${hm(task.startAt)}</b>, начинается задача\n«${escapeHtml(short(task.title, 120))}»\n\nКак начнёшь — перетащи её в «В процессе».`,
+      `Через 5 минут, в <b>${hm(task.startAt)}</b>, начинается задача\n«${escapeHtml(short(task.title, 120))}»\n\nКак начнёшь, нажми кнопку или перетащи её в «В процессе».`,
       { buttons: [taskButtons(task, false)] }))
   }
 }
@@ -152,8 +152,8 @@ export async function tickNotStarted(now = new Date()) {
     const many = list.length > 1
     const bullets = titles.map((t) => `• ${t}`).join('\n')
     const res = await sendOnce(key, () => tellOwners(many
-      ? `⏰ ${nameOf(group.owner)} не начал(а) задачи, назначенные на ${hm(group.startAt)} (прошло ${minutes} мин):\n${bullets}`
-      : `⏰ ${nameOf(group.owner)} не начал(а) задачу ${titles[0]} — по плану в ${hm(group.startAt)}, прошло ${minutes} мин.`))
+      ? `⏰ <b>Задачи не начаты вовремя</b>\n${nameOf(group.owner)}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин\n\n${bullets}`
+      : `⏰ <b>Задача не начата вовремя</b>\n${nameOf(group.owner)}\n${titles[0]}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
     if (res.skipped) continue
     // Временный сбой — ключ освобождён, повторим на следующем проходе целиком.
     if (!res.ok && res.retry) continue
@@ -162,7 +162,7 @@ export async function tickNotStarted(now = new Date()) {
     }
     await tell(userId,
       many
-        ? `Эти задачи должны были начаться в <b>${hm(group.startAt)}</b>:\n${bullets}\n\nКак дела?`
+        ? `Эти задачи должны были начаться в <b>${hm(group.startAt)}</b>\n\n${bullets}\n\nКак дела?`
         : `Задача ${titles[0]} должна была начаться в <b>${hm(group.startAt)}</b>. Как дела?`,
       { buttons: list.slice(0, 5).map((t) => taskButtons(t, many)) })
   }
@@ -181,9 +181,9 @@ export async function takeTask(user, taskId) {
   try {
     // В журнал «взял в работу» запишет сам сервис задач.
     const task = await updateTaskStatus(taskId, 'progress', user)
-    return `▶️ «${escapeHtml(short(task.title, 120))}» — в процессе. Удачи!`
+    return `▶️ «${escapeHtml(short(task.title, 120))}» в процессе. Удачи!`
   } catch (e) {
-    return e.status ? `Не получилось: ${e.message}` : 'Не получилось — открой задачу в CRM.'
+    return e.status ? `Не получилось. ${e.message}` : 'Не получилось, открой задачу в CRM.'
   }
 }
 
@@ -193,8 +193,8 @@ export async function lateForTask(user, taskId) {
   if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
   if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта 👍`
   state.expect(user.id, 'task_late', { taskId })
-  await tell(user.id, 'Что случилось и во сколько начнёшь? Напиши одной строкой — передам Яну.')
-  return `⏳ «${escapeHtml(short(task.title, 120))}» — не успеваешь.`
+  await tell(user.id, 'Что случилось и во сколько начнёшь?\nНапиши одной строкой, я передам Яну.')
+  return `⏳ Не успеваю начать «${escapeHtml(short(task.title, 120))}»`
 }
 
 /** Ответ на «что случилось?» — Яну. */
@@ -202,5 +202,5 @@ export async function reportTaskLate(user, taskId, text, now = new Date()) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { title: true, startAt: true } })
   await logEvent(user.id, 'task_late', { at: now, text, data: { taskId, taskTitle: task?.title ?? null, startAt: task?.startAt?.toISOString() ?? null } })
   await tell(user.id, 'Понял, передал Яну.')
-  await tellOwners(`⏳ ${nameOf(user)} не успевает начать «${escapeHtml(short(task?.title || 'задачу', 120))}»${task?.startAt ? ` (по плану в ${hm(task.startAt)})` : ''}:\n«${escapeHtml(text.slice(0, 400))}»`)
+  await tellOwners(`⏳ ${nameOf(user)} не успевает начать «${escapeHtml(short(task?.title || 'задачу', 120))}»${task?.startAt ? `\nПо плану в ${hm(task.startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
 }

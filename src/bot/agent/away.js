@@ -79,7 +79,7 @@ export async function startBreak(user, { until = null, note = null, extend = fal
   const end = until ?? new Date(now.getTime() + DEFAULT_BREAK_MIN * 60000)
   const minutes = minutesBetween(now, end)
   if (!(minutes >= 1 && minutes <= MAX_BREAK_MIN)) {
-    await tell(user.id, 'Такое время не подходит: отлучка — от минуты до 8 часов. Дольше — напиши «форс-мажор» и что случилось.')
+    await tell(user.id, 'Отлучку можно поставить от минуты до 8 часов.\nЕсли нужно дольше, напиши <i>форс-мажор</i> и что случилось.')
     return { type: 'invalid' }
   }
 
@@ -114,32 +114,31 @@ export async function startBreak(user, { until = null, note = null, extend = fal
 
   const { away } = result
   if (result.type === 'started') await releaseNotice(`dayend:${mskDayKey(now)}:${user.id}`)
-  const left = duration(minutesBetween(now, away.until))
   if (result.type === 'covered') {
-    await tell(user.id, `У тебя и так отмечен форс-мажор до ${at(away.until, now)} — отдыхай, я не дёргаю.`)
+    await tell(user.id, `У тебя и так стоит форс-мажор до ${at(away.until, now)}.\nОтдыхай, я не дёргаю.`)
     return result
   }
   if (result.type === 'same') {
-    await tell(user.id, `Принято: жду к <b>${hm(away.until)}</b>.`)
+    await tell(user.id, `Принято, жду к <b>${hm(away.until)}</b>.`)
     return result
   }
   if (result.type === 'started') {
     if (timeGiven) {
-      await tell(user.id, `Понял, жду к <b>${hm(away.until)}</b> (${left}). Перед концом спрошу, на месте ли ты.`)
+      await tell(user.id, `Понял, жду к <b>${hm(away.until)}</b>.\nПеред концом спрошу, на месте ли ты.`)
     } else {
       state.expect(user.id, 'break_time', { awayId: away.id })
-      await tell(user.id, 'На сколько отходишь? Нажми кнопку или напиши время, например «до 16:30». Не ответишь — считаю час.', { buttons: BREAK_BUTTONS('aw') })
+      await tell(user.id, 'На сколько отходишь?\nНажми кнопку или напиши время, например <i>до 16:30</i>.\nЕсли не ответишь, поставлю час.', { buttons: BREAK_BUTTONS('aw') })
     }
-    await tellOwners(`🚶 ${nameOf(user)}: отлучка до <b>${hm(away.until)}</b> (${left})${timeGiven ? '' : ', время не назвали — считаю час'}.${note ? `\n«${escapeHtml(note.slice(0, 200))}»` : ''}`)
+    await tellOwners(`🚶 ${nameOf(user)} отходит до <b>${hm(away.until)}</b>${timeGiven ? '' : '\nВремя не назвали, поставил час'}${note ? `\n<i>${escapeHtml(note.slice(0, 200))}</i>` : ''}`)
     return result
   }
   if (result.type === 'clarified') {
-    await tell(user.id, `Принято: жду к <b>${hm(away.until)}</b>.`)
-    await tellOwners(`🕑 ${nameOf(user)}: вернётся к <b>${hm(away.until)}</b> (уточнение).`)
+    await tell(user.id, `Принято, жду к <b>${hm(away.until)}</b>.`)
+    await tellOwners(`🕑 ${nameOf(user)} уточняет, вернётся к <b>${hm(away.until)}</b>`)
     return result
   }
   await tell(user.id, `Хорошо, жду к <b>${hm(away.until)}</b>.`)
-  await tellOwners(`⏳ ${nameOf(user)}: продлевает отлучку до <b>${hm(away.until)}</b> (уже ${away.extensions}-й раз).`)
+  await tellOwners(`⏳ ${nameOf(user)} продлевает отлучку до <b>${hm(away.until)}</b>\nЭто уже ${away.extensions}-й раз`)
   return result
 }
 
@@ -198,17 +197,17 @@ export async function comeBack(user, now = new Date()) {
     })
   })
   if (!away) {
-    await tell(user.id, 'Отметил: ты на месте 👍')
+    await tell(user.id, 'Отметил, ты на месте 👍')
     return null
   }
   const late = minutesBetween(away.until, now)
   if (late > STALE_BREAK_MIN) {
-    await tell(user.id, 'Отметил: ты на месте 👍')
+    await tell(user.id, 'Отметил, ты на месте 👍')
     return away
   }
   const gone = duration(minutesBetween(away.from, now))
   await tell(user.id, `С возвращением! Тебя не было ${gone}.`)
-  await tellOwners(`✅ ${nameOf(user)} на месте. Не было ${gone}${late > 1 ? `, опоздание ${duration(late)} (ждали к ${hm(away.until)})` : ''}.`)
+  await tellOwners(`✅ ${nameOf(user)} на месте\nНе было ${gone}${late > 1 ? `\nОпоздание ${duration(late)}, ждали к ${hm(away.until)}` : ''}`)
   return away
 }
 
@@ -219,13 +218,13 @@ export async function runningLate(user, { until = null, text = '' } = {}, now = 
     if (until) return startBreak(user, { until, extend: true }, now)
     state.expect(user.id, 'break_time', { awayId: open.id, extend: true })
     // «ax» — продление: кнопка помнит, что это «задерживаюсь», а не новая отлучка.
-    await tell(user.id, 'До скольки задерживаешься? Нажми кнопку или напиши время.', { buttons: BREAK_BUTTONS('ax') })
+    await tell(user.id, 'До скольки задерживаешься?\nНажми кнопку или напиши время.', { buttons: BREAK_BUTTONS('ax') })
     return null
   }
   // Одно «задерживаюсь» в 10 минут: десять подряд Яну и в журнал не нужны.
   const bucket = Math.floor(now.getTime() / (10 * 60000))
   const res = await sendOnce(`late:${user.id}:${bucket}`, () =>
-    tellOwners(`⏳ ${nameOf(user)}: задержка${until ? ` до <b>${hm(until)}</b>` : ''} — «${escapeHtml(text.slice(0, 300))}»`))
+    tellOwners(`⏳ ${nameOf(user)} задерживается${until ? ` до <b>${hm(until)}</b>` : ''}\n<i>${escapeHtml(text.slice(0, 300))}</i>`))
   if (!res.skipped) await logEvent(user.id, 'late', { at: now, text, data: until ? { until: until.toISOString() } : null })
   await tell(user.id, res.skipped ? 'Я уже передал Яну, что ты задерживаешься.' : 'Понял, передал Яну.')
   return null
@@ -240,25 +239,25 @@ export async function reportForceMajeure(user, text, message, now = new Date()) 
   if (!message) return
   const current = await activeAway(user.id, now)
   if (current?.kind === 'force_majeure') {
-    await tell(user.id, `У тебя уже стоит форс-мажор до ${at(current.until, now)} — отдыхай, я не дёргаю.`)
+    await tell(user.id, `У тебя уже стоит форс-мажор до ${at(current.until, now)}.\nОтдыхай, я не дёргаю.`)
     return
   }
   if (await hasOpenForceMajeure(user.id, now)) {
-    await tell(user.id, 'Твоя заявка на форс-мажор уже у Яна — жду его решения.')
+    await tell(user.id, 'Твоя заявка на форс-мажор уже у Яна, жду его решения.')
     return
   }
   const until = parseUntil(text, now) ?? endOfDay(now)
   const res = await tellOwners(
-    `⚠️ <b>${nameOf(user)}: форс-мажор</b>\n«${escapeHtml(text.slice(0, 500))}»\n\nМетка будет до ${at(until, now)}.`,
+    `⚠️ <b>Форс-мажор</b>\n${nameOf(user)}\n<i>${escapeHtml(text.slice(0, 500))}</i>\n\nМетка будет до ${at(until, now)}`,
     { buttons: [[{ text: 'Подтвердить', data: `fm:y:${message.id}` }, { text: 'Не подтверждать', data: `fm:n:${message.id}` }]] },
   )
   if (!res.ok) {
-    await tell(user.id, 'Не получилось передать Яну — напиши ему, пожалуйста, напрямую.')
+    await tell(user.id, 'Не получилось передать Яну.\nНапиши ему, пожалуйста, напрямую.')
     return
   }
   await claimNotice(`fm-open:${user.id}:${message.id}`)
   await logEvent(user.id, 'fm_request', { at: now, text, data: { until: until.toISOString() } })
-  await tell(user.id, 'Передал Яну. Как подтвердит — поставлю метку, и до её конца я тебя не трогаю. Выздоравливай / держись 🙏')
+  await tell(user.id, 'Передал Яну.\nКак подтвердит, поставлю метку и до её конца не буду тебя трогать.\nДержись 🙏')
 }
 
 /** Есть ли у человека нерешённая заявка на форс-мажор за последние сутки. */
@@ -283,8 +282,8 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
   const user = message.user
   if (!approve) {
     await logEvent(user.id, 'fm_decision', { at: now, data: { approved: false, by: owner.name } })
-    await tell(user.id, 'Ян не подтвердил форс-мажор. Если что-то изменилось — напиши ему.')
-    return { text: `❌ ${nameOf(user)}: форс-мажор не подтверждён.\n«${escapeHtml(message.text.slice(0, 300))}»`, rejectedUserId: user.id }
+    await tell(user.id, 'Ян не подтвердил форс-мажор.\nЕсли что-то изменилось, напиши ему.')
+    return { text: `❌ <b>Форс-мажор не подтверждён</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>`, rejectedUserId: user.id }
   }
   let until = parseUntil(message.text, message.createdAt) ?? endOfDay(message.createdAt)
   if (until <= now) until = endOfDay(now)
@@ -297,7 +296,7 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
       data: { answer: 'форс-мажор подтверждён' },
     })
     await logEvent(user.id, 'fm_decision', { at: now, data: { approved: true, by: owner.name, until: current.until.toISOString() } })
-    return { text: `✅ ${nameOf(user)}: форс-мажор уже стоит до ${at(current.until, now)} — оставил как есть.\n«${escapeHtml(message.text.slice(0, 300))}»` }
+    return { text: `✅ <b>Форс-мажор уже стоит до ${at(current.until, now)}</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>\n\nОставил как есть` }
   }
   try {
     await prisma.$transaction(async (tx) => {
@@ -322,8 +321,8 @@ export async function decideForceMajeure(owner, messageId, approve, now = new Da
     data: { answer: 'форс-мажор подтверждён' },
   })
   await logEvent(user.id, 'fm_decision', { at: now, data: { approved: true, by: owner.name, until: until.toISOString() } })
-  await tell(user.id, `Ян подтвердил форс-мажор до ${at(until, now)}. До этого времени я тебя не дёргаю.`)
-  return { text: `✅ ${nameOf(user)}: форс-мажор до ${at(until, now)} — метка стоит в CRM.\n«${escapeHtml(message.text.slice(0, 300))}»` }
+  await tell(user.id, `Ян подтвердил форс-мажор до ${at(until, now)}.\nДо этого времени я тебя не дёргаю.`)
+  return { text: `✅ <b>Форс-мажор до ${at(until, now)}</b>\n${nameOf(user)}\n<i>${escapeHtml(message.text.slice(0, 300))}</i>\n\nМетка стоит в CRM` }
 }
 
 /**
@@ -360,7 +359,7 @@ export async function tickBreaks(now = new Date()) {
   for (const away of silent) {
     if (!away.user.active) continue
     const res = await sendOnce(`away-silent:${away.id}:${away.until.getTime()}`, () =>
-      tellOwners(`❓ ${nameOf(away.user)}: отлучка кончилась в <b>${hm(away.until)}</b>, ответа нет (прошло ${duration(minutesBetween(away.until, now))}).`))
+      tellOwners(`❓ ${nameOf(away.user)} не отвечает\nОтлучка закончилась в <b>${hm(away.until)}</b>, прошло ${duration(minutesBetween(away.until, now))}`))
     if (res.skipped) continue
     await tell(away.userId, `Отлучка закончилась в ${hm(away.until)}. Ты на месте?`, { buttons: RETURN_BUTTONS(away.id) })
   }

@@ -29,6 +29,14 @@ export function aiEnabled() {
   return Boolean(env.anthropicApiKey) && !keyRejected && Date.now() >= pausedUntil
 }
 
+// Кончились деньги на ключе или упёрлись в лимит расходов в консоли — это
+// не сбой на минуту: час не стучимся, бот отвечает шаблонами. Сам текст
+// ошибки в лог не пишем.
+const OUT_OF_MONEY_PAUSE_MS = 60 * 60000
+export function isOutOfMoney(e) {
+  return e?.status === 400 && /credit balance|billing|usage limits?|spend(ing)? limit/i.test(String(e?.message ?? ''))
+}
+
 function fail() {
   failures += 1
   if (failures >= 3) {
@@ -88,6 +96,9 @@ export async function askJson({ userId, kind, system, user, schema, maxTokens = 
     if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
       keyRejected = true
       console.error('[ИИ] ключ не подходит — ИИ выключен до перезапуска, бот работает по правилам')
+    } else if (e instanceof Anthropic.APIError && isOutOfMoney(e)) {
+      pausedUntil = Date.now() + OUT_OF_MONEY_PAUSE_MS
+      console.error('[ИИ] на ключе закончились деньги или упёрлись в лимит расходов — пауза час, бот работает по шаблонам')
     } else if (e instanceof Anthropic.APIError) {
       console.error(`[ИИ] ошибка Anthropic ${e.status ?? ''} ${e.constructor.name}`)
       fail()

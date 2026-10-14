@@ -68,7 +68,18 @@ export function decide(out, now = new Date()) {
   }
 }
 
-const say = (user, chatId, text, opts = {}, max = REPLY_MAX) => tellChat(chatId, escapeHtml(cut(text, max)), { userId: user.id, ...opts })
+const say = (user, chatId, text, opts = {}, max = REPLY_MAX) => tellChat(chatId, escapeHtml(plainStyle(cut(text, max))), { userId: user.id, ...opts })
+
+/**
+ * Ответ ИИ — в стиле остальных сообщений бота: без длинных тире. Модель
+ * просим об этом в подсказке, а тут подчищаем, если всё же поставила.
+ */
+export function plainStyle(text) {
+  return String(text ?? '')
+    .replace(/^\s*[—–]\s*/gm, '')
+    .replace(/\s+[—–]\s+/g, ', ')
+    .replace(/,\s*,/g, ',')
+}
 
 /** Без ссылок и упоминаний: телеграм делает их кликабельными. */
 export function noLinks(text) {
@@ -90,7 +101,7 @@ async function noteToOwner(user, note, text, now = new Date()) {
   if (today.some((n) => Date.now() - n.sentAt.getTime() < NOTE_EVERY_MS)) return false
   await prisma.botNotice.create({ data: { key: `ai-note:${user.id}:${day}:${today.length + 1}` } })
   const res = await tellOwners(
-    `💬 <b>${nameOf(user)}</b> — пересказ ИИ: ${escapeHtml(noLinks(cut(note, 300)))}\n<i>Сообщение: «${escapeHtml(noLinks(cut(text, 300)))}»</i>`,
+    `💬 <b>${nameOf(user)}</b> · пересказ ИИ\n${escapeHtml(plainStyle(noLinks(cut(note, 300))))}\n\n<i>${escapeHtml(noLinks(cut(text, 300)))}</i>`,
   )
   return res.ok
 }
@@ -122,7 +133,7 @@ export async function aiStaffText(user, chatId, text, logged, now = new Date(), 
     if (plan.kind === 'confirm') {
       // Сообщение человека — в кнопке, чтобы заявка на форс-мажор ушла с его словами.
       const question = plan.action === 'day_end'
-        ? 'Правильно понял — на сегодня всё, заканчиваешь рабочий день?'
+        ? 'Правильно понял, на сегодня всё и ты заканчиваешь рабочий день?'
         : 'Похоже на форс-мажор. Передать Яну заявку, чтобы он отметил?'
       await tellChat(chatId, question, {
         userId: user.id,
@@ -136,7 +147,7 @@ export async function aiStaffText(user, chatId, text, logged, now = new Date(), 
     // «Передал Яну» — только если правда передали, а не со слов модели.
     if (plan.action === 'report') {
       const sent = plan.ownerNote ? await noteToOwner(user, plan.ownerNote, text, now) : false
-      await say(user, chatId, sent ? 'Понял, передал Яну.' : 'Понял, записал. Если срочно — напиши Яну напрямую.')
+      await say(user, chatId, sent ? 'Понял, передал Яну.' : 'Понял, записал.\nЕсли срочно, напиши Яну напрямую.')
       return true
     }
     if (plan.reply) await say(user, chatId, plan.reply)

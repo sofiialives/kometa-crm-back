@@ -84,14 +84,14 @@ async function start(checkin, now) {
     // Заявку на форс-мажор, которую Ян ещё не решил, не пропускаем: спросим,
     // а промолчит — штраф подождёт решения Яна (см. close).
     const skip = away ? (away.kind === 'break' ? `отлучка до ${hm(away.until)}` : `форс-мажор до ${hm(away.until)}`)
-      : (await hasEndedDay(person.id, now)) ? 'закончил(а) рабочий день'
+      : (await hasEndedDay(person.id, now)) ? 'рабочий день закончен'
         : !chat ? 'нет телеграма' : null
     await prisma.botCheckinAnswer.create({
       data: { checkinId: checkin.id, userId: person.id, status: skip ? 'skipped' : 'asked', answer: skip },
     })
     if (skip) continue
     const res = await tell(person.id,
-      `👋 <b>Внезапный чек-ин</b>\n\nЧем сейчас занимаешься? Ответь одной строкой до <b>${hm(deadline)}</b> — или нажми задачу, над которой работаешь.\n\n<i>Нет ответа за 45 минут — −3 балла.</i>`,
+      `👋 <b>Внезапный чек-ин</b>\n\nЧем сейчас занимаешься?\nОтветь одной строкой до <b>${hm(deadline)}</b> или нажми задачу, над которой работаешь.\n\n<i>Если не ответить за 45 минут, снимется 3 балла.</i>`,
       { buttons: await taskButtons(person.id) })
     if (res.ok) asked += 1
     // Вопрос не дошёл (бот заблокирован, сбой телеграма) — за молчание не
@@ -142,7 +142,7 @@ async function penalize(answer, checkin, now) {
           title: type.title,
           prizePoints: type.prizePoints,
           levelPoints: type.levelPoints,
-          comment: `Чек-ин ${checkin.day.split('-').reverse().join('.')} в ${hm(checkin.startedAt)}: ответа не было 45 минут`,
+          comment: `Чек-ин ${checkin.day.split('-').reverse().join('.')} в ${hm(checkin.startedAt)}, ответа не было 45 минут`,
           // Отложенный штраф после закрытия месяца ложится в текущий месяц:
           // закрытый уже посчитан.
           occurredAt: (await isMonthClosed(monthKeyOf(checkin.deadlineAt), tx)) ? now : checkin.deadlineAt,
@@ -171,7 +171,7 @@ async function close(checkin, now) {
       // За 45 минут человек мог предупредить, что отошёл или закончил день, — тогда не штрафуем.
       const away = await activeAway(a.userId, checkin.deadlineAt)
       if (away || (await hasEndedDay(a.userId, checkin.deadlineAt))) {
-        await prisma.botCheckinAnswer.update({ where: { id: a.id }, data: { status: 'skipped', answer: away ? 'предупреждение об отлучке' : 'закончил(а) рабочий день' } })
+        await prisma.botCheckinAnswer.update({ where: { id: a.id }, data: { status: 'skipped', answer: away ? 'предупредил об отлучке' : 'рабочий день закончен' } })
         continue
       }
       if (await hasOpenForceMajeure(a.userId, now)) {
@@ -220,16 +220,16 @@ async function report(checkin) {
   const pointsOf = new Map(events.map((e) => [e.id, e.prizePoints]))
   const lines = { answered: [], skipped: [], penalized: [] }
   for (const a of answers) {
-    if (a.status === 'answered') lines.answered.push(`• <b>${nameOf(a.user)}</b> (${hm(a.answeredAt)}): ${escapeHtml(a.answer)}`)
+    if (a.status === 'answered') lines.answered.push(`• <b>${nameOf(a.user)}</b>, ${hm(a.answeredAt)}\n${escapeHtml(a.answer)}`)
     else if (a.status === 'penalized') {
       const p = pointsOf.get(a.eventId)
-      lines.penalized.push(`• ${nameOf(a.user)}${p !== undefined ? ` — ${points(p)}` : ' — в профиле нет события, баллы не сняты'}`)
-    } else lines.skipped.push(`• ${nameOf(a.user)} — ${escapeHtml(a.answer || 'пропущен')}`)
+      lines.penalized.push(`• ${nameOf(a.user)}, ${p !== undefined ? points(p) : 'баллы не сняты, в профиле нет события'}`)
+    } else lines.skipped.push(`• ${nameOf(a.user)}, ${escapeHtml(a.answer || 'пропущен')}`)
   }
-  const parts = [`📋 <b>Чек-ин ${hm(checkin.startedAt)}: кто чем занят</b>`]
+  const parts = [`📋 <b>Чек-ин в ${hm(checkin.startedAt)}, кто чем занят</b>`]
   if (lines.answered.length) parts.push(lines.answered.join('\n'))
-  if (lines.penalized.length) parts.push(`<b>Не ответили:</b>\n${lines.penalized.join('\n')}`)
-  if (lines.skipped.length) parts.push(`<b>Не спрашивал или не штрафовал:</b>\n${lines.skipped.join('\n')}`)
+  if (lines.penalized.length) parts.push(`<b>Не ответили</b>\n${lines.penalized.join('\n')}`)
+  if (lines.skipped.length) parts.push(`<b>Не спрашивал или не штрафовал</b>\n${lines.skipped.join('\n')}`)
   if (answers.length === 0) parts.push('Спрашивать было некого.')
   return sendOnce(key, () => tellOwners(parts.join('\n\n')))
 }

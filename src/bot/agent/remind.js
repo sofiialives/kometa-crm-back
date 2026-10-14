@@ -43,7 +43,7 @@ export function reminderText(text) {
     for (const re of LEADING) t = t.replace(re, '').trim()
     if (t === before) break
   }
-  return short(t || 'то, о чём просил(а)', 300)
+  return short(t || 'То, о чём договорились', 300)
 }
 
 /** Поставить напоминание. Возвращает созданное или null (уже ответили почему). */
@@ -51,7 +51,7 @@ export async function createReminder(user, when, text, now = new Date()) {
   state.clear(user.id)
   const ms = new Date(when).getTime() - now.getTime()
   if (!(ms >= 60000)) {
-    await tell(user.id, 'Это уже прямо сейчас 🙂 Назови время хотя бы через минуту.')
+    await tell(user.id, 'Это уже прямо сейчас 🙂\nНазови время хотя бы через минуту.')
     return null
   }
   if (ms > MAX_AHEAD_MS) {
@@ -60,17 +60,17 @@ export async function createReminder(user, when, text, now = new Date()) {
   }
   const active = await prisma.botReminder.count({ where: { userId: user.id, sentAt: null, cancelledAt: null, at: { gt: now } } })
   if (active >= MAX_ACTIVE) {
-    await tell(user.id, `У тебя уже ${active} напоминаний — больше не держу. Дождись ближайших или отмени лишние кнопкой «Отменить».`)
+    await tell(user.id, `У тебя уже ${active} напоминаний, больше не держу.\nДождись ближайших или отмени лишние кнопкой «Отменить».`)
     return null
   }
   const reminder = await prisma.botReminder.create({ data: { userId: user.id, at: new Date(when), text: reminderText(text) } })
-  await tell(user.id, `⏰ Напомню в <b>${at(reminder.at, now)}</b>: ${escapeHtml(reminder.text)}`, {
+  await tell(user.id, `⏰ Напомню в <b>${at(reminder.at, now)}</b>\n${escapeHtml(reminder.text)}`, {
     buttons: [[{ text: 'Отменить', data: `rm:x:${reminder.id}` }]],
   })
   return reminder
 }
 
-const FAR_TEXT = 'Напомнить могу сегодня или завтра — дальше не держу. Напиши, например, «напомни завтра в 10:00 позвонить клиенту».'
+const FAR_TEXT = 'Напомнить могу только сегодня или завтра.\nНапиши, например, <i>напомни завтра в 10:00 позвонить клиенту</i>'
 
 /** «В пятницу», «через неделю» — так далеко не напоминаем. */
 export async function tooFarReminder(user) {
@@ -85,10 +85,10 @@ export async function tooFarReminder(user) {
 export async function askReminderTime(user, text, { tomorrow = false } = {}) {
   state.expect(user.id, 'remind_time', { text, tomorrow })
   if (tomorrow) {
-    await tell(user.id, 'Во сколько завтра напомнить? Напиши время, например «в 10:00».')
+    await tell(user.id, 'Во сколько завтра напомнить?\nНапиши время, например <i>в 10:00</i>')
     return
   }
-  await tell(user.id, 'Когда напомнить? Нажми кнопку или напиши время, например «в 16:30».', {
+  await tell(user.id, 'Когда напомнить?\nНажми кнопку или напиши время, например <i>в 16:30</i>', {
     buttons: [[
       { text: 'через 15 мин', data: 'rmt:15' },
       { text: '30 мин', data: 'rmt:30' },
@@ -124,8 +124,8 @@ export async function tickReminders(now = new Date()) {
     if (!claimed.count) continue
     const lateMs = now.getTime() - r.at.getTime()
     if (lateMs > STALE_MS) continue
-    const note = lateMs > LATE_NOTE_MS ? ` <i>(с опозданием — было на ${at(r.at, now)})</i>` : ''
-    const res = await tell(r.userId, `⏰ Напоминаю: ${escapeHtml(r.text)}${note}`)
+    const note = lateMs > LATE_NOTE_MS ? `\n<i>С опозданием, было на ${at(r.at, now)}</i>` : ''
+    const res = await tell(r.userId, `⏰ Напоминаю\n${escapeHtml(r.text)}${note}`)
     if (!res?.ok && res?.retry) await prisma.botReminder.updateMany({ where: { id: r.id, sentAt: now }, data: { sentAt: null } })
   }
 }

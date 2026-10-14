@@ -20,12 +20,12 @@ export function buildReminder(call, person, everyone, minutes = env.remindBefore
   const others = everyone.filter((p) => p.id !== person.id).map((p) => escapeHtml(p.name))
 
   const lines = [
-    `${escapeHtml(firstName(person.name))}, через ${minutes} мин звонок — <b>${mskTime(call.scheduledAt)}</b>`,
+    `${escapeHtml(firstName(person.name))}, через ${minutes} мин звонок в <b>${mskTime(call.scheduledAt)}</b>`,
     '',
     `<b>${escapeHtml(call.title)}</b>`,
   ]
   if (call.note) lines.push(escapeHtml(call.note))
-  if (others.length) lines.push('', `Вместе с вами: ${others.join(', ')}`)
+  if (others.length) lines.push('', `Вместе с вами ${others.join(', ')}`)
   if (person.id !== call.ownerId) lines.push('', '<i>Вас позвали на этот звонок</i>')
 
   return lines.join('\n')
