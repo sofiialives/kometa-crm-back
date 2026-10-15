@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
+import { syncAssignmentsSafe } from './motivation/assignmentSync.js'
 
 /**
  * Наружу (списки, приглашение, обновление) никогда не отдаём
@@ -76,7 +77,7 @@ export async function inviteUser({ email, role, position, departmentId }) {
 
   const defaultName = email.trim().charAt(0).toUpperCase()
 
-  return prisma.user.create({
+  const created = await prisma.user.create({
     data: {
       email,
       role,
@@ -87,6 +88,9 @@ export async function inviteUser({ email, role, position, departmentId }) {
     },
     select: PUBLIC_USER_SELECT,
   })
+  // Новичку сразу достаются условия мотивации его отдела и роли.
+  await syncAssignmentsSafe({ userIds: [created.id] })
+  return created
 }
 
 /**
@@ -117,11 +121,31 @@ export async function updateUser(id, patch) {
     }
   }
 
+  const before = await prisma.user.findUnique({ where: { id }, select: { role: true, departmentId: true } })
+  if (!before) throw ApiError.notFound('Пользователь не найден')
+
+  let updated
   try {
-    return await prisma.user.update({ where: { id }, data, select: PUBLIC_USER_SELECT })
+    updated = await prisma.user.update({ where: { id }, data, select: PUBLIC_USER_SELECT })
   } catch {
     throw ApiError.notFound('Пользователь не найден')
   }
+  await syncLead(id, updated)
+  // Роль и отдел поменялись в одном месте — условия мотивации следом.
+  await syncAssignmentsSafe({ userIds: [id] })
+  return updated
+}
+
+/**
+ * «Руководитель отдела» в карточке отдела всегда совпадает с ролью: понизили
+ * или перевели — отметка снимается, назначили руководителем — ставится.
+ * Раньше это держал только интерфейс админки, и смена роли в другом месте
+ * оставляла старого руководителя в карточке.
+ */
+async function syncLead(id, user) {
+  const leadOf = user.role === 'lead' && user.active !== false ? user.departmentId : null
+  await prisma.department.updateMany({ where: { leadId: id, ...(leadOf ? { id: { not: leadOf } } : {}) }, data: { leadId: null } })
+  if (leadOf) await prisma.department.update({ where: { id: leadOf }, data: { leadId: id } })
 }
 
 export async function deactivateUser(id, currentUserId) {

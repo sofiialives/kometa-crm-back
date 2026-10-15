@@ -164,6 +164,7 @@ const RULE_TEXT = {
   personal_task_on_time: 'Личная задача закрыта в срок',
   task_overdue: 'Просрочена задача из Иерархии',
   personal_task_overdue: 'Просрочена личная задача',
+  task_not_started: 'Задача не начата вовремя',
 }
 
 export function reviewText(r) {

@@ -7,6 +7,7 @@ import { employeeCard, eventTypeCard } from './shape.js'
 import { dayKeyOf } from './month.js'
 import { mskDateStart } from './taskRules.js'
 import { CALL_KEYS } from './callRules.js'
+import { syncAssignmentsSafe } from './assignmentSync.js'
 
 /**
  * Раздел «Настройки» — только для админа.
@@ -27,6 +28,19 @@ import { CALL_KEYS } from './callRules.js'
 const toCents = (dollars) => Math.round(Number(dollars) * 100)
 
 const PRODUCT_KEY = 'client_product'
+
+const AUDIENCE_LABEL = { staff: 'Специалист', lead: 'Руководитель отдела' }
+
+// Название автоматического события, если владелец не написал своё.
+export const RULE_TITLE = {
+  task_on_time: 'Задача из Иерархии закрыта в срок',
+  personal_task_on_time: 'Личная задача закрыта в срок',
+  task_overdue: 'Просрочена задача из Иерархии',
+  personal_task_overdue: 'Просрочена личная задача',
+  task_not_started: 'Задача не начата вовремя',
+}
+
+const PROFILE_VIEW_INCLUDE = { ...PROFILE_INCLUDE, department: { select: { id: true, name: true, archivedAt: true } } }
 // Событие «Не ответил на внезапный чек-ин» — его снимает бот.
 const CHECKIN_KEY = 'checkin_missed'
 
@@ -34,6 +48,10 @@ function profileView(profile, usage) {
   return {
     id: profile.id,
     title: profile.title,
+    // Чей профиль: отдел из CRM и роль. Без отдела — старый профиль,
+    // который назначают людям вручную.
+    department: profile.department ? { id: profile.department.id, name: profile.department.name } : null,
+    audience: profile.audience,
     startBankCents: profile.startBankCents,
     customScale: profile.customScale,
     workHints: profile.workHints ?? {},
@@ -71,8 +89,8 @@ async function profileUsage() {
 /** Всё содержимое «Настроек» одним ответом: экран небольшой, грузится целиком. */
 export async function getSettings(actor) {
   assertAdmin(actor, 'Настройки мотивации меняет только владелец')
-  const [profiles, globalScale, workLevels, settings, usage, users] = await Promise.all([
-    prisma.motivationProfile.findMany({ include: PROFILE_INCLUDE, orderBy: { title: 'asc' } }),
+  const [profiles, globalScale, workLevels, settings, usage, users, departments] = await Promise.all([
+    prisma.motivationProfile.findMany({ where: { archivedAt: null }, include: PROFILE_VIEW_INCLUDE, orderBy: { title: 'asc' } }),
     getGlobalScale(),
     getWorkLevels(),
     getSettingsRow(),
@@ -82,11 +100,14 @@ export async function getSettings(actor) {
       select: EMPLOYEE_SELECT,
       orderBy: [{ active: 'desc' }, { name: 'asc' }],
     }),
+    // Все живые отделы из CRM — и старые, и только что заведённые в админке.
+    prisma.department.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
   ])
   const assignments = await assignmentsAt(users.map((u) => u.id))
 
   return {
     profiles: profiles.map((p) => profileView(p, usage.get(p.id))),
+    departments,
     scale: globalScale.map((l) => ({ position: l.position, threshold: l.threshold, percent: l.percent })),
     workLevels: workLevels.map((l) => ({ position: l.position, title: l.title, minPoints: l.minPoints, hint: l.hint })),
     general: {
@@ -96,7 +117,6 @@ export async function getSettings(actor) {
       notifyPoints: settings.notifyPoints,
       autoTasksFrom: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
       checkinFrom: settings.checkinFrom ? dayKeyOf(settings.checkinFrom) : null,
-      taskPointsMode: settings.taskPointsMode,
       personalTaskDailyLimit: settings.personalTaskDailyLimit,
     },
     employees: users.map((u) => {
@@ -107,9 +127,24 @@ export async function getSettings(actor) {
 }
 
 async function loadProfile(id, db = prisma) {
-  const profile = await db.motivationProfile.findUnique({ where: { id }, include: PROFILE_INCLUDE })
-  if (!profile) throw ApiError.notFound('Профиль не найден')
+  const profile = await db.motivationProfile.findUnique({ where: { id }, include: PROFILE_VIEW_INCLUDE })
+  if (!profile || profile.archivedAt) throw ApiError.notFound('Профиль не найден')
   return profile
+}
+
+async function loadDepartment(id, db = prisma) {
+  const department = await db.department.findUnique({ where: { id }, select: { id: true, name: true, archivedAt: true } })
+  if (!department || department.archivedAt) throw ApiError.badRequest('Такого отдела нет в CRM')
+  return department
+}
+
+/** У отдела один профиль на роль: два профиля «Дизайн · Специалист» спорили бы. */
+async function assertPairFree(departmentId, audience, exceptId, db = prisma) {
+  const clash = await db.motivationProfile.findFirst({
+    where: { departmentId, audience, archivedAt: null, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { title: true },
+  })
+  if (clash) throw ApiError.conflict(`Для этой роли в отделе уже есть профиль «${clash.title}»`)
 }
 
 async function assertTitleFree(title, exceptId) {
@@ -134,9 +169,11 @@ function touchConditions(profileId, db = prisma) {
  * событие по заданию есть во всех профилях, и на него завязана отдельная
  * кнопка у владельца.
  */
-export async function createProfile(actor, { title, copyFromId }) {
+export async function createProfile(actor, { title, departmentId = null, audience = 'staff', copyFromId }) {
   assertAdmin(actor)
-  const name = title.trim()
+  const department = departmentId ? await loadDepartment(departmentId) : null
+  if (department) await assertPairFree(department.id, audience)
+  const name = title?.trim() || `${department.name} · ${AUDIENCE_LABEL[audience]}`
   await assertTitleFree(name)
 
   return prisma.$transaction(async (tx) => {
@@ -145,6 +182,8 @@ export async function createProfile(actor, { title, copyFromId }) {
     const profile = await tx.motivationProfile.create({
       data: {
         title: name,
+        departmentId: department?.id ?? null,
+        audience,
         startBankCents: source?.startBankCents ?? 0,
         customScale: source?.customScale ?? false,
         workHints: source?.workHints ?? {},
@@ -162,6 +201,7 @@ export async function createProfile(actor, { title, copyFromId }) {
             levelPoints: t.levelPoints,
             mode: t.mode,
             autoRule: t.autoRule,
+            review: t.review,
             systemKey: t.systemKey,
             enabled: t.enabled,
             position: t.position,
@@ -224,7 +264,11 @@ export async function createProfile(actor, { title, copyFromId }) {
       })
     }
 
-    return profileView(await loadProfile(profile.id, tx))
+    return profile.id
+  }).then(async (id) => {
+    // Профиль отдела сразу достаётся людям этого отдела.
+    if (department) await syncAssignmentsSafe()
+    return profileView(await loadProfile(id))
   })
 }
 
@@ -232,11 +276,25 @@ export async function createProfile(actor, { title, copyFromId }) {
  * Правка профиля. Переименование условий не меняет, поэтому дату «Условия
  * обновлены» трогает только правка стартовой суммы, шкалы или подсказок.
  */
-export async function updateProfile(actor, id, { title, startBank, customScale, workHints }) {
+export async function updateProfile(actor, id, { title, departmentId, audience, startBank, customScale, workHints }) {
   assertAdmin(actor)
   const profile = await loadProfile(id)
 
   const data = {}
+  // Отдел и роль: профиль можно перевести на другой отдел или сделать
+  // профилем руководителя. Людям он переназначится сам.
+  const nextDepartmentId = departmentId !== undefined ? departmentId : profile.departmentId
+  const nextAudience = audience ?? profile.audience
+  let ownerChanged = false
+  if (nextDepartmentId !== profile.departmentId || nextAudience !== profile.audience) {
+    if (nextDepartmentId) {
+      await loadDepartment(nextDepartmentId)
+      await assertPairFree(nextDepartmentId, nextAudience, id)
+    }
+    data.departmentId = nextDepartmentId
+    data.audience = nextAudience
+    ownerChanged = true
+  }
   if (title !== undefined && title.trim() !== profile.title) {
     await assertTitleFree(title.trim(), id)
     data.title = title.trim()
@@ -268,30 +326,40 @@ export async function updateProfile(actor, id, { title, startBank, customScale, 
   if (conditionsChanged) data.conditionsUpdatedAt = new Date()
 
   if (Object.keys(data).length) await prisma.motivationProfile.update({ where: { id }, data })
+  if (ownerChanged) await syncAssignmentsSafe()
   return profileView(await loadProfile(id))
 }
 
 /**
- * Удалить можно только профиль, который никому не назначался и по которому
- * не начислено ни одного события. Иначе по нему посчитано чьё-то прошлое,
- * и удаление стёрло бы, по каким условиям человек работал.
+ * Удалить можно любой профиль. Если по нему ещё никто не работал, он
+ * стирается совсем. Если уже работали, он уходит в архив: прошлые баллы
+ * остаются в истории с его названием, а людям он больше не назначается.
+ * Название освобождается, профиль с тем же именем можно завести заново.
  */
 export async function deleteProfile(actor, id) {
   assertAdmin(actor)
-  await loadProfile(id)
+  const profile = await loadProfile(id)
   const [assigned, events] = await Promise.all([
     prisma.motivationAssignment.count({ where: { profileId: id } }),
     prisma.motivationEvent.count({ where: { profileId: id } }),
   ])
-  if (assigned || events) {
-    throw ApiError.conflict('Профиль уже назначался сотрудникам, по нему посчитана их история. Удалить его нельзя — можно переименовать или переназначить людей')
+  if (!assigned && !events) {
+    await prisma.motivationProfile.delete({ where: { id } })
+    return
   }
-  await prisma.motivationProfile.delete({ where: { id } })
+  const day = new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })
+  let title = `${profile.title} (удалён ${day})`
+  if (await prisma.motivationProfile.findFirst({ where: { title, id: { not: id } }, select: { id: true } })) {
+    title = `${title} ${id.slice(-4)}`
+  }
+  await prisma.motivationProfile.update({ where: { id }, data: { archivedAt: new Date(), title } })
+  await syncAssignmentsSafe()
 }
 
-function assertEventShape({ mode, autoRule }) {
+function assertEventShape({ mode, autoRule, review }) {
   if (mode === 'auto' && !autoRule) throw ApiError.badRequest('Для автоматического события выберите правило')
   if (mode === 'manual' && autoRule) throw ApiError.badRequest('У ручного события не бывает автоматического правила')
+  if (mode === 'manual' && review) throw ApiError.badRequest('Ручное событие и так отмечает владелец')
 }
 
 function conflictOnRule(e) {
@@ -307,7 +375,8 @@ export async function createEventType(actor, profileId, body) {
   const profile = await loadProfile(profileId)
   const mode = body.mode ?? 'manual'
   const autoRule = mode === 'auto' ? body.autoRule : null
-  assertEventShape({ mode, autoRule })
+  assertEventShape({ mode, autoRule, review: Boolean(body.review) })
+  const review = mode === 'auto' ? Boolean(body.review) : false
 
   const position = profile.eventTypes.reduce((m, t) => Math.max(m, t.position), 0) + 1
   try {
@@ -315,12 +384,13 @@ export async function createEventType(actor, profileId, body) {
       prisma.motivationEventType.create({
         data: {
           profileId,
-          title: body.title.trim(),
+          title: body.title?.trim() || RULE_TITLE[autoRule],
           example: body.example?.trim() || null,
           prizePoints: body.prizePoints,
           levelPoints: body.levelPoints ?? body.prizePoints,
           mode,
           autoRule,
+          review,
           enabled: body.enabled ?? true,
           position,
         },
@@ -341,7 +411,8 @@ export async function updateEventType(actor, id, body) {
 
   const mode = body.mode ?? type.mode
   const autoRule = mode === 'auto' ? (body.autoRule !== undefined ? body.autoRule : type.autoRule) : null
-  assertEventShape({ mode, autoRule })
+  assertEventShape({ mode, autoRule, review: body.review === true })
+  const review = mode === 'auto' ? (body.review !== undefined ? body.review : type.review) : false
 
   // «Клиент купил продукт» — ручное событие с отдельной кнопкой. Сделать его
   // автоматическим значит сломать кнопку: автоматике не за что зацепиться.
@@ -355,8 +426,8 @@ export async function updateEventType(actor, id, body) {
     throw ApiError.badRequest('Это событие снимает бот на внезапном чек-ине — правило по задачам к нему не подходит')
   }
 
-  const data = { mode, autoRule }
-  if (body.title !== undefined) data.title = body.title.trim()
+  const data = { mode, autoRule, review }
+  if (body.title !== undefined) data.title = body.title.trim() || RULE_TITLE[autoRule] || type.title
   if (body.example !== undefined) data.example = body.example?.trim() || null
   if (body.prizePoints !== undefined) data.prizePoints = body.prizePoints
   if (body.levelPoints !== undefined) data.levelPoints = body.levelPoints
@@ -488,7 +559,7 @@ export async function saveWorkLevels(actor, levels) {
 export async function updateGeneral(actor, patch) {
   assertAdmin(actor)
   const data = {}
-  for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints', 'taskPointsMode', 'personalTaskDailyLimit']) {
+  for (const key of ['overduePenaltyCap', 'personalTaskDailyCap', 'notifyBank', 'notifyPoints', 'personalTaskDailyLimit']) {
     if (patch[key] !== undefined) data[key] = patch[key]
   }
   // Даты включения автобаллов и чек-инов приходят днём «ГГГГ-ММ-ДД» и
@@ -518,7 +589,6 @@ export async function updateGeneral(actor, patch) {
     notifyPoints: row.notifyPoints,
     autoTasksFrom: row.autoTasksFrom ? dayKeyOf(row.autoTasksFrom) : null,
     checkinFrom: row.checkinFrom ? dayKeyOf(row.checkinFrom) : null,
-    taskPointsMode: row.taskPointsMode,
     personalTaskDailyLimit: row.personalTaskDailyLimit,
   }
 }

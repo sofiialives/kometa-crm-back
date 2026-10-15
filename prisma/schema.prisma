@@ -128,6 +128,12 @@ model Department {
   calls     Call[]
   archiveServices ArchiveService[]
   archiveClients  ArchiveClient[]
+  motivationProfiles MotivationProfile[]
+
+  // Отдел удалили, но у него остались работы, задачи и история: тогда он не
+  // стирается, а уходит в архив и пропадает из всех списков. Имя при этом
+  // освобождается, отдел с тем же названием можно завести заново.
+  archivedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -539,6 +545,13 @@ enum MotivationAutoRule {
   personal_task_on_time
   task_overdue
   personal_task_overdue
+  task_not_started
+}
+
+// Для кого условия внутри отдела: обычный специалист или руководитель.
+enum MotivationAudience {
+  staff
+  lead
 }
 
 // Запись журнала банка: стартовая сумма месяца, пополнение или списание.
@@ -631,6 +644,17 @@ model MotivationProfile {
   id    String @id @default(cuid())
   title String @unique
 
+  // Чей это профиль: отдел из CRM и роль внутри него. Профиль с отделом
+  // назначается людям сам по их отделу и роли (assignmentSync.js). Старые
+  // профили без отдела работают как раньше, по ручному назначению.
+  departmentId String?
+  department   Department?        @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  audience     MotivationAudience @default(staff)
+
+  // Профиль удалили, но по нему уже начисляли баллы: он уходит в архив,
+  // история остаётся, а людям он больше не назначается.
+  archivedAt DateTime?
+
   // Сколько лежит в банке первого числа, ещё до всех пополнений. По умолчанию
   // ноль: банк растёт только тогда, когда приходят клиенты и бюджет.
   startBankCents Int @default(0)
@@ -655,6 +679,8 @@ model MotivationProfile {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([departmentId, audience])
 }
 
 // Событие в профиле: за что и сколько баллов.
@@ -676,6 +702,10 @@ model MotivationEventType {
   levelPoints Int
 
   mode MotivationEventMode @default(manual)
+
+  // Только у автоматических: true — баллы не начисляются сами, а приходят
+  // владельцу на решение в «Ждут решения». false — начисляются сразу.
+  review Boolean @default(false)
 
   // Заполнено только у автоматических событий. В одном профиле одно правило
   // встречается не больше одного раза, иначе задача давала бы баллы дважды.
@@ -786,8 +816,10 @@ model MotivationAssignment {
   userId String
   user   User   @relation("MotivationAssignmentUser", fields: [userId], references: [id])
 
-  profileId String
-  profile   MotivationProfile @relation(fields: [profileId], references: [id])
+  // Пусто — с этого момента условий у человека нет: его отдел перевели на
+  // профили, а для его роли профиль не заведён, или профиль удалили.
+  profileId String?
+  profile   MotivationProfile? @relation(fields: [profileId], references: [id], onDelete: Restrict)
 
   from DateTime @default(now())
 

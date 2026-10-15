@@ -95,6 +95,7 @@ export function eventTypeCard(type) {
     levelPoints: type.levelPoints,
     mode: type.mode,
     autoRule: type.autoRule,
+    review: Boolean(type.review),
     systemKey: type.systemKey,
     enabled: type.enabled,
     position: type.position,

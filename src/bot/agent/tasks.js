@@ -3,6 +3,7 @@ import { escapeHtml } from '../telegram.js'
 import { PARTICIPANT_ROLES } from '../../services/motivation/access.js'
 import { mskDateStart } from '../../services/motivation/taskRules.js'
 import { updateTaskStatus } from '../../services/task.service.js'
+import { chargeNotStarted } from '../../services/motivation/autoTasks.service.js'
 import { dueInMinutes, isQuietHour, isWorkday, mskDayKey } from '../plan.js'
 import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
@@ -118,7 +119,7 @@ export async function tickNotStarted(now = new Date()) {
       startAt: { gt: from, lte: to },
       owner: { active: true, role: { in: PARTICIPANT_ROLES }, telegram: { chatId: { not: null } } },
     },
-    select: { id: true, title: true, startAt: true, createdAt: true, ownerId: true, owner: { select: { id: true, name: true } } },
+    select: { id: true, title: true, description: true, deadline: true, origin: true, startAt: true, createdAt: true, ownerId: true, owner: { select: { id: true, name: true } } },
     orderBy: { startAt: 'asc' },
   })
   for (const group of notStartedGroups(tasks)) {
@@ -159,6 +160,9 @@ export async function tickNotStarted(now = new Date()) {
     if (!res.ok && res.retry) continue
     for (const t of list) {
       await logEvent(userId, 'task_not_started', { at: now, data: { taskId: t.id, taskTitle: t.title, startAt: t.startAt.toISOString(), told: res.ok } })
+      // Баллы по событию «Задача не начата вовремя», если оно есть в профиле:
+      // сразу или заявкой владельцу. Сбой баллов не должен сорвать сообщения.
+      await chargeNotStarted(t, now).catch((e) => console.error('[бот] баллы за неначатую задачу:', e.message))
     }
     await tell(userId,
       many

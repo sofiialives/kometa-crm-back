@@ -5,6 +5,7 @@ import { scheduleClearFinishedTasks } from './jobs/clearFinishedTasks.job.js'
 import { scheduleClearPastCalls } from './jobs/clearPastCalls.job.js'
 import { catchUpMotivation, scheduleOpenMotivationMonth } from './jobs/openMotivationMonth.job.js'
 import { startBot } from './bot/index.js'
+import { syncAssignmentsSafe } from './services/motivation/assignmentSync.js'
 
 async function bootstrap() {
   await connectDb()
@@ -18,6 +19,9 @@ async function bootstrap() {
       for (const c of closed) console.log(`[мотивация] при запуске закрыт месяц ${c.monthKey}, в итогах ${c.people} чел.`)
     })
     .catch((e) => console.error('[мотивация] не удалось доначислить при запуске:', e.message))
+  // Профили по отделу и роли: выровнять назначения на случай, если кого-то
+  // перевели, пока сервер был выключен. Тоже не ждём.
+  syncAssignmentsSafe().then((n) => { if (n) console.log(`[мотивация] при запуске обновлены назначения профилей: ${n}`) })
 
   const app = createApp()
   app.listen(env.port, () => {
