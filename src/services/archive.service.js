@@ -240,7 +240,8 @@ export async function addArchiveClient(user, clientId, departmentId) {
   if (user.role !== 'admin' && departmentId && departmentId !== dept) {
     throw ApiError.forbidden('Заносить можно только в архив своего отдела')
   }
-  if (!(await prisma.department.findUnique({ where: { id: dept } }))) {
+  // Отдел в архиве (удалён) — заносить в него нельзя.
+  if (!(await prisma.department.findFirst({ where: { id: dept, archivedAt: null }, select: { id: true } }))) {
     throw ApiError.notFound('Отдел не найден')
   }
 
@@ -310,7 +311,8 @@ export async function createService(user, { archiveClientId, departmentId, title
   if (!dept) throw ApiError.badRequest('Укажите отдел')
   assertCanCreateService(user, dept)
 
-  if (!(await prisma.department.findUnique({ where: { id: dept } }))) {
+  // Отдел в архиве (удалён) — заносить в него нельзя.
+  if (!(await prisma.department.findFirst({ where: { id: dept, archivedAt: null }, select: { id: true } }))) {
     throw ApiError.notFound('Отдел не найден')
   }
 

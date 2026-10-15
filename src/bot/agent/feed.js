@@ -164,6 +164,7 @@ const RULE_TEXT = {
   personal_task_on_time: 'Личная задача закрыта в срок',
   task_overdue: 'Просрочена задача из Иерархии',
   personal_task_overdue: 'Просрочена личная задача',
+  task_not_started: 'Задача не начата вовремя',
 }
 
 export function reviewText(r) {
@@ -227,7 +228,7 @@ async function ownerFeed() {
   for (const h of hints) {
     if (!unsent.has(`hint:${h.id}`)) continue
     const text = `<b>Новая работа в Иерархии</b>\n«${escapeHtml(short(h.workTitle, 140))}»${h.clientName ? `\nКлиент ${escapeHtml(h.clientName)}` : ''}${h.departmentName ? ` · ${escapeHtml(h.departmentName)}` : ''}\n\nПополнить банк исполнителям?`
-    await sendOnce(`hint:${h.id}`, () => tellOwners(text, { buttons: [row(crmButton('Открыть «На проверке»', '/motivation?section=review'))].filter((r) => r.length) }))
+    await sendOnce(`hint:${h.id}`, () => tellOwners(text, { buttons: [row(crmButton('Открыть «На проверке»', '/motivation?section=review&view=pending'))].filter((r) => r.length) }))
   }
 }
 

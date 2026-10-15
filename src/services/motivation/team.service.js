@@ -102,7 +102,7 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
   // Админу — список отделов для фильтра. Руководителю он не нужен: у него
   // отдел один.
   const departments = actor.role === 'admin'
-    ? await prisma.department.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } })
+    ? await prisma.department.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } })
     : []
 
   return {

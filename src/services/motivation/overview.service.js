@@ -180,8 +180,6 @@ export async function getConditions(actor, userId, now = new Date()) {
       // человек видел бы «+2 за задачу в срок» и не понимал, почему их нет.
       autoTasksFrom: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
       autoTasksOn: autoActiveAt(settings.autoTasksFrom, now),
-      // Пока баллы за задачи проверяет владелец, в условиях так и пишем.
-      taskPointsMode: settings.taskPointsMode,
     },
     month: monthKeyOf(now),
   }

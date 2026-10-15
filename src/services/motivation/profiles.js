@@ -38,6 +38,33 @@ export async function getWorkLevels(db = prisma) {
   return db.motivationWorkLevel.findMany({ orderBy: { position: 'asc' } })
 }
 
+/** «Дизайн (удалён 16.10.2026)», а при совпадении ещё и хвост id. */
+export async function archivedName(db, model, field, value, id, now = new Date()) {
+  const day = now.toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })
+  const name = `${value} (удалён ${day})`
+  const clash = await db[model].findFirst({ where: { [field]: name, id: { not: id } }, select: { id: true } })
+  return clash ? `${name} ${id.slice(-4)}` : name
+}
+
+/**
+ * Убрать профиль. Если по нему ещё никто не работал, он стирается совсем.
+ * Если работали, уходит в архив: прошлые баллы остаются в истории с его
+ * названием, людям он больше не назначается, а название освобождается.
+ */
+export async function retireProfile(db, profile, now = new Date()) {
+  const [assigned, events] = await Promise.all([
+    db.motivationAssignment.count({ where: { profileId: profile.id } }),
+    db.motivationEvent.count({ where: { profileId: profile.id } }),
+  ])
+  if (!assigned && !events) {
+    await db.motivationProfile.delete({ where: { id: profile.id } })
+    return 'deleted'
+  }
+  const title = await archivedName(db, 'motivationProfile', 'title', profile.title, profile.id, now)
+  await db.motivationProfile.update({ where: { id: profile.id }, data: { archivedAt: now, title } })
+  return 'archived'
+}
+
 /**
  * Профиль сотрудника на момент at: последнее назначение, сделанное не
  * позже. Возвращает и само назначение — по его дате решается, полагается

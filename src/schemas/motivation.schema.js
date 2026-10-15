@@ -45,6 +45,17 @@ export const botJournalSchema = z.object({
   query: z.object({ userId: objectId, month: optional(month) }),
 })
 
+// «История баллов»: месяц или всё время, отдел, человек и догрузка.
+export const historySchema = z.object({
+  query: z.object({
+    month: z.union([month, z.literal('all')]).optional(),
+    departmentId: optional(objectId),
+    userId: optional(objectId),
+    // «время|id» последней показанной записи.
+    before: z.string().max(80).optional(),
+  }),
+})
+
 export const userIdParamSchema = z.object({
   params: z.object({ id: objectId }),
 })
@@ -176,11 +187,19 @@ export const awaySchema = z.object({
 
 const profileTitle = z.string().trim().min(1, 'Укажите название профиля').max(80)
 
+const audience = z.enum(['staff', 'lead'])
+
+// Профиль заводится под отдел из CRM и роль в нём. Название тогда можно не
+// писать: «Дизайн · Специалист» подставится само.
 export const createProfileSchema = z.object({
-  body: z.object({
-    title: profileTitle,
-    copyFromId: optional(objectId),
-  }),
+  body: z
+    .object({
+      title: profileTitle.optional(),
+      departmentId: objectId.nullable().optional(),
+      audience: audience.optional(),
+      copyFromId: optional(objectId),
+    })
+    .refine((b) => b.title || b.departmentId, { message: 'Выберите отдел или укажите название профиля', path: ['departmentId'] }),
 })
 
 export const updateProfileSchema = z.object({
@@ -188,6 +207,8 @@ export const updateProfileSchema = z.object({
   body: z
     .object({
       title: profileTitle.optional(),
+      departmentId: objectId.nullable().optional(),
+      audience: audience.optional(),
       startBank: moneyOrZero.optional(),
       customScale: z.boolean().optional(),
       // Подсказки по номеру уровня работы: { "1": "текст", ... }.
@@ -196,7 +217,7 @@ export const updateProfileSchema = z.object({
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })
 
-const autoRule = z.enum(['task_on_time', 'personal_task_on_time', 'task_overdue', 'personal_task_overdue'])
+const autoRule = z.enum(['task_on_time', 'personal_task_on_time', 'task_overdue', 'personal_task_overdue', 'task_not_started'])
 
 const eventFields = {
   title: z.string().trim().min(1, 'Укажите название события').max(200),
@@ -205,21 +226,28 @@ const eventFields = {
   levelPoints: points,
   mode: z.enum(['manual', 'auto']),
   autoRule: autoRule.nullable(),
+  // Только у автоматических: true — баллы приходят владельцу на решение.
+  review: z.boolean(),
   enabled: z.boolean(),
   position: z.coerce.number().int().min(0).max(1000),
 }
 
 export const createEventTypeSchema = z.object({
   params: z.object({ id: objectId }),
-  body: z.object({
-    title: eventFields.title,
-    example: eventFields.example.optional(),
-    prizePoints: eventFields.prizePoints,
-    levelPoints: eventFields.levelPoints.optional(),
-    mode: eventFields.mode.optional(),
-    autoRule: eventFields.autoRule.optional(),
-    enabled: eventFields.enabled.optional(),
-  }),
+  body: z
+    .object({
+      // У автоматического события название можно не писать — подставится
+      // название правила.
+      title: eventFields.title.optional(),
+      example: eventFields.example.optional(),
+      prizePoints: eventFields.prizePoints,
+      levelPoints: eventFields.levelPoints.optional(),
+      mode: eventFields.mode.optional(),
+      autoRule: eventFields.autoRule.optional(),
+      review: eventFields.review.optional(),
+      enabled: eventFields.enabled.optional(),
+    })
+    .refine((b) => b.title || b.mode === 'auto', { message: 'Укажите название события', path: ['title'] }),
 })
 
 export const updateEventTypeSchema = z.object({
@@ -232,6 +260,7 @@ export const updateEventTypeSchema = z.object({
       levelPoints: eventFields.levelPoints.optional(),
       mode: eventFields.mode.optional(),
       autoRule: eventFields.autoRule.optional(),
+      review: eventFields.review.optional(),
       enabled: eventFields.enabled.optional(),
       position: eventFields.position.optional(),
     })
@@ -279,7 +308,6 @@ export const generalSettingsSchema = z.object({
       personalTaskDailyCap: z.coerce.number().int().min(0).max(100).optional(),
       notifyBank: z.boolean().optional(),
       notifyPoints: z.boolean().optional(),
-      taskPointsMode: z.enum(['review', 'auto']).optional(),
       personalTaskDailyLimit: z.coerce.number().int('Лимит — целое число').min(1, 'Лимит — от 1 задачи').max(50, 'Лимит — не больше 50 задач').optional(),
       autoTasksFrom: z
         .string()

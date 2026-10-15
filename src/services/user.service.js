@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
+import { syncAssignmentsSafe } from './motivation/assignmentSync.js'
 
 /**
  * Наружу (списки, приглашение, обновление) никогда не отдаём
@@ -58,7 +59,7 @@ export async function inviteUser({ email, role, position, departmentId }) {
   if (exists) throw ApiError.conflict('Пользователь с таким email уже приглашён')
 
   const department = await prisma.department.findUnique({ where: { id: departmentId } })
-  if (!department) throw ApiError.badRequest('Отдел не найден. Сначала создайте отдел')
+  if (!department || department.archivedAt) throw ApiError.badRequest('Отдел не найден. Сначала создайте отдел')
 
   let finalPosition
   if (role === 'lead') {
@@ -76,7 +77,7 @@ export async function inviteUser({ email, role, position, departmentId }) {
 
   const defaultName = email.trim().charAt(0).toUpperCase()
 
-  return prisma.user.create({
+  const created = await prisma.user.create({
     data: {
       email,
       role,
@@ -87,6 +88,9 @@ export async function inviteUser({ email, role, position, departmentId }) {
     },
     select: PUBLIC_USER_SELECT,
   })
+  // Новичку сразу достаются условия мотивации его отдела и роли.
+  await syncAssignmentsSafe({ userIds: [created.id] })
+  return created
 }
 
 /**
@@ -110,18 +114,45 @@ export async function updateUser(id, patch) {
     if (targetRole !== 'lead' && data.position) {
       if (!targetDepartmentId) throw ApiError.badRequest('Нельзя назначить должность без отдела')
       const department = await prisma.department.findUnique({ where: { id: targetDepartmentId } })
-      if (!department) throw ApiError.badRequest('Отдел не найден')
+      if (!department || department.archivedAt) throw ApiError.badRequest('Отдел не найден')
       if (!department.positions.includes(data.position)) {
         throw ApiError.badRequest('Такой должности нет в списке этого отдела')
       }
     }
   }
 
+  // Перевод в отдел, который уже в архиве (устаревший список в браузере).
+  if (data.departmentId) {
+    const target = await prisma.department.findUnique({ where: { id: data.departmentId }, select: { archivedAt: true } })
+    if (!target || target.archivedAt) throw ApiError.badRequest('Отдел не найден')
+  }
+
+  let updated
   try {
-    return await prisma.user.update({ where: { id }, data, select: PUBLIC_USER_SELECT })
+    updated = await prisma.user.update({ where: { id }, data, select: PUBLIC_USER_SELECT })
   } catch {
     throw ApiError.notFound('Пользователь не найден')
   }
+  // Роль, отдел или активность поменялись в одном месте — отметка
+  // руководителя в карточке отдела и условия мотивации следом. Имя и фото
+  // их не трогают.
+  if (['role', 'departmentId', 'active'].some((k) => data[k] !== undefined)) {
+    await syncLead(id, updated)
+    await syncAssignmentsSafe({ userIds: [id] })
+  }
+  return updated
+}
+
+/**
+ * «Руководитель отдела» в карточке отдела всегда совпадает с ролью: понизили
+ * или перевели — отметка снимается, назначили руководителем — ставится.
+ * Раньше это держал только интерфейс админки, и смена роли в другом месте
+ * оставляла старого руководителя в карточке.
+ */
+async function syncLead(id, user) {
+  const leadOf = user.role === 'lead' && user.active !== false ? user.departmentId : null
+  await prisma.department.updateMany({ where: { leadId: id, ...(leadOf ? { id: { not: leadOf } } : {}) }, data: { leadId: null } })
+  if (leadOf) await prisma.department.update({ where: { id: leadOf }, data: { leadId: id } })
 }
 
 export async function deactivateUser(id, currentUserId) {

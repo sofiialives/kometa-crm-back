@@ -36,6 +36,10 @@ export async function listWorksVisibleTo(user) {
 export async function createWork({ clientId, title, departmentId, assignees, createdBy }) {
   const client = await prisma.client.findUnique({ where: { id: clientId } })
   if (!client) throw ApiError.badRequest('Клиент не найден — выберите из списка')
+  // Удалённый (архивный) отдел из устаревшего списка в браузере.
+  if (!(await prisma.department.findFirst({ where: { id: departmentId, archivedAt: null }, select: { id: true } }))) {
+    throw ApiError.badRequest('Отдел не найден')
+  }
 
   const work = await prisma.work.create({
     data: {
