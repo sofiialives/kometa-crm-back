@@ -9,6 +9,7 @@ import * as journal from '../services/motivation/callJournal.service.js'
 import * as exporter from '../services/motivation/export.service.js'
 import * as hints from '../services/motivation/workHints.service.js'
 import * as botJournal from '../services/motivation/botJournal.service.js'
+import * as history from '../services/motivation/history.service.js'
 
 // ---- Про себя: сотрудник и руководитель ------------------------------------
 
@@ -123,6 +124,10 @@ export const getBotJournalPeople = asyncHandler(async (req, res) => {
 
 export const getBotJournal = asyncHandler(async (req, res) => {
   res.json(await botJournal.getBotJournal(req.user, req.query))
+})
+
+export const getHistory = asyncHandler(async (req, res) => {
+  res.json(await history.getHistory(req.user, req.query))
 })
 
 export const getCallJournal = asyncHandler(async (req, res) => {
