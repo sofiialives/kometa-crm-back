@@ -106,7 +106,6 @@ export async function listReviews(actor, { status = 'pending' } = {}) {
     // почему она пустая.
     taskPoints: {
       from: settings.autoTasksFrom ? dayKeyOf(settings.autoTasksFrom) : null,
-      mode: settings.taskPointsMode,
     },
     personalTaskDailyCap: settings.personalTaskDailyCap,
     items: rows.map((r) => reviewCard(r, { personalDayPoints: dayTotal(r) })),

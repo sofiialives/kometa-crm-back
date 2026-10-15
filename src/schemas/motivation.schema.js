@@ -51,7 +51,8 @@ export const historySchema = z.object({
     month: z.union([month, z.literal('all')]).optional(),
     departmentId: optional(objectId),
     userId: optional(objectId),
-    before: z.string().datetime().optional(),
+    // «время|id» последней показанной записи.
+    before: z.string().max(80).optional(),
   }),
 })
 

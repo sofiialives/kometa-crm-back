@@ -1,6 +1,7 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import { syncAssignmentsSafe } from './motivation/assignmentSync.js'
+import { archivedName, retireProfile } from './motivation/profiles.js'
 
 const LEAD_SELECT = { id: true, name: true, email: true, avatarUrl: true, avatarColor: true, position: true }
 
@@ -14,7 +15,10 @@ export async function listDepartments() {
 }
 
 function nameTaken(e, name) {
-  if (e?.code === 'P2002') throw ApiError.conflict(`Отдел «${name}» уже есть`)
+  if (e?.code !== 'P2002') return
+  const target = [].concat(e.meta?.target ?? [])
+  if (target.includes('leadId')) throw ApiError.conflict('Этот человек уже руководит другим отделом')
+  if (target.includes('name')) throw ApiError.conflict(`Отдел «${name}» уже есть`)
 }
 
 export async function createDepartment({ name, leadId, positions }) {
@@ -63,16 +67,13 @@ export async function deleteDepartment(id) {
   }
 
   const now = new Date()
-  const day = now.toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })
   await prisma.$transaction(async (tx) => {
     const profiles = await tx.motivationProfile.findMany({ where: { departmentId: id, archivedAt: null }, select: { id: true, title: true } })
-    for (const p of profiles) {
-      await tx.motivationProfile.update({ where: { id: p.id }, data: { archivedAt: now, title: `${p.title} (удалён ${day}) ${p.id.slice(-4)}` } })
-    }
+    for (const p of profiles) await retireProfile(tx, p, now)
     if (workCount > 0 || archiveCount > 0) {
       await tx.department.update({
         where: { id },
-        data: { archivedAt: now, leadId: null, name: `${department.name} (удалён ${day}) ${id.slice(-4)}` },
+        data: { archivedAt: now, leadId: null, name: await archivedName(tx, 'department', 'name', department.name, id, now) },
       })
     } else {
       await tx.department.delete({ where: { id } })

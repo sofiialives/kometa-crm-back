@@ -3,9 +3,7 @@ import assert from 'node:assert/strict'
 import { desiredProfileId } from '../assignmentSync.js'
 
 function linkedOf(rows) {
-  const map = new Map(rows.map((p) => [`${p.departmentId}:${p.audience}`, p]))
-  map.departments = new Set(rows.map((p) => p.departmentId))
-  return map
+  return new Map(rows.map((p) => [`${p.departmentId}:${p.audience}`, p]))
 }
 
 describe('профиль по отделу и роли', () => {
@@ -32,12 +30,29 @@ describe('профиль по отделу и роли', () => {
     const current = { profileId: 'old', profile: { archivedAt: new Date() } }
     assert.equal(desiredProfileId({ role: 'staff', departmentId: 'ads' }, linked, current), null)
   })
-  test('у отдела есть только профиль руководителя — у специалиста условий нет', () => {
+  test('заданы условия только руководителю — специалисты остаются на старом ручном профиле', () => {
     const onlyLead = linkedOf([{ id: 'x-lead', departmentId: 'x', audience: 'lead' }])
-    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'x' }, onlyLead, { profileId: 'manual', profile: { archivedAt: null } }), null)
+    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'x' }, onlyLead, { profileId: 'manual', profile: { archivedAt: null } }), undefined)
+    assert.equal(desiredProfileId({ role: 'lead', departmentId: 'x' }, onlyLead, null), 'x-lead')
   })
   test('перевели в отдел без профилей — условия прежнего отдела снимаются', () => {
     const current = { profileId: 'design-staff', profile: { archivedAt: null, departmentId: 'design' } }
     assert.equal(desiredProfileId({ role: 'staff', departmentId: 'ads' }, linked, current), null)
+  })
+})
+
+describe('история баллов: пометки и догрузка', async () => {
+  const { sourceOf, encodeCursor, decodeCursor } = await import('../history.service.js')
+  test('откуда запись', () => {
+    assert.equal(sourceOf({ mode: 'auto', createdById: null, review: null }), 'auto')
+    assert.equal(sourceOf({ mode: 'manual', createdById: 'u1', review: null }), 'manual')
+    assert.equal(sourceOf({ mode: 'manual', createdById: 'u1', review: { id: 'r1' } }), 'review')
+  })
+  test('курсор держит и время, и id: одинаковое время ночных штрафов не теряет записи', () => {
+    const at = '2026-10-16T20:59:00.000Z'
+    const c = decodeCursor(encodeCursor({ at, id: 'cmabc' }))
+    assert.equal(c.at.toISOString(), at)
+    assert.equal(c.id, 'cmabc')
+    assert.throws(() => decodeCursor('мусор'))
   })
 })

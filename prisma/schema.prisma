@@ -935,6 +935,8 @@ model MotivationEvent {
 
   @@index([userId, occurredAt])
   @@index([taskId])
+  // «История баллов» владельца: все записи, свежие сверху.
+  @@index([occurredAt])
 }
 
 // Заявка в очереди «На проверке»: CRM увидела, что задача закрыта в срок

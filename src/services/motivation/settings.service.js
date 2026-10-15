@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
 import { assertAdmin, EMPLOYEE_SELECT, isParticipant, PARTICIPANT_ROLES } from './access.js'
 import { validateScale, validateWorkLevels } from './engine.js'
-import { assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_INCLUDE } from './profiles.js'
+import { assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_INCLUDE, retireProfile } from './profiles.js'
 import { employeeCard, eventTypeCard } from './shape.js'
 import { dayKeyOf } from './month.js'
 import { mskDateStart } from './taskRules.js'
@@ -172,11 +172,16 @@ function touchConditions(profileId, db = prisma) {
 export async function createProfile(actor, { title, departmentId = null, audience = 'staff', copyFromId }) {
   assertAdmin(actor)
   const department = departmentId ? await loadDepartment(departmentId) : null
-  if (department) await assertPairFree(department.id, audience)
   const name = title?.trim() || `${department.name} · ${AUDIENCE_LABEL[audience]}`
   await assertTitleFree(name)
 
   return prisma.$transaction(async (tx) => {
+    if (department) {
+      // Под замком пары «отдел и роль»: двойной клик не создаст два
+      // профиля «Дизайн · Специалист».
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`motivation-profile:${department.id}:${audience}`}))`
+      await assertPairFree(department.id, audience, null, tx)
+    }
     const source = copyFromId ? await loadProfile(copyFromId, tx) : null
 
     const profile = await tx.motivationProfile.create({
@@ -339,20 +344,7 @@ export async function updateProfile(actor, id, { title, departmentId, audience, 
 export async function deleteProfile(actor, id) {
   assertAdmin(actor)
   const profile = await loadProfile(id)
-  const [assigned, events] = await Promise.all([
-    prisma.motivationAssignment.count({ where: { profileId: id } }),
-    prisma.motivationEvent.count({ where: { profileId: id } }),
-  ])
-  if (!assigned && !events) {
-    await prisma.motivationProfile.delete({ where: { id } })
-    return
-  }
-  const day = new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })
-  let title = `${profile.title} (удалён ${day})`
-  if (await prisma.motivationProfile.findFirst({ where: { title, id: { not: id } }, select: { id: true } })) {
-    title = `${title} ${id.slice(-4)}`
-  }
-  await prisma.motivationProfile.update({ where: { id }, data: { archivedAt: new Date(), title } })
+  await retireProfile(prisma, profile)
   await syncAssignmentsSafe()
 }
 

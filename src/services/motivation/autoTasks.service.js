@@ -52,7 +52,8 @@ function reviewData({ task, rule, type, prizePoints, levelPoints, at, key, night
     taskDescription: task.description ?? null,
     taskDeadline: task.deadline,
     // Сложность подсказываем для личных задач: их человек ставит себе сам.
-    complexity: task.origin === 'personal' ? estimateComplexity(task) : null,
+    // Штрафу за неначатую задачу сложность ни к чему.
+    complexity: task.origin === 'personal' && rule !== 'task_not_started' ? estimateComplexity(task) : null,
     nights,
     occurredAt: at,
     dedupeKey: `review:${rule}:${task.id}:${key}`,

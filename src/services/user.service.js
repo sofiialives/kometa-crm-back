@@ -59,7 +59,7 @@ export async function inviteUser({ email, role, position, departmentId }) {
   if (exists) throw ApiError.conflict('Пользователь с таким email уже приглашён')
 
   const department = await prisma.department.findUnique({ where: { id: departmentId } })
-  if (!department) throw ApiError.badRequest('Отдел не найден. Сначала создайте отдел')
+  if (!department || department.archivedAt) throw ApiError.badRequest('Отдел не найден. Сначала создайте отдел')
 
   let finalPosition
   if (role === 'lead') {
@@ -114,15 +114,18 @@ export async function updateUser(id, patch) {
     if (targetRole !== 'lead' && data.position) {
       if (!targetDepartmentId) throw ApiError.badRequest('Нельзя назначить должность без отдела')
       const department = await prisma.department.findUnique({ where: { id: targetDepartmentId } })
-      if (!department) throw ApiError.badRequest('Отдел не найден')
+      if (!department || department.archivedAt) throw ApiError.badRequest('Отдел не найден')
       if (!department.positions.includes(data.position)) {
         throw ApiError.badRequest('Такой должности нет в списке этого отдела')
       }
     }
   }
 
-  const before = await prisma.user.findUnique({ where: { id }, select: { role: true, departmentId: true } })
-  if (!before) throw ApiError.notFound('Пользователь не найден')
+  // Перевод в отдел, который уже в архиве (устаревший список в браузере).
+  if (data.departmentId) {
+    const target = await prisma.department.findUnique({ where: { id: data.departmentId }, select: { archivedAt: true } })
+    if (!target || target.archivedAt) throw ApiError.badRequest('Отдел не найден')
+  }
 
   let updated
   try {
@@ -130,9 +133,13 @@ export async function updateUser(id, patch) {
   } catch {
     throw ApiError.notFound('Пользователь не найден')
   }
-  await syncLead(id, updated)
-  // Роль и отдел поменялись в одном месте — условия мотивации следом.
-  await syncAssignmentsSafe({ userIds: [id] })
+  // Роль, отдел или активность поменялись в одном месте — отметка
+  // руководителя в карточке отдела и условия мотивации следом. Имя и фото
+  // их не трогают.
+  if (['role', 'departmentId', 'active'].some((k) => data[k] !== undefined)) {
+    await syncLead(id, updated)
+    await syncAssignmentsSafe({ userIds: [id] })
+  }
   return updated
 }
 

@@ -32,9 +32,9 @@ export function desiredProfileId(user, linked, current) {
   if (own) return own.id
   const staff = user.role === 'lead' ? linked.get(`${user.departmentId}:staff`) : null
   if (staff) return staff.id
-  // Отдел уже на профилях, а для этой роли профиля нет — условий нет.
-  if (linked.departments.has(user.departmentId)) return null
-  // Отдел на ручных профилях: живой ручной профиль оставляем.
+  // Для этой роли условия отделу ещё не заданы: живой ручной профиль
+  // оставляем. Иначе условия руководителя, заведённые первыми, оставили бы
+  // специалистов отдела совсем без баллов.
   return stale ? null : undefined
 }
 
@@ -43,17 +43,26 @@ async function linkedProfiles(db) {
     where: { archivedAt: null, departmentId: { not: null } },
     select: { id: true, departmentId: true, audience: true },
   })
-  const map = new Map(rows.map((p) => [`${p.departmentId}:${p.audience}`, p]))
-  map.departments = new Set(rows.map((p) => p.departmentId))
-  return map
+  return new Map(rows.map((p) => [`${p.departmentId}:${p.audience}`, p]))
 }
+
+// Один замок на все пересчёты назначений: два одновременных (правка
+// профиля и старт сервера, двойной клик) не запишут одно и то же дважды.
+export const lockAssignments = (tx) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('motivation-assignments'))`
 
 /**
  * Привести назначения в порядок. userIds — только эти люди (после смены
  * роли или отдела), без него — все участники (после правки профилей).
  * Возвращает, сколько назначений поменялось.
  */
-export async function syncAssignments({ userIds = null, now = new Date(), db = prisma } = {}) {
+export function syncAssignments({ userIds = null, now = new Date() } = {}) {
+  return prisma.$transaction(async (tx) => {
+    await lockAssignments(tx)
+    return syncInside(tx, userIds, now)
+  })
+}
+
+async function syncInside(db, userIds, now) {
   const users = await db.user.findMany({
     where: { active: true, role: { in: PARTICIPANT_ROLES }, ...(userIds ? { id: { in: userIds } } : {}) },
     select: { id: true, role: true, departmentId: true },
