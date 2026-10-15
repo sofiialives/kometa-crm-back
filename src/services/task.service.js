@@ -110,7 +110,7 @@ export async function createTask({ title, description, deadline, startAt, workId
   }
 
   const created = await prisma.$transaction(async (tx) => {
-    if (!workId) await assertPersonalTaskLimit(tx, targets)
+    if (!workId) await assertPersonalTaskLimit(tx, targets, deadline)
     return Promise.all(targets.map((t) =>
       tx.task.create({
         data: {
@@ -144,24 +144,37 @@ export async function createTask({ title, description, deadline, startAt, workId
  * у кого есть банк премии, — сотрудников и руководителей. У владельца
  * банка нет, и его личный дневник лимит не трогает. Сколько именно — в
  * настройках мотивации.
+ *
+ * Считаем по дню, на который ставится задача (день срока), а не по дню,
+ * когда её создали: «на завтра» — это уже лимит завтрашнего дня.
  */
-async function assertPersonalTaskLimit(tx, targets, now = new Date()) {
+async function assertPersonalTaskLimit(tx, targets, deadline, now = new Date()) {
   const limited = targets.filter((t) => t.role !== 'admin')
   if (limited.length === 0) return
   const { personalTaskDailyLimit: limit } = await getSettingsRow(tx)
+  const dayStart = mskDayStart(deadline)
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
   for (const t of limited) {
     // Замок на человека: двадцать одновременных запросов не пройдут
     // проверку все разом со счётом ноль.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`tasks:${t.ownerId}`}))`
-    const today = await tx.task.count({
-      where: { ownerId: t.ownerId, origin: 'personal', createdAt: { gte: mskDayStart(now) } },
+    const count = await tx.task.count({
+      where: { ownerId: t.ownerId, origin: 'personal', deadline: { gte: dayStart, lt: dayEnd } },
     })
-    if (today >= limit) {
+    if (count >= limit) {
       throw ApiError.badRequest(
-        `Личных задач на сегодня уже ${today} из ${limit} — больше поставить нельзя. Объедините мелкие в одну и опишите подробнее`,
+        `Личных задач ${dayLabel(dayStart, now)} уже ${count} из ${limit}, больше поставить нельзя. Объедините мелкие в одну и опишите подробнее`,
       )
     }
   }
+}
+
+/** «на сегодня», «на завтра» или «на 18 октября» — для сообщения о лимите. */
+function dayLabel(dayStart, now) {
+  const days = Math.round((dayStart.getTime() - mskDayStart(now).getTime()) / (24 * 60 * 60 * 1000))
+  if (days === 0) return 'на сегодня'
+  if (days === 1) return 'на завтра'
+  return `на ${dayStart.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' })}`
 }
 
 /**
