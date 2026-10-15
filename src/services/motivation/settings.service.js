@@ -428,6 +428,9 @@ export async function updateEventType(actor, id, body) {
 
   const data = { mode, autoRule, review }
   if (body.title !== undefined) data.title = body.title.trim() || RULE_TITLE[autoRule] || type.title
+  // Автоматическому событию сменили правило без своего названия — название
+  // нового правила: интерфейс поле названия у автоматики не показывает.
+  else if (mode === 'auto' && autoRule !== type.autoRule) data.title = RULE_TITLE[autoRule]
   if (body.example !== undefined) data.example = body.example?.trim() || null
   if (body.prizePoints !== undefined) data.prizePoints = body.prizePoints
   if (body.levelPoints !== undefined) data.levelPoints = body.levelPoints
