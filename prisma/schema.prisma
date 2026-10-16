@@ -107,6 +107,8 @@ model User {
   botEvents                 BotEvent[]
   aiUsage                   AiUsage[]
   botReminders              BotReminder[]
+  botRounds                 BotRound[]       @relation("BotRoundOwner")
+  botRoundTargets           BotRoundTarget[]
 
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
@@ -1138,9 +1140,25 @@ model BotMessage {
   direction String
   text      String
 
+  // Файл из телеграма: фото, документ, видео, голосовое. Сам файл не храним:
+  // телеграм отдаёт его по fileId, по нему же бот пересылает файл в отчёте.
+  fileId   String?
+  // photo, document, video, voice, video_note, audio, animation.
+  fileKind String?
+  fileMime String?
+
+  // Кто написал от имени бота: ai — ответ агента, round — сообщение по
+  // поручению Яна. Пусто — шаблон бота или человек.
+  source String?
+
+  // Сообщение из разговора по поручению: ответ человека или вопрос агента.
+  roundTargetId String?
+  roundTarget   BotRoundTarget? @relation(fields: [roundTargetId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
 
   @@index([userId, createdAt])
+  @@index([roundTargetId])
 }
 
 // Действия человека в боте, которых нет в других таблицах: «задерживаюсь»
@@ -1188,11 +1206,83 @@ model AiUsage {
   calls        Int @default(0)
   inputTokens  Int @default(0)
   outputTokens Int @default(0)
+  // Во что обошлось, в миллионных долях доллара: по цене той модели, что
+  // отвечала. Из этого — дневной и месячный бюджет.
+  costMicros   Int @default(0)
 
   updatedAt DateTime @updatedAt
 
   @@unique([userId, day, kind])
   @@index([day])
+}
+
+// Поручение агенту: Ян или руководитель отдела просит написать людям,
+// например «опроси команду, меня не будет два часа». Агент пишет каждому
+// своё сообщение по его задачам, разговаривает с ним, собирает ответы со
+// скринами и к сроку присылает отчёт. Сначала это черновик: Ян видит тексты
+// и отправляет кнопкой.
+model BotRound {
+  id String @id @default(cuid())
+
+  // Кто поручил. Ему же придёт отчёт.
+  ownerId String
+  owner   User   @relation("BotRoundOwner", fields: [ownerId], references: [id])
+
+  // Что нужно узнать — для разговора с людьми и для отчёта.
+  topic   String
+  // Ждать ответы и прислать отчёт или просто написать.
+  collect Boolean @default(true)
+
+  // draft — черновик ждёт кнопки; sent — разослано, идёт сбор; reporting —
+  // отчёт собирается и отправляется; closed — отчёт ушёл; cancelled —
+  // черновик отменили.
+  status String @default("draft")
+
+  deadlineAt DateTime
+  sentAt     DateTime?
+  nudgedAt   DateTime?
+  // Когда сбор закрыли; у reporting — когда взялись за отчёт.
+  closedAt   DateTime?
+
+  // Готовый текст отчёта: телеграм сбоил — следующий проход отправит его
+  // снова, не собирая моделью заново.
+  reportText  String?
+  reportTries Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  targets BotRoundTarget[]
+
+  @@index([status, deadlineAt])
+}
+
+model BotRoundTarget {
+  id String @id @default(cuid())
+
+  roundId String
+  round   BotRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Что агент написал этому человеку.
+  text String
+
+  // pending — ещё не ушло; sent — ушло, ждём ответ; answered — ответ есть;
+  // failed — не дошло: нет телеграма или бот заблокирован.
+  status  String  @default("pending")
+  // Суть ответа своими словами агента, для отчёта.
+  summary String?
+  // Сколько раз агент ответил человеку в этом разговоре: потолок на токены.
+  replies Int     @default(0)
+
+  sentAt     DateTime?
+  answeredAt DateTime?
+
+  messages BotMessage[]
+
+  @@unique([roundId, userId])
+  @@index([userId, status])
 }
 
 // Напоминание, которое человек попросил у бота: «напомни в 15:00
