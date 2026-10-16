@@ -18,11 +18,13 @@ const plain = (text) => String(text ?? '').replace(/<[^>]+>/g, '').replace(/&lt;
  * direction: out — от бота; in — человек написал сам; reply — ответ на
  * вопрос бота; button — нажатая кнопка. В дневной лимит идут только in.
  */
-export function logMessage({ userId = null, chatId, direction, text }) {
+export function logMessage({ userId = null, chatId, direction, text, fileId = null, fileKind = null, fileMime = null, source = null, roundTargetId = null }) {
   // Своё сообщение бот пишет в HTML — теги убираем. Человек пишет как есть:
   // «1 < 2» должно остаться «1 < 2».
   const clean = direction === 'out' ? plain(text) : String(text ?? '')
-  return prisma.botMessage.create({ data: { userId, chatId: String(chatId), direction, text: clean.slice(0, 4000) } })
+  return prisma.botMessage.create({
+    data: { userId, chatId: String(chatId), direction, text: clean.slice(0, 4000), fileId, fileKind, fileMime: fileMime ? String(fileMime).slice(0, 100) : null, source, roundTargetId },
+  })
     .catch((e) => {
       console.error('[агент] журнал:', e.message)
       return null
@@ -57,7 +59,7 @@ export async function userByChat(chatId) {
   const link = await prisma.telegramLink.findFirst({
     where: { chatId: String(chatId) },
     orderBy: { linkedAt: 'desc' },
-    select: { user: { select: { id: true, name: true, role: true, active: true } } },
+    select: { user: { select: { id: true, name: true, role: true, active: true, departmentId: true } } },
   })
   return link?.user?.active ? link.user : null
 }
@@ -69,9 +71,14 @@ export async function tell(userId, text, opts = {}) {
   return tellChat(chatId, text, { ...opts, userId })
 }
 
-export async function tellChat(chatId, text, { userId = null, buttons } = {}) {
+/**
+ * source — кто написал: ai — агент, round — сообщение по поручению; так
+ * агент отличает свои ответы от шаблонов. roundTargetId — из разговора по
+ * поручению.
+ */
+export async function tellChat(chatId, text, { userId = null, buttons, source = null, roundTargetId = null } = {}) {
   const res = await sendMessage(chatId, text, { buttons })
-  if (res.ok) await logMessage({ userId, chatId, direction: 'out', text })
+  if (res.ok) await logMessage({ userId, chatId, direction: 'out', text, source, roundTargetId })
   return res
 }
 

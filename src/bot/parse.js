@@ -128,3 +128,12 @@ export function parseRemindAt(text, now = new Date(), opts = {}) {
   if (tomorrow) return { until: null, tomorrow: true, far: false }
   return { until: parseUntil(t, now), tomorrow: false, far: false }
 }
+
+// Руководитель говорит о людях: «спроси отдел, как дела», «что по задачам
+// у ребят». Такое — агенту, а не правилам про свои отлучки и списки.
+const TEAM_WORDS = /(отдел|команд|ребят|всем\b|всех\b|сотрудник|людям|людей|спец(ам|ов|ы)\b|опрос|пропинг|напиши|спроси|узнай|передай|поручи|табличк|таблиц|документ)/i
+
+export function teamRequest(text) {
+  return TEAM_WORDS.test(String(text ?? ''))
+}
+
