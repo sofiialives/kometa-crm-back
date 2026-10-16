@@ -40,7 +40,9 @@ const REPORT_TRIES = 5
 const MAX_FILES = 20
 const IN = ['in', 'reply', 'file']
 const PERSON = { select: { id: true, name: true, role: true, departmentId: true, department: { select: { name: true } } } }
-const LINK = /(?:https?:\/\/|tg:\/\/|www\.)\S+|\b[\w-]+(?:\.[\w-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz)\b\S*|@\w{3,}/gi
+// Ссылка: адрес со схемой, www или домен, в том числе кириллический
+// (пример.рф). \\b в JS не видит кириллицу — границы через «не буква».
+const LINK = /(?:https?:\/\/|tg:\/\/|www\.)\S+|(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|link|page)(?![\p{L}\d])\S*|@\w{3,}/giu
 
 export function clampMinutes(minutes) {
   const m = Number.isInteger(minutes) ? minutes : ROUND_DEFAULT_MIN
@@ -49,7 +51,7 @@ export function clampMinutes(minutes) {
 
 /** Ссылки и упоминания в текстах — Ян должен их видеть до отправки. */
 export function linksIn(texts) {
-  return [...new Set(texts.flatMap((t) => String(t).match(LINK) ?? []))]
+  return [...new Set(texts.flatMap((t) => (String(t).match(LINK) ?? []).map((l) => l.replace(/[.,;:!?)»]+$/, ''))))]
 }
 
 const BUTTONS = (id) => [[{ text: 'Отправить', data: `rd:go:${id}` }, { text: 'Отмена', data: `rd:no:${id}` }]]
@@ -268,7 +270,10 @@ export function reportText({ round, answered, silent, failed, ai }) {
     `Написал ${answered.length + silent.length} в ${hm(round.sentAt)}, ответили ${answered.length}.`,
   ]
   for (const p of answered) {
-    const r = ai?.[p.userId] ?? plainReport(p)
+    // Модель вернула пустые пункты — берём суть из разговора, а не пустоту.
+    const fallback = plainReport(p)
+    const got = ai?.[p.userId]
+    const r = got?.points?.length ? got : { points: fallback.points, quote: got?.quote ?? fallback.quote }
     lines.push('', `<b>${escapeHtml(p.label)}</b>`)
     // Пункты пишет модель — в стиле бота; цитата — слово в слово.
     for (const point of (r.points ?? []).slice(0, 4)) lines.push(`• ${escapeHtml(plainStyle(cut(String(point).replace(/^\s*[-—–*•]\s*/, ''), 300)))}`)
@@ -293,14 +298,29 @@ async function sendFiles(chatId, ownerId, label, messages) {
   const files = all.slice(0, MAX_FILES)
   const visual = files.filter((m) => m.fileKind === 'photo' || m.fileKind === 'video')
   const caption = `<b>${escapeHtml(label)}</b>`
+  let lost = 0
+  // Телеграм ответил «подожди» или сбоил — ещё две попытки с паузой.
+  const send = async (fn, count) => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const res = await fn()
+      if (res.ok) return
+      if (!res.retry) break
+      await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)))
+    }
+    lost += count
+  }
   for (let i = 0; i < visual.length; i += 10) {
-    await sendAlbum(chatId, visual.slice(i, i + 10).map((m) => ({ kind: m.fileKind, fileId: m.fileId })), { caption })
+    const part = visual.slice(i, i + 10)
+    await send(() => sendAlbum(chatId, part.map((m) => ({ kind: m.fileKind, fileId: m.fileId })), { caption }), part.length)
   }
   for (const m of files.filter((f) => !visual.includes(f))) {
     if (m.fileKind === 'video_note') await tellChat(chatId, caption, { userId: ownerId, source: 'report' })
-    await sendFileById(chatId, m.fileKind, m.fileId, { caption })
+    await send(() => sendFileById(chatId, m.fileKind, m.fileId, { caption }), 1)
   }
-  if (all.length > files.length) await tellChat(chatId, `${caption}\nИ ещё файлов ${all.length - files.length}, они в его переписке с ботом.`, { userId: ownerId, source: 'report' })
+  const notes = []
+  if (all.length > files.length) notes.push(`И ещё файлов ${all.length - files.length}, больше 20 за раз не пересылаю.`)
+  if (lost) notes.push(`Не дошло файлов ${lost}, телеграм не принял. Можно попросить прислать их ещё раз.`)
+  if (notes.length) await tellChat(chatId, `${caption}\n${notes.join('\n')}`, { userId: ownerId, source: 'report' })
 }
 
 /** Кто ответил, кто молчит, у кого не дошло — с подписями «(Отдел) Имя». */
@@ -319,6 +339,7 @@ async function composeReport(round, people) {
   const ai = people.answered.length
     ? await aiReport({
       ownerId: round.ownerId,
+      role: round.owner?.role ?? 'admin',
       topic: round.topic,
       people: people.answered.map((t) => ({ id: t.userId, label: t.label, summary: t.summary, messages: t.messages })),
     }).catch((e) => {
@@ -338,7 +359,7 @@ async function composeReport(round, people) {
 export async function sendRoundReport(roundId, now = new Date()) {
   const claimed = await prisma.botRound.updateMany({ where: { id: roundId, status: 'sent' }, data: { status: 'reporting', closedAt: now } })
   if (!claimed.count) return { ok: false, reason: 'busy' }
-  const round = await prisma.botRound.findUnique({ where: { id: roundId } })
+  const round = await prisma.botRound.findUnique({ where: { id: roundId }, include: { owner: PERSON } })
   const close = () => prisma.botRound.update({ where: { id: round.id }, data: { status: 'closed', closedAt: new Date() } })
   const retry = () => prisma.botRound.update({ where: { id: round.id }, data: { status: round.reportTries + 1 >= REPORT_TRIES ? 'closed' : 'sent', reportTries: { increment: 1 } } })
   try {

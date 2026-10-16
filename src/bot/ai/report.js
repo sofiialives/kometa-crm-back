@@ -56,11 +56,12 @@ export function verifiedQuote(quote, messages) {
  * одного сотрудника не попадут в пункты о другом. Лимит отчёта — один на
  * весь отчёт. Возвращает { [userId]: { points, quote } } или null.
  */
-export async function aiReport({ ownerId, topic, people }, deps = {}) {
-  const check = await preflight({ userId: ownerId, role: 'admin', kind: 'report' }, deps)
+export async function aiReport({ ownerId, role = 'admin', topic, people }, deps = {}) {
+  // Отчёт руководителя — в его дневном потолке, как и всё, что он просит.
+  const check = await preflight({ userId: ownerId, role, kind: 'report' }, deps)
   if (check.status !== 'ok') return null
-  const take = deps.take ?? ((userId, kind, role) => takeAiCall(userId, kind, new Date(), role))
-  if (!(await take(ownerId, 'report', 'admin'))) return null
+  const take = deps.take ?? ((userId, kind, r) => takeAiCall(userId, kind, new Date(), r))
+  if (!(await take(ownerId, 'report', role))) return null
   const once = { ...deps, take: async () => true }
   const out = {}
   const queue = [...people]
@@ -68,7 +69,7 @@ export async function aiReport({ ownerId, topic, people }, deps = {}) {
     for (let p = queue.shift(); p; p = queue.shift()) {
       const res = await runAgent({
         userId: ownerId,
-        role: 'admin',
+        role,
         kind: 'report',
         system: [SYSTEM],
         messages: [{

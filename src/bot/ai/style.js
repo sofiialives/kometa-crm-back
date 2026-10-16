@@ -34,6 +34,6 @@ export function noLinks(text) {
   return String(text ?? '')
     .replace(/(?:https?|hxxps?|tg):\/\/\S+/gi, '[ссылка]')
     .replace(/\b(?:t\.me|telegram\.me|www\.)\S*/gi, '[ссылка]')
-    .replace(/\b[\w-]+(?:\.[\w-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz)\b\S*/gi, '[ссылка]')
+    .replace(/(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|link|page)(?![\p{L}\d])\S*/giu, '[ссылка]')
     .replace(/@\w{3,}/g, '[упоминание]')
 }

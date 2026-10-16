@@ -72,6 +72,17 @@ function typing(chatId) {
 // ничего не сказала, человек остался бы без ответа.
 const READ_ONLY = new Set(['get_team', 'get_person', 'get_works', 'get_round'])
 const acted = (tools = []) => tools.some((t) => !READ_ONLY.has(t))
+// Действия, которые сами отвечают человеку стандартной фразой.
+const SPEAKS = new Set(['set_away', 'come_back', 'running_late', 'set_reminder', 'end_day', 'force_majeure', 'tell_owner'])
+
+/**
+ * Готов ли агент ответить человеку сейчас: ключ, деньги, лимит. Роутер
+ * спрашивает это, когда идёт опрос: есть агент — всё, что пишет человек,
+ * идёт ему; нет — команды разбирают правила, а ответ всё равно в отчёт.
+ */
+export async function agentReady(user, kind = 'own') {
+  return (await preflight({ userId: user.id, role: user.role, kind })).status === 'ok'
+}
 
 /** Что сказать, когда ИИ сейчас недоступен по деньгам или лимиту. */
 export function limitText({ status, why }, owner) {
@@ -173,10 +184,12 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
       if (target) await countReply(target.id)
       return true
     }
+    // В опросе человек всегда должен понять, что его услышали: агент
+    // записал ответ, но ничего не сказал — короткое «записал».
+    if (target && !res.tools.some((t) => SPEAKS.has(t))) return ack()
     // Действие уже выполнено и само ответило человеку — даже если потом
     // запрос сорвался, «не понял» не нужно.
     if (acted(res.tools) || ctx.quiet) return true
-    if (target) return ack()
     if (res.status === 'limit' || res.status === 'budget') {
       if (kind !== 'own') return false
       await tellChat(chatId, limitText(res, owner), { userId: user.id })

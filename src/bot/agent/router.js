@@ -11,8 +11,8 @@ import { mskDayKey, mskDayStart } from '../plan.js'
 import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
 import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES, tooFarReminder } from './remind.js'
-import { agentReply } from '../ai/agent.js'
-import { activeTarget, decideDraft, decideReport } from './rounds.js'
+import { agentReady, agentReply } from '../ai/agent.js'
+import { activeTarget, decideDraft, decideReport, linkMessages } from './rounds.js'
 import { listIntent, listText } from './lists.js'
 
 /**
@@ -172,8 +172,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     await tellChat(chatId, OWNER_HELP, { userId: user.id })
     return
   }
-  // Идёт разговор по поручению: в отчёт уйдёт то, что дойдёт до агента, а
-  // команды по правилам («отошёл на обед») — нет.
+  // Идёт опрос по поручению — сообщение уйдёт в отчёт.
   const target = await activeTarget(user.id, now)
   const thanks = () => tellChat(chatId, 'Записал, спасибо.', { userId: user.id })
   if (command) {
@@ -184,6 +183,18 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
 
   const waiting = text ? state.take(user.id) : null
   if (waiting && (await onWaiting(me, waiting, text, logged, now))) return
+
+  if (target && !isCommandText) {
+    // Идёт опрос: «не успею, застрял на правках» — это ответ, а не
+    // «задерживаюсь». Агент поймёт и ответ, и команду в нём, у него те же
+    // действия. Чек-ин, если был открыт, уже закрыт этим же сообщением.
+    if (await agentReady(user, 'round')) {
+      await ask()
+      return
+    }
+    // Агента нет — команды разбирают правила, а слова всё равно уйдут в отчёт.
+    await linkMessages(target.id, loggedIds)
+  }
 
   // Руководитель поручает или спрашивает о своих людях — сразу агенту:
   // «задерживаюсь, спроси отдел, как дела» не должно стать «задержкой».
