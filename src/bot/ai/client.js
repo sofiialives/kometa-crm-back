@@ -1,12 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { env } from '../../config/env.js'
-import { MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS_OWNER } from './limits.js'
+import { modelNow } from './cost.js'
+import { MAX_OUTPUT_TOKENS } from './limits.js'
 import { recordTokens, takeAiCall } from './usage.js'
 
 /**
- * Запрос к Claude со строгим JSON на выходе. Любая беда — нет ключа, лимит,
- * сеть, отказ модели, обрезанный ответ — даёт null, и бот работает по
- * своим правилам, как без ИИ. Ошибку пишем в лог, человека не грузим.
+ * Связь с Claude. Любая беда — нет ключа, лимит, сеть, отказ модели,
+ * обрезанный ответ — даёт null, и бот работает по своим правилам, как без
+ * ИИ. Ошибку пишем в лог, человека не грузим.
  */
 
 let client = null
@@ -23,9 +24,15 @@ export function setAiStub(fn) {
 let keyRejected = false
 let failures = 0
 let pausedUntil = 0
+let engineStubbed = false
+
+/** Проверки подменяют и агента (engine.js): тогда ключ не нужен. */
+export function markEngineStub(on) {
+  engineStubbed = Boolean(on)
+}
 
 export function aiEnabled() {
-  if (stub) return true
+  if (stub || engineStubbed) return true
   return Boolean(env.anthropicApiKey) && !keyRejected && Date.now() >= pausedUntil
 }
 
@@ -47,65 +54,82 @@ function fail() {
   }
 }
 
-function getClient() {
+export function noteSuccess() {
+  failures = 0
+}
+
+/**
+ * Разобрать ошибку запроса и включить предохранитель. В лог — только вид
+ * ошибки: в тексте сторонней ошибки может оказаться ключ или кусок ответа
+ * с данными сотрудника.
+ */
+export function noteFailure(e) {
+  if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
+    keyRejected = true
+    console.error('[ИИ] ключ не подходит — ИИ выключен до перезапуска, бот работает по правилам')
+  } else if (e instanceof Anthropic.APIError && isOutOfMoney(e)) {
+    pausedUntil = Date.now() + OUT_OF_MONEY_PAUSE_MS
+    console.error('[ИИ] на ключе закончились деньги или упёрлись в лимит расходов — пауза час, бот работает по шаблонам')
+  } else if (e instanceof Anthropic.BadRequestError) {
+    // Ошибка в самом запросе — не сбой Anthropic, пауза не поможет.
+    console.error(`[ИИ] запрос не принят: ${String(e.message ?? '').slice(0, 200).replace(/sk-ant-\S+/g, '[ключ]')}`)
+  } else if (e instanceof Anthropic.APIError) {
+    console.error(`[ИИ] ошибка Anthropic ${e.status ?? ''} ${e.constructor.name}`)
+    fail()
+  } else {
+    console.error(`[ИИ] сбой: ${e.name}${e.code ? ` ${e.code}` : ''}`)
+    fail()
+  }
+}
+
+export function getClient() {
   // Без повторов: повтор у нас — это ответ по правилам. Иначе зависший
   // Anthropic держал бы бота для всех.
-  client ??= new Anthropic({ apiKey: env.anthropicApiKey, baseURL: 'https://api.anthropic.com', maxRetries: 0, timeout: 10_000 })
+  client ??= new Anthropic({ apiKey: env.anthropicApiKey, baseURL: 'https://api.anthropic.com', maxRetries: 0, timeout: 60_000 })
   return client
 }
 
-// Общий срок на запрос, включая ожидание по Retry-After.
-const DEADLINE_MS = 10_000
+// Общий срок на короткий запрос со строгим JSON.
+const DEADLINE_MS = 20_000
 
 async function callClaude({ system, user, schema, maxTokens }) {
+  const model = env.aiFallbackModel
   const response = await getClient().messages.create({
-    model: env.aiModel,
+    model,
     max_tokens: maxTokens,
-    // Без размышлений: они тоже идут в счёт ответа, а задачи здесь простые.
-    thinking: { type: 'disabled' },
+    // Размышления по необходимости и коротко: задачи здесь простые.
+    thinking: { type: 'adaptive' },
     output_config: { effort: 'low', format: { type: 'json_schema', schema } },
     system,
     messages: [{ role: 'user', content: user }],
   }, { signal: AbortSignal.timeout(DEADLINE_MS) })
   if (response.stop_reason !== 'end_turn') {
     console.error('[ИИ] ответ не готов:', response.stop_reason)
-    return { data: null, usage: response.usage }
+    return { data: null, usage: response.usage, model }
   }
   const text = response.content.find((b) => b.type === 'text')?.text
-  return { data: text ? JSON.parse(text) : null, usage: response.usage }
+  return { data: text ? JSON.parse(text) : null, usage: response.usage, model }
 }
 
 /**
- * kind — вид запроса для лимитов (own, reply, task), userId — чей лимит.
- * maxTokens — потолок ответа, не больше MAX_OUTPUT_TOKENS_OWNER.
+ * Короткий запрос со строгим JSON на дешёвой модели: оценка сложности
+ * задачи. kind — вид запроса для лимитов, userId — чей лимит.
  * Возвращает разобранный JSON или null.
  */
 export async function askJson({ userId, kind, system, user, schema, maxTokens = MAX_OUTPUT_TOKENS }, now = new Date()) {
   if (!aiEnabled()) return null
   try {
+    // Деньги на ИИ за день или месяц кончились — и оценки задач ждут.
+    if (!stub && !(await modelNow())) return null
     // Лимиты — по настоящему дню, а не по «сейчас» из проверок.
     if (!(await takeAiCall(userId, kind, new Date()))) return null
     if (stub) return await stub({ kind, system, user, schema, now })
-    const { data, usage } = await callClaude({ system, user, schema, maxTokens: Math.min(maxTokens, MAX_OUTPUT_TOKENS_OWNER) })
-    await recordTokens(userId, kind, usage, new Date())
-    failures = 0
+    const { data, usage, model } = await callClaude({ system, user, schema, maxTokens })
+    await recordTokens(userId, kind, usage, new Date(), model)
+    noteSuccess()
     return data
   } catch (e) {
-    // В лог — только вид ошибки: в тексте сторонней ошибки может оказаться
-    // ключ или кусок ответа с данными сотрудника.
-    if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
-      keyRejected = true
-      console.error('[ИИ] ключ не подходит — ИИ выключен до перезапуска, бот работает по правилам')
-    } else if (e instanceof Anthropic.APIError && isOutOfMoney(e)) {
-      pausedUntil = Date.now() + OUT_OF_MONEY_PAUSE_MS
-      console.error('[ИИ] на ключе закончились деньги или упёрлись в лимит расходов — пауза час, бот работает по шаблонам')
-    } else if (e instanceof Anthropic.APIError) {
-      console.error(`[ИИ] ошибка Anthropic ${e.status ?? ''} ${e.constructor.name}`)
-      fail()
-    } else {
-      console.error(`[ИИ] сбой: ${e.name}${e.code ? ` ${e.code}` : ''}`)
-      fail()
-    }
+    noteFailure(e)
     return null
   }
 }
