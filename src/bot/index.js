@@ -2,7 +2,7 @@ import cron from 'node-cron'
 import { env } from '../config/env.js'
 import { broadcast, runRemindersOnce } from './reminders.js'
 import { pruneNotices, runAgentOnce, runMorning } from './agent/index.js'
-import { startPolling } from './updates.js'
+import { drain, startPolling } from './updates.js'
 import { whoAmI } from './telegram.js'
 
 const MSK = { timezone: 'Europe/Moscow' }
@@ -75,6 +75,11 @@ export async function startBot() {
   }
 
   startPolling()
+  // Выкладка на Render: дождаться ответов агента на начатые сообщения.
+  process.once('SIGTERM', () => {
+    console.log('[бот] остановка: дожидаюсь начатых ответов')
+    drain(25000).finally(() => process.exit(0))
+  })
 
   cron.schedule('* * * * *', () => {
     runRemindersOnce().catch((e) => console.error('[бот] напоминания:', e.message))
@@ -97,5 +102,5 @@ export async function startBot() {
 
   console.log(`[бот] @${username} запущен, напоминание за ${env.remindBeforeMin} мин`)
   if (env.anthropicKeyMalformed) console.error('[ИИ] ANTHROPIC_API_KEY в неверном формате (пробелы или лишние символы) — ИИ выключен')
-  else console.log(env.anthropicApiKey ? `[ИИ] ключ задан, модель ${env.aiModel}` : '[ИИ] ключа нет — бот работает по правилам')
+  else console.log(env.anthropicApiKey ? `[ИИ] ключ задан, агент ${env.aiModel}, запасная ${env.aiFallbackModel}, бюджет $${env.aiDailyUsd} в день и $${env.aiMonthlyUsd} в месяц` : '[ИИ] ключа нет — бот работает по правилам')
 }

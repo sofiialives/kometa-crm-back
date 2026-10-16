@@ -128,3 +128,13 @@ export function parseRemindAt(text, now = new Date(), opts = {}) {
   if (tomorrow) return { until: null, tomorrow: true, far: false }
   return { until: parseUntil(t, now), tomorrow: false, far: false }
 }
+
+// Руководитель говорит о людях: «спроси отдел, как дела», «что по задачам
+// у ребят». Такое — агенту, а не правилам про свои отлучки и списки.
+// \b в JS не видит кириллицу — конец слова через «дальше не буква».
+const TEAM_WORDS = /(отдел|команд|ребят|(всем|всех|спецам|спецов|спецы)(?!\p{L})|сотрудник|людям|людей|опрос|пропинг|напиши|спроси|узнай|передай|поручи|табличк|таблиц|документ)/iu
+
+export function teamRequest(text) {
+  return TEAM_WORDS.test(String(text ?? ''))
+}
+

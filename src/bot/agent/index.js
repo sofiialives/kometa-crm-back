@@ -4,10 +4,11 @@ import { tickCheckin } from './checkin.js'
 import { tickFeed } from './feed.js'
 import { morningNoTasks, tickNotStarted, tickTaskStarts } from './tasks.js'
 import { tickReminders } from './remind.js'
+import { tickRounds } from './rounds.js'
 
 /**
  * Агент — часть бота напоминаний: раз в минуту обходит отлучки, задачи,
- * чек-ин и ленту изменений. Проход не накладывается сам на себя: если
+ * чек-ин, ленту изменений и поручения. Проход не накладывается сам на себя: если
  * прошлый ещё идёт, этот пропускается.
  */
 
@@ -20,6 +21,7 @@ const STEPS = [
   ['напоминания', tickReminders],
   ['чек-ин', tickCheckin],
   ['лента', tickFeed],
+  ['поручения', tickRounds],
 ]
 
 export async function runAgentOnce(now = new Date()) {
@@ -55,6 +57,8 @@ export async function pruneNotices(now = new Date()) {
   })
   const messages = await prisma.botMessage.deleteMany({ where: { createdAt: { lt: before } } })
   await prisma.botReminder.deleteMany({ where: { at: { lt: before } } })
+  // Поручения — вместе с перепиской: без неё в них ничего не осталось.
+  await prisma.botRound.deleteMany({ where: { createdAt: { lt: before } } })
   // В журнале действий факт остаётся, а слова человека — нет.
   const words = await prisma.botEvent.updateMany({ where: { at: { lt: before }, text: { not: null } }, data: { text: null } })
   if (notices.count || messages.count || words.count) {

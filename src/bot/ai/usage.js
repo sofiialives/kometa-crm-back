@@ -1,7 +1,8 @@
 import { prisma } from '../../config/prisma.js'
 import { env } from '../../config/env.js'
 import { mskDayKey } from '../plan.js'
-import { AI_LIMITS } from './limits.js'
+import { aiLimit } from './limits.js'
+import { costMicros } from './cost.js'
 
 /**
  * Учёт запросов к ИИ: лимит на человека в день по видам и общий дневной
@@ -10,8 +11,8 @@ import { AI_LIMITS } from './limits.js'
  */
 
 /** Можно ли сделать запрос; если да — он сразу засчитан. */
-export async function takeAiCall(userId, kind, now = new Date()) {
-  const limit = AI_LIMITS[kind]
+export async function takeAiCall(userId, kind, now = new Date(), role = null) {
+  const limit = aiLimit(kind, role)
   if (!limit || !userId) return false
   const day = mskDayKey(now)
   return prisma.$transaction(async (tx) => {
@@ -35,8 +36,8 @@ export async function takeAiCall(userId, kind, now = new Date()) {
  * Остались ли у человека запросы сегодня — без записи. Чтобы не собирать
  * данные из CRM зря, когда лимит уже выбран.
  */
-export async function hasAiBudget(userId, kind, now = new Date()) {
-  const limit = AI_LIMITS[kind]
+export async function hasAiBudget(userId, kind, now = new Date(), role = null) {
+  const limit = aiLimit(kind, role)
   if (!limit || !userId) return false
   const day = mskDayKey(now)
   const [row, total] = await Promise.all([
@@ -48,15 +49,22 @@ export async function hasAiBudget(userId, kind, now = new Date()) {
     && (total._sum.inputTokens ?? 0) + (total._sum.outputTokens ?? 0) < env.aiDailyTokens
 }
 
-/** Сколько текста ушло и пришло — для отчёта о расходах. */
-export async function recordTokens(userId, kind, usage, now = new Date()) {
+/** Сколько текста ушло и пришло и во что обошлось — для бюджета и отчёта. */
+export async function recordTokens(userId, kind, usage, now = new Date(), model = null) {
   if (!usage) return
   const day = mskDayKey(now)
-  await prisma.aiUsage.update({
+  await prisma.aiUsage.upsert({
     where: { userId_day_kind: { userId, day, kind } },
-    data: {
+    create: {
+      userId, day, kind, calls: 0,
+      inputTokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+      outputTokens: usage.output_tokens ?? 0,
+      costMicros: costMicros(usage, model),
+    },
+    update: {
       inputTokens: { increment: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) },
       outputTokens: { increment: usage.output_tokens ?? 0 },
+      costMicros: { increment: costMicros(usage, model) },
     },
   }).catch((e) => console.error('[ИИ] учёт:', e.message))
 }

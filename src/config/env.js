@@ -24,6 +24,12 @@ function jwtSecret(name, devFallback) {
   return devFallback
 }
 
+// Сумма в долларах из переменной: «2.5» или «2,5». Пусто или мусор — по умолчанию.
+function usd(value, fallback) {
+  const n = Number(String(value ?? '').trim().replace(',', '.'))
+  return String(value ?? '').trim() && Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
 // Адрес API телеграма. Токен уходит в путь запроса, поэтому подменить адрес
 // можно только локально и только на свою машину. На боевом сервере —
 // всегда настоящий телеграм: чужой адрес получил бы токен и мог бы слать
@@ -76,13 +82,25 @@ export const env = {
   // текст ошибки, и он оказался бы в логах. Кривой ключ — ИИ выключен.
   anthropicApiKey: /^[\x21-\x7E]+$/.test((process.env.ANTHROPIC_API_KEY || '').trim()) ? process.env.ANTHROPIC_API_KEY.trim() : '',
   anthropicKeyMalformed: Boolean((process.env.ANTHROPIC_API_KEY || '').trim()) && !/^[\x21-\x7E]+$/.test(process.env.ANTHROPIC_API_KEY.trim()),
-  aiModel: process.env.AI_MODEL || 'claude-haiku-5-5',
+  // Агент — Sonnet 5.5: пишет людям, собирает ответы и отчёты. Когда
+  // дневной бюджет кончился, до конца дня отвечает запасная, дешёвая модель.
+  // Оценка сложности задач — всегда на дешёвой: там хватает и её.
+  aiModel: process.env.AI_MODEL || 'claude-sonnet-5-5',
+  aiFallbackModel: process.env.AI_FALLBACK_MODEL || 'claude-haiku-5-5',
+  // Деньги на ИИ: основная модель — пока за день потрачено меньше
+  // AI_DAILY_USD; потом запасная, ещё до AI_FALLBACK_DAILY_USD сверху; за
+  // месяц всего не больше AI_MONTHLY_USD, дальше бот работает по правилам.
+  // 30 × ($2,5 + $0,3) = $84 больше месячного, поэтому месячный и держит
+  // итог: $58 при лимите $60 в консоли Anthropic.
+  aiDailyUsd: usd(process.env.AI_DAILY_USD, 2.5),
+  aiFallbackDailyUsd: usd(process.env.AI_FALLBACK_DAILY_USD, 0.3),
+  aiMonthlyUsd: usd(process.env.AI_MONTHLY_USD, 58),
   // 0 — ИИ выключен совсем (аварийный выключатель без удаления ключа).
   aiDailyCap: /^\d+$/.test(process.env.AI_DAILY_CAP ?? '') ? Number(process.env.AI_DAILY_CAP) : 600,
-  // Ещё один потолок — по объёму текста за день на всех (вход + выход).
-  // 2,5 млн по цене Haiku 5.5 ($0,10 за млн на входе) — не больше ~$0,3 в
-  // день, даже если в запросах окажется больше текста, чем рассчитано.
-  aiDailyTokens: /^\d+$/.test(process.env.AI_DAILY_TOKENS ?? '') ? Number(process.env.AI_DAILY_TOKENS) : 2_500_000,
+  // Ещё один потолок — по объёму текста за день на всех (вход + выход),
+  // на случай ошибки в подсчёте денег. Деньгами день кончается раньше:
+  // $2,5 на Sonnet — это около миллиона единиц текста.
+  aiDailyTokens: /^\d+$/.test(process.env.AI_DAILY_TOKENS ?? '') ? Number(process.env.AI_DAILY_TOKENS) : 6_000_000,
 
   // За сколько минут до звонка предупреждать.
   remindBeforeMin: Number(process.env.REMIND_BEFORE_MIN) || 15,

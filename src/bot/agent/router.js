@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { isParticipant } from '../../services/motivation/access.js'
-import { isBareTime, parseIntent, parseRemindAt, parseUntil } from '../parse.js'
+import { isBareTime, parseIntent, parseRemindAt, parseUntil, teamRequest } from '../parse.js'
 import { answerCallback, editMessage, escapeHtml } from '../telegram.js'
 import { BREAK_MINUTES, comeBack, dayEnd, decideForceMajeure, hasOpenBreak, MENU, reportForceMajeure, runningLate, setBreakMinutes, startBreak } from './away.js'
 import { isAskedNow, penalizeIfDeferred, recordAnswer } from './checkin.js'
@@ -11,7 +11,8 @@ import { mskDayKey, mskDayStart } from '../plan.js'
 import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
 import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES, tooFarReminder } from './remind.js'
-import { aiOwnerText, aiStaffText } from '../ai/agent.js'
+import { agentReady, agentReply } from '../ai/agent.js'
+import { activeTarget, decideDraft, decideReport, linkMessages } from './rounds.js'
 import { listIntent, listText } from './lists.js'
 
 /**
@@ -112,7 +113,7 @@ async function onWaiting(user, waiting, text, logged, now) {
       return true
     }
     // Правила время не нашли («минут через сорок», «к концу обеда») — ИИ.
-    if (await aiStaffText(user, user.chatId, text, logged, now, { kind: 'reply', extend: Boolean(waiting.payload.extend) })) return true
+    if (await agentReply({ user, chatId: user.chatId, text, logged, kind: 'reply', extend: Boolean(waiting.payload.extend) }, now)) return true
     await tellChat(user.chatId, 'Не понял время, оставляю как было.\nПоправить можно кнопкой или написать, например, <i>до 16:30</i>', { userId: user.id })
     return true
   }
@@ -122,8 +123,9 @@ async function onWaiting(user, waiting, text, logged, now) {
 /**
  * Сообщение от человека, который подключил телеграм в CRM. media — что
  * прислали вместо текста («голосовое», «фото»…): на чек-ин это тоже ответ.
+ * files — сами файлы ({ fileId, kind, mime }), у альбома их несколько.
  */
-export async function onText(user, chatId, text, now = new Date(), { media = null } = {}) {
+export async function onText(user, chatId, text, now = new Date(), { media = null, files = [] } = {}) {
   const me = { ...user, chatId }
   // Ответ на чек-ин принимаем первым — даже голосовым и даже в потоке
   // сообщений: иначе человека оштрафовали бы за то, что он ответил.
@@ -142,7 +144,8 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   }
 
   const isReply = answered || (isParticipant(user) && Boolean(state.peek(user.id) || (await isAskedNow(user.id, now))))
-  const command = !text || /^\/(start|menu|help)\b/.test(text)
+  // Фото без подписи — не команда: его смотрит агент.
+  const command = (!text && !files.length) || /^\/(start|menu|help)\b/.test(text)
   if (!isReply && !command && isParticipant(user)) {
     const day = mskDayKey(real)
     if ((await recentCount(user.id, ['in'], mskDayStart(day))) >= DAILY_LIMIT) {
@@ -152,13 +155,25 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
       return
     }
   }
-  const logged = await logMessage({ userId: user.id, chatId, direction: isReply ? 'reply' : 'in', text: answerText || '[не текст]' })
+  const [first, ...more] = files
+  const logged = await logMessage({
+    userId: user.id, chatId, direction: isReply ? 'reply' : 'in', text: answerText || '[не текст]',
+    fileId: first?.fileId, fileKind: first?.kind, fileMime: first?.mime,
+  })
+  // Остальные фото альбома — отдельными записями: каждое уйдёт в отчёт.
+  const extra = []
+  for (const f of more) extra.push(await logMessage({ userId: user.id, chatId, direction: 'file', text: `[${media || 'файл'}]`, fileId: f.fileId, fileKind: f.kind, fileMime: f.mime }))
+  const loggedIds = [logged, ...extra].filter(Boolean).map((m) => m.id)
+  const ask = (opts = {}) => agentReply({ user: me, chatId, text, logged, loggedIds, files, ...opts }, now)
+
   if (!isParticipant(user)) {
-    // Ян спрашивает о команде — отвечает ИИ (только чтение).
-    if (!command && !isCommandText && (await aiOwnerText(user, chatId, text, logged, now))) return
+    // Ян спрашивает о команде и поручает — отвечает агент.
+    if (!command && !isCommandText && (await ask())) return
     await tellChat(chatId, OWNER_HELP, { userId: user.id })
     return
   }
+  // Идёт опрос по поручению — сообщение уйдёт в отчёт.
+  const target = await activeTarget(user.id, now)
   const thanks = () => tellChat(chatId, 'Записал, спасибо.', { userId: user.id })
   if (command) {
     if (answered) return thanks()
@@ -166,8 +181,24 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     return
   }
 
-  const waiting = state.take(user.id)
+  const waiting = text ? state.take(user.id) : null
   if (waiting && (await onWaiting(me, waiting, text, logged, now))) return
+
+  if (target && !isCommandText) {
+    // Идёт опрос: «не успею, застрял на правках» — это ответ, а не
+    // «задерживаюсь». Агент поймёт и ответ, и команду в нём, у него те же
+    // действия. Чек-ин, если был открыт, уже закрыт этим же сообщением.
+    if (await agentReady(user, 'round')) {
+      await ask()
+      return
+    }
+    // Агента нет — команды разбирают правила, а слова всё равно уйдут в отчёт.
+    await linkMessages(target.id, loggedIds)
+  }
+
+  // Руководитель поручает или спрашивает о своих людях — сразу агенту:
+  // «задерживаюсь, спроси отдел, как дела» не должно стать «задержкой».
+  if (user.role === 'lead' && teamRequest(text) && !isCommandText && (await ask())) return
 
   const intent = parseIntent(text, now)
   // «Я в работе над отчётом» на чек-ин — это ответ, а не «вернулся».
@@ -185,14 +216,19 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   }
   // «Что у меня на сегодня», «мои задачи», «что по звонкам» — список из CRM
   // столбиком, без ИИ: бесплатно и не превращается в сплошной абзац.
-  const list = listIntent(text)
+  // В разговоре по поручению «мои задачи на сегодня такие» — ответ, а не просьба о списке.
+  const list = target ? null : listIntent(text)
   if (list) {
     await tellChat(chatId, await listText(list, user.id, now), { userId: user.id })
     return
   }
-  // Правила не поняли — ИИ. Нет ключа, лимит, сбой — подсказка, как раньше.
+  // Правила не поняли — агент. Нет ключа, лимит, сбой — подсказка, как раньше.
   // Незнакомые команды (/что-то) на ИИ не тратим.
-  if (!isCommandText && (await aiStaffText(user, chatId, text, logged, now))) return
+  if (!isCommandText && (await ask())) return
+  if (!text && files.length) {
+    await tellChat(chatId, 'Файл получил, но открыть его сейчас не могу.', { userId: user.id })
+    return
+  }
   await tellChat(chatId, text.includes('?') ? STAFF_QUESTION : STAFF_HELP, { userId: user.id, buttons: MENU })
 }
 
@@ -219,6 +255,14 @@ export async function onCallback(cb, user, now = new Date()) {
   const [kind, action, id] = data.split(':')
   const owner = user.role === 'admin'
 
+  if (kind === 'rd') {
+    // Поручение: черновик и «отчёт сейчас» решает тот, кто поручил.
+    await answerCallback(cb.id)
+    const note = action === 'go' || action === 'no'
+      ? await decideDraft(user, id, action === 'go', now)
+      : await decideReport(user, id, action === 'rp', now)
+    return closeButtons(cb, note)
+  }
   if (kind === 'rv' || kind === 'fm') {
     if (!owner) return answerCallback(cb.id, 'Это решает владелец')
     if (kind === 'rv') {
