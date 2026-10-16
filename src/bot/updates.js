@@ -1,4 +1,5 @@
 import { prisma } from '../config/prisma.js'
+import { env } from '../config/env.js'
 import { escapeHtml, answerCallback, getUpdates, sendMessage } from './telegram.js'
 import { onCallback, onText } from './agent/router.js'
 import { MENU } from './agent/away.js'
@@ -36,7 +37,23 @@ export function shouldAnswerStranger(chatId, now = Date.now()) {
   return true
 }
 
-async function handleMessage(msg) {
+// Фото у телеграма в нескольких размерах. Модели хватает 1600 точек по
+// длинной стороне, больше она всё равно уменьшит, а качать дольше.
+const PHOTO_MAX_SIDE = 1600
+const FILE_KINDS = ['animation', 'video', 'video_note', 'voice', 'audio', 'document']
+
+/** Файлы сообщения: { fileId, kind, mime }. */
+export function filesOf(msg) {
+  if (msg.photo?.length) {
+    const sizes = [...msg.photo].sort((a, b) => (a.width * a.height) - (b.width * b.height))
+    const fit = sizes.filter((p) => Math.max(p.width, p.height) <= PHOTO_MAX_SIDE).at(-1) ?? sizes[0]
+    return [{ fileId: fit.file_id, kind: 'photo', mime: 'image/jpeg' }]
+  }
+  const kind = FILE_KINDS.find((k) => msg[k]?.file_id)
+  return kind ? [{ fileId: msg[kind].file_id, kind, mime: msg[kind].mime_type ?? null }] : []
+}
+
+async function handleMessage(msg, files = filesOf(msg)) {
   const chatId = msg.chat?.id
   // Другие боты нам не пишут — не отвечаем.
   if (msg.from?.is_bot) return
@@ -50,7 +67,7 @@ async function handleMessage(msg) {
   if (!code) {
     // Уже подключённый человек — дальше разговор ведёт агент.
     const user = await userByChat(chatId)
-    if (user) return onText(user, chatId, text, new Date(), { media })
+    if (user) return onText(user, chatId, text, new Date(), { media, files })
     if (shouldAnswerStranger(chatId)) await sendMessage(chatId, HELP)
     return
   }
@@ -119,24 +136,94 @@ async function handleCallback(cb) {
 }
 
 /**
+ * Очередь на каждый чат: сообщения одного человека — строго по порядку, а
+ * разные люди друг друга не ждут. Агент думает до минуты, и без этого
+ * один длинный ответ держал бы бота для всех.
+ */
+const chains = new Map()
+export function enqueue(chatId, job) {
+  const key = String(chatId ?? '')
+  const next = (chains.get(key) ?? Promise.resolve())
+    .then(job)
+    .catch((e) => console.error('[бот] обработка:', e.message))
+    .finally(() => {
+      if (chains.get(key) === next) chains.delete(key)
+    })
+  chains.set(key, next)
+  return next
+}
+
+/**
+ * Альбом телеграм присылает отдельными сообщениями подряд. Ждём полторы
+ * секунды и отдаём агенту одним сообщением: иначе он ответил бы на каждое
+ * фото по отдельности.
+ */
+const ALBUM_WAIT_MS = 1500
+const albums = new Map()
+function takeAlbumPart(msg) {
+  const key = `${msg.chat?.id}:${msg.media_group_id}`
+  const album = albums.get(key) ?? { parts: [], timer: null }
+  album.parts.push(msg)
+  clearTimeout(album.timer)
+  album.flush = () => {
+    albums.delete(key)
+    const parts = album.parts.sort((a, b) => a.message_id - b.message_id)
+    const head = parts.find((m) => m.caption) ?? parts[0]
+    enqueue(head.chat?.id, () => handleMessage(head, parts.flatMap(filesOf)))
+  }
+  album.timer = setTimeout(album.flush, ALBUM_WAIT_MS)
+  albums.set(key, album)
+}
+
+function dispatch(u) {
+  if (u.message?.media_group_id) return takeAlbumPart(u.message)
+  if (u.message) return enqueue(u.message.chat?.id, () => handleMessage(u.message))
+  if (u.callback_query) return enqueue(u.callback_query.message?.chat?.id, () => handleCallback(u.callback_query))
+  return null
+}
+
+/**
  * Длинный опрос вместо вебхука: серверу не нужен отдельный публичный
  * маршрут, а обрыв связи не роняет процесс — ждём и пробуем снова.
  */
+let stopping = false
+
 export function startPolling() {
   let offset = 0
   ;(async () => {
-    for (;;) {
+    while (!stopping) {
       try {
         const updates = await getUpdates(offset)
+        // Сервер останавливается — не берём: телеграм пришлёт это снова
+        // после перезапуска, раз следующего запроса с offset не было.
+        if (stopping) break
         for (const u of updates) {
           offset = u.update_id + 1
-          if (u.message) await handleMessage(u.message).catch((e) => console.error('[бот] сообщение:', e.message))
-          if (u.callback_query) await handleCallback(u.callback_query).catch((e) => console.error('[бот] кнопка:', e.message))
+          dispatch(u)
         }
       } catch (e) {
-        console.error('[бот] опрос:', e.message)
+        // Кривой адрес сеть пишет в ошибку целиком — вместе с токеном.
+        console.error('[бот] опрос:', String(e.message).split(env.telegramBotToken || '\u0000').join('[токен]'))
         await new Promise((r) => setTimeout(r, 5000))
       }
     }
   })()
+}
+
+/**
+ * Перезапуск сервера (Render шлёт SIGTERM при выкладке): новые сообщения
+ * больше не берём, альбомы отдаём сразу и ждём, пока агент ответит на
+ * начатые, но не дольше ms. Иначе сообщение, на которое агент думал минуту,
+ * пропало бы без ответа.
+ */
+export async function drain(ms = 25000) {
+  stopping = true
+  for (const album of albums.values()) {
+    clearTimeout(album.timer)
+    album.flush()
+  }
+  await Promise.race([
+    Promise.allSettled([...chains.values()]),
+    new Promise((r) => setTimeout(r, ms)),
+  ])
 }

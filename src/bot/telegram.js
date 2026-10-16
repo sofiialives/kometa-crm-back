@@ -136,3 +136,98 @@ export async function whoAmI() {
   if (!me?.ok) throw new Error('телеграм не принял токен')
   return me.result.username
 }
+
+/** «Печатает…» в чате, пока агент думает. Гаснет само через 5 секунд. */
+export async function sendChatAction(chatId, action = 'typing') {
+  await call('sendChatAction', { chat_id: chatId, action }, { timeoutMs: 5000 }).catch(() => {})
+}
+
+// Адрес файлов телеграма: тот же сервер, только /file/bot<токен>/путь.
+const FILE_API = () => `${String(env.telegramApiBase).replace(/\/bot$/, '/file/bot')}${env.telegramBotToken}`
+
+/**
+ * Скачать файл, который прислал человек. Телеграм отдаёт ботам файлы до
+ * 20 МБ; больше maxBytes не качаем — ни памяти, ни токенов на это не
+ * тратим. null — не вышло или слишком большой.
+ */
+export async function downloadFile(fileId, { maxBytes = 5 * 1024 * 1024 } = {}) {
+  const { data } = await call('getFile', { file_id: fileId })
+  const path = data?.ok ? data.result?.file_path : null
+  // Путь отдаёт сам телеграм, но в адрес подставляем только обычный путь.
+  if (!path || !/^[\w\-./]+$/.test(path) || path.includes('..') || (data.result.file_size ?? 0) > maxBytes) return null
+  try {
+    const res = await fetch(`${FILE_API()}/${path}`, { signal: AbortSignal.timeout(20000) })
+    if (!res.ok || Number(res.headers.get('content-length') ?? 0) > maxBytes) return null
+    // Читаем по кускам и бросаем, как только больше maxBytes: размер от
+    // телеграма может не прийти.
+    const chunks = []
+    let size = 0
+    for await (const chunk of res.body) {
+      size += chunk.length
+      if (size > maxBytes) return null
+      chunks.push(chunk)
+    }
+    return { buffer: Buffer.concat(chunks), path }
+  } catch {
+    return null
+  }
+}
+
+const SEND_BY_KIND = {
+  photo: ['sendPhoto', 'photo'],
+  video: ['sendVideo', 'video'],
+  animation: ['sendAnimation', 'animation'],
+  voice: ['sendVoice', 'voice'],
+  audio: ['sendAudio', 'audio'],
+  video_note: ['sendVideoNote', 'video_note'],
+  document: ['sendDocument', 'document'],
+}
+
+/**
+ * Переслать файл, который уже есть в телеграме, по его fileId: фото, видео,
+ * документ. Подпись — HTML, до 1024 символов (у кружка подписи не бывает).
+ */
+export async function sendFileById(chatId, kind, fileId, { caption } = {}) {
+  const [method, field] = SEND_BY_KIND[kind] ?? SEND_BY_KIND.document
+  const body = { chat_id: chatId, [field]: fileId }
+  if (caption && kind !== 'video_note') Object.assign(body, { caption: String(caption).slice(0, 1024), parse_mode: 'HTML' })
+  const { data, status } = await call(method, body, { timeoutMs: 30000 })
+  if (!data?.ok) console.error(`[бот] файл в ${chatId} не ушёл:`, data?.description || status)
+  return { ok: Boolean(data?.ok), retry: !data?.ok && (status === 0 || status === 429 || status >= 500) }
+}
+
+/**
+ * Альбом из фото и видео, до 10 штук. Подпись — у первого: так телеграм
+ * показывает её под всем альбомом.
+ */
+export async function sendAlbum(chatId, items, { caption } = {}) {
+  const media = items.slice(0, 10).map((it, i) => ({
+    type: it.kind === 'video' ? 'video' : 'photo',
+    media: it.fileId,
+    ...(i === 0 && caption ? { caption: String(caption).slice(0, 1024), parse_mode: 'HTML' } : {}),
+  }))
+  if (media.length === 1) return sendFileById(chatId, media[0].type, media[0].media, { caption })
+  const { data, status } = await call('sendMediaGroup', { chat_id: chatId, media }, { timeoutMs: 30000 })
+  if (!data?.ok) console.error(`[бот] альбом в ${chatId} не ушёл:`, data?.description || status)
+  return { ok: Boolean(data?.ok), retry: !data?.ok && (status === 0 || status === 429 || status >= 500) }
+}
+
+/** Отправить готовый файл: таблицу или документ, который собрал агент. */
+export async function uploadDocument(chatId, buffer, fileName, { caption, mime = 'application/octet-stream' } = {}) {
+  const form = new FormData()
+  form.append('chat_id', String(chatId))
+  if (caption) {
+    form.append('caption', String(caption).slice(0, 1024))
+    form.append('parse_mode', 'HTML')
+  }
+  form.append('document', new Blob([buffer], { type: mime }), fileName)
+  try {
+    const res = await fetch(`${API()}/sendDocument`, { method: 'POST', body: form, signal: AbortSignal.timeout(60000) })
+    const data = await res.json().catch(() => null)
+    if (!data?.ok) console.error(`[бот] файл ${fileName} не ушёл:`, data?.description || res.status)
+    return { ok: Boolean(data?.ok), fileId: data?.result?.document?.file_id ?? null }
+  } catch (e) {
+    console.error(`[бот] файл ${fileName} не ушёл:`, e.name)
+    return { ok: false, fileId: null }
+  }
+}
