@@ -20,11 +20,15 @@ export const createAmbassadorSchema = z.object({
   }),
 })
 
+const dateOnly = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Неверная дата')
+
 export const listAmbassadorsQuerySchema = z.object({
   query: z.object({
     q: optional(z.string().trim().max(200)),
     theme: optional(z.string().trim().max(200)),
     status: optional(z.enum(['pending', 'approved', 'rejected', 'removed'])),
+    fromDate: optional(dateOnly),
+    toDate: optional(dateOnly),
   }),
 })
 

@@ -3,6 +3,7 @@ import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import { deleteObject, getObjectStream, putObject } from '../utils/storage.js'
 import { escapeHtml, sendMessage } from '../bot/telegram.js'
+import { tellOwners } from '../bot/agent/notify.js'
 
 export const DEPARTMENT_NAME = 'Хочу Плачу фокус'
 export const MANAGER_POSITION = 'Менеджер'
@@ -25,7 +26,7 @@ export async function resolveDepartmentId() {
 export async function listAccountManagers(departmentId) {
   return prisma.user.findMany({
     where: { departmentId, position: ACCOUNT_MANAGER_POSITION, active: true },
-    select: { id: true, telegram: { select: { chatId: true } } },
+    select: { id: true, name: true, telegram: { select: { chatId: true } } },
   })
 }
 
@@ -35,18 +36,18 @@ function describeAmbassador(contactUsername, firstLink) {
   return `${base} (${escapeHtml(firstLink.label)}: ${escapeHtml(firstLink.url)})`
 }
 
-export async function listAmbassadors(access, { q, theme, status } = {}) {
+export async function listAmbassadors(access, { q, theme, status, fromDate, toDate } = {}) {
   const where = { departmentId: access.departmentId }
 
   const safeStatus = status && status !== 'rejected' ? status : { not: 'rejected' }
+  where.status = safeStatus
 
-  if (access.scope === 'admin') {
-    where.status = 'approved'
-  } else if (access.scope === 'manager') {
-    where.managerId = access.userId
-    where.status = safeStatus
-  } else {
-    where.status = safeStatus
+  if (access.scope === 'manager') where.managerId = access.userId
+
+  if (fromDate || toDate) {
+    where.createdAt = {}
+    if (fromDate) where.createdAt.gte = new Date(`${fromDate}T00:00:00.000`)
+    if (toDate) where.createdAt.lte = new Date(`${toDate}T23:59:59.999`)
   }
 
   if (theme) where.theme = theme
@@ -77,11 +78,9 @@ export async function listThemes(departmentId) {
 }
 
 export async function createAmbassador(access, body, files) {
-  if (!files?.length) throw ApiError.badRequest('Прикрепите хотя бы один скриншот переписки')
-
   const uploaded = []
   try {
-    for (const file of files) {
+    for (const file of files || []) {
       const key = `khochu-plachu/${randomUUID()}-${file.originalname}`
       await putObject(key, file.buffer, file.mimetype)
       uploaded.push({ key, fileName: file.originalname, fileSize: file.size })
@@ -130,6 +129,10 @@ export async function createAmbassador(access, body, files) {
       }
       sendMessage(chatId, text).catch((e) => console.error('[хочу плачу] уведомление в телеграм не ушло:', e.message))
     }
+
+    const accountManagerNames = accountManagers.map((m) => escapeHtml(m.name || '')).join(', ') || 'нет назначенных'
+    tellOwners(`<b>Хочу Плачу: новая заявка</b>\nМенеджер ${escapeHtml(manager?.name || '')} передал амбассадора ${who} на рассмотрение аккаунт-менеджеру: ${accountManagerNames}`)
+      .catch((e) => console.error('[хочу плачу] лог для владельца не ушёл:', e.message))
 
     return report
   } catch (e) {
@@ -181,7 +184,6 @@ export async function getScreenshotFile(access, id, screenshotId) {
   const report = await prisma.ambassadorReport.findUnique({ where: { id } })
   if (!report || report.departmentId !== access.departmentId) throw ApiError.notFound('Амбассадор не найден')
   if (access.scope === 'manager' && report.managerId !== access.userId) throw ApiError.forbidden('Доступно только автору заявки')
-  if (access.scope === 'admin' && report.status !== 'approved') throw ApiError.forbidden('Доступно только для одобренных')
 
   const screenshot = await prisma.ambassadorScreenshot.findUnique({ where: { id: screenshotId } })
   if (!screenshot || screenshot.ambassadorReportId !== id) throw ApiError.notFound('Скриншот не найден')
@@ -216,15 +218,19 @@ export async function decideAmbassador(access, id, decision) {
     return next
   })
 
+  const decider = await prisma.user.findUnique({ where: { id: access.userId }, select: { name: true } })
+  const verb = decision === 'approved' ? 'одобрил(а)' : 'отклонил(а)'
+
   const chatId = report.manager.telegram?.chatId
   if (chatId) {
-    const decider = await prisma.user.findUnique({ where: { id: access.userId }, select: { name: true } })
-    const verb = decision === 'approved' ? 'одобрил(а)' : 'отклонил(а)'
     const text = `Аккаунт-менеджер ${escapeHtml(decider?.name || '')} ${verb} вашего амбассадора ${who}`
     sendMessage(chatId, text).catch((e) => console.error('[хочу плачу] уведомление в телеграм не ушло:', e.message))
   } else {
     console.error(`[хочу плачу] у менеджера ${report.managerId} нет привязанного телеграма — решение не отправлено`)
   }
+
+  tellOwners(`<b>Хочу Плачу: решение</b>\nАккаунт-менеджер ${escapeHtml(decider?.name || '')} ${verb} амбассадора ${who} (менеджер ${escapeHtml(report.manager.name || '')})`)
+    .catch((e) => console.error('[хочу плачу] лог для владельца не ушёл:', e.message))
 
   if (decision === 'rejected') return purgeRejected(id, report.screenshots)
 
@@ -246,11 +252,16 @@ async function purgeRejected(id, screenshots) {
 }
 
 export async function removeFromApproved(access, id) {
-  const report = await prisma.ambassadorReport.findUnique({ where: { id } })
+  const report = await prisma.ambassadorReport.findUnique({
+    where: { id },
+    include: { manager: { select: { name: true } }, links: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], take: 1 } },
+  })
   if (!report || report.departmentId !== access.departmentId) throw ApiError.notFound('Амбассадор не найден')
   if (report.status !== 'approved') throw ApiError.badRequest('Снять можно только одобренного амбассадора')
 
-  return prisma.$transaction(async (tx) => {
+  const who = describeAmbassador(report.contactUsername, report.links[0])
+
+  const updated = await prisma.$transaction(async (tx) => {
     const next = await tx.ambassadorReport.update({
       where: { id },
       data: { status: 'removed', decidedById: access.userId, decidedAt: new Date() },
@@ -261,6 +272,12 @@ export async function removeFromApproved(access, id) {
     })
     return next
   })
+
+  const actor = await prisma.user.findUnique({ where: { id: access.userId }, select: { name: true } })
+  tellOwners(`<b>Хочу Плачу: снят с одобренных</b>\nАккаунт-менеджер ${escapeHtml(actor?.name || '')} снял(а) амбассадора ${who} (менеджер ${escapeHtml(report.manager.name || '')}) с одобренных`)
+    .catch((e) => console.error('[хочу плачу] лог для владельца не ушёл:', e.message))
+
+  return updated
 }
 
 export async function getUnreadCount(userId) {
