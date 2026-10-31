@@ -110,6 +110,11 @@ model User {
   botRounds                 BotRound[]       @relation("BotRoundOwner")
   botRoundTargets           BotRoundTarget[]
 
+  ambassadorReports       AmbassadorReport[]       @relation("AmbassadorReportManager")
+  ambassadorDecisions     AmbassadorReport[]       @relation("AmbassadorReportDecidedBy")
+  ambassadorStatusLogs    AmbassadorStatusLog[]    @relation("AmbassadorStatusLogActor")
+  ambassadorNotifications AmbassadorNotification[] @relation("AmbassadorNotificationRecipient")
+
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
@@ -131,6 +136,7 @@ model Department {
   archiveServices ArchiveService[]
   archiveClients  ArchiveClient[]
   motivationProfiles MotivationProfile[]
+  ambassadorReports AmbassadorReport[]
 
   // Отдел удалили, но у него остались работы, задачи и история: тогда он не
   // стирается, а уходит в архив и пропадает из всех списков. Имя при этом
@@ -1357,4 +1363,108 @@ model MotivationSeen {
   bankSeenAt   DateTime?
   eventsSeenAt DateTime?
   updatedAt    DateTime  @updatedAt
+}
+
+enum AmbassadorStatus {
+  pending
+  approved
+  rejected
+  removed
+}
+
+model AmbassadorReport {
+  id                String           @id @default(cuid())
+
+  departmentId      String
+  department        Department       @relation(fields: [departmentId], references: [id])
+
+  managerId         String
+  manager           User             @relation("AmbassadorReportManager", fields: [managerId], references: [id])
+
+  theme             String
+  conditions        String
+  managerComment    String?
+  callAt            DateTime?
+  telegramGroupLink String
+  contactUsername   String
+
+  status            AmbassadorStatus @default(pending)
+  decidedById       String?
+  decidedBy         User?            @relation("AmbassadorReportDecidedBy", fields: [decidedById], references: [id])
+  decidedAt         DateTime?
+
+  links         AmbassadorLink[]
+  screenshots   AmbassadorScreenshot[]
+  statusLogs    AmbassadorStatusLog[]
+  notifications AmbassadorNotification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([departmentId, status])
+  @@index([managerId])
+}
+
+model AmbassadorLink {
+  id                 String           @id @default(cuid())
+
+  ambassadorReportId String
+  ambassadorReport   AmbassadorReport @relation(fields: [ambassadorReportId], references: [id], onDelete: Cascade)
+
+  label String
+  url   String
+
+  createdAt DateTime @default(now())
+
+  @@index([ambassadorReportId])
+}
+
+model AmbassadorScreenshot {
+  id                 String           @id @default(cuid())
+
+  ambassadorReportId String
+  ambassadorReport   AmbassadorReport @relation(fields: [ambassadorReportId], references: [id], onDelete: Cascade)
+
+  fileKey  String @unique
+  fileName String
+  fileSize Int
+
+  createdAt DateTime @default(now())
+
+  @@index([ambassadorReportId])
+}
+
+model AmbassadorStatusLog {
+  id                 String           @id @default(cuid())
+
+  ambassadorReportId String
+  ambassadorReport   AmbassadorReport @relation(fields: [ambassadorReportId], references: [id], onDelete: Cascade)
+
+  fromStatus AmbassadorStatus?
+  toStatus   AmbassadorStatus
+
+  actorId String
+  actor   User   @relation("AmbassadorStatusLogActor", fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([ambassadorReportId, createdAt])
+  @@index([toStatus, createdAt])
+}
+
+model AmbassadorNotification {
+  id                 String           @id @default(cuid())
+
+  ambassadorReportId String
+  ambassadorReport   AmbassadorReport @relation(fields: [ambassadorReportId], references: [id], onDelete: Cascade)
+
+  recipientId String
+  recipient   User   @relation("AmbassadorNotificationRecipient", fields: [recipientId], references: [id])
+
+  read Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([recipientId, read])
+  @@index([ambassadorReportId])
 }

@@ -10,6 +10,7 @@ import telegramRoutes from './telegram.routes.js'
 import archiveRoutes from './archive.routes.js'
 import boardRoutes from './board.routes.js'
 import motivationRoutes from './motivation.routes.js'
+import khochuPlachuRoutes from './khochuPlachu.routes.js'
 
 const router = Router()
 
@@ -24,5 +25,6 @@ router.use('/telegram', telegramRoutes)
 router.use('/archive', archiveRoutes)
 router.use('/board', boardRoutes)
 router.use('/motivation', motivationRoutes)
+router.use('/khochu-plachu', khochuPlachuRoutes)
 
 export default router

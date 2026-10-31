@@ -11,6 +11,7 @@
     "start": "node src/server.js",
     "test": "node --test \"src/**/__tests__/*.test.js\"",
     "seed:admin": "node src/scripts/seedAdmin.js",
+    "seed:khochu-plachu": "node src/scripts/seedKhochuPlachu.js",
     "clear:manual": "node src/scripts/clearManual.js",
     "fix:leaked-tasks": "node src/scripts/fixLeakedHierarchyTasks.js",
     "prisma:generate": "prisma generate",

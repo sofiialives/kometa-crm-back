@@ -18,7 +18,7 @@ export const authenticate = asyncHandler(async (req, res, next) => {
   const user = await prisma.user.findUnique({ where: { id: payload.sub } })
   if (!user || !user.active) throw ApiError.unauthorized('Доступ отозван')
 
-  req.user = { id: user.id, role: user.role, departmentId: user.departmentId }
+  req.user = { id: user.id, role: user.role, departmentId: user.departmentId, position: user.position }
   next()
 })
 
