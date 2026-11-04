@@ -60,20 +60,25 @@ export function sameTitle(mention, title) {
 }
 
 // Сколько открытых задач людей из области смотрящего читаем за раз для проверки,
-// сколько мест с чужими задачами показываем и сколько задач ищем по названиям.
+// сколько мест с чужими задачами показываем и сколько задач читаем у адресатов.
 export const CANDIDATES_MAX = 3000
 const PROBLEMS_MAX = 20
-const NAMED_MAX = 300
+export const OWN_MAX = 2000
 const OWNER = { select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } }
 
-/** Задачи из CRM (любого статуса, видимые), чьё название содержит названия из текстов. extra — отбор, например по владельцу. */
-async function tasksNamed(titles, extra = {}) {
-  if (!titles.length) return []
-  return prisma.task.findMany({
-    where: { AND: [VISIBLE, extra, { OR: titles.map((title) => ({ title: { contains: title, mode: 'insensitive' } })) }] },
-    take: NAMED_MAX,
-    select: { id: true, title: true, status: true, deadline: true, origin: true, ownerId: true, owner: OWNER },
+/**
+ * Все видимые задачи людей, любого статуса, одним запросом по ownerId. Названия
+ * сравниваем уже в памяти: в запрос не попадает текст, который написала
+ * модель. full: false значит, задач больше предела и мы видим не все.
+ */
+async function ownTasks(ids) {
+  const rows = await prisma.task.findMany({
+    where: { AND: [VISIBLE, { ownerId: { in: ids } }] },
+    orderBy: { updatedAt: 'desc' },
+    take: OWN_MAX + 1,
+    select: { id: true, title: true, status: true, deadline: true, origin: true, ownerId: true },
   })
+  return { tasks: rows.slice(0, OWN_MAX), full: rows.length <= OWN_MAX }
 }
 
 /**
@@ -124,14 +129,10 @@ export async function foreignTitles(items, viewer) {
   }
   if (!found.length) return { problems: [], incomplete: false }
   // Своё название могло быть у сделанной задачи: её среди открытых нет.
-  const own = await prisma.task.findMany({
-    where: { AND: [VISIBLE, { ownerId: { in: [...new Set(found.map((f) => f.userId))] } }, { OR: found.map((f) => ({ title: { contains: f.title, mode: 'insensitive' } })) }] },
-    take: CANDIDATES_MAX + 1,
-    select: { title: true, ownerId: true },
-  })
-  if (own.length > CANDIDATES_MAX) return { problems: [], incomplete: true }
+  const own = await ownTasks([...new Set(found.map((f) => f.userId))])
+  if (!own.full) return { problems: [], incomplete: true }
   const problems = found
-    .filter((f) => !own.some((t) => t.ownerId === f.userId && padded(t.title).includes(f.key) && f.said.includes(padded(t.title))))
+    .filter((f) => !own.tasks.some((t) => t.ownerId === f.userId && padded(t.title).includes(f.key) && f.said.includes(padded(t.title))))
     .map(({ userId, title, owners }) => ({ userId, title, owners }))
   return { problems: problems.slice(0, PROBLEMS_MAX), incomplete: false }
 }
@@ -147,9 +148,10 @@ export async function foreignTitles(items, viewer) {
 export async function allTitlesDone(userId, text) {
   const { titles, truncated } = quotedTitles(text)
   if (!titles.length || truncated) return false
-  const mine = await tasksNamed(titles, { ownerId: userId })
+  const { tasks, full } = await ownTasks([userId])
   // Упёрлись в предел выборки — не уверены, что видим все задачи, пишем как есть.
-  if (mine.length >= NAMED_MAX) return false
+  if (!full) return false
+  const mine = tasks
   return titles.every((title) => {
     const found = mine.filter((t) => sameTitle(title, t.title))
     return found.length > 0 && found.every((t) => t.status === 'done')
@@ -176,8 +178,7 @@ export function countsSummary(counts) {
  */
 export async function taskStates(targets, now = new Date()) {
   const ids = [...new Set(targets.map((t) => t.userId))]
-  const titles = [...new Set(targets.flatMap((t) => quotedTitles(t.text).titles))]
-  const [counts, named] = await Promise.all([taskCounts(ids, now), tasksNamed(titles, { ownerId: { in: ids } })])
+  const [counts, { tasks: named }] = await Promise.all([taskCounts(ids, now), ownTasks(ids)])
   return new Map(targets.map(({ userId, text }) => {
     const mentions = quotedTitles(text).titles
     const mine = named.filter((t) => t.ownerId === userId && mentions.some((m) => sameTitle(m, t.title)))
