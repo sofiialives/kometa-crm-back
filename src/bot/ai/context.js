@@ -361,36 +361,42 @@ export async function worksBrief(viewer, query = null, now = new Date()) {
   if (!works.length) return q ? `Активных работ по «${plain(q, 40)}» нет.` : 'Активных работ нет.'
   const open = { workId: { in: works.map((w) => w.id) }, origin: 'hierarchy', status: { in: ['today', 'progress'] } }
   const by = (extra = {}) => prisma.task.groupBy({ by: ['workId', 'ownerId'], where: { ...open, ...extra }, _count: true })
-  const [openBy, progressBy, overdueBy, sample] = await Promise.all([
-    by(),
-    by({ status: 'progress' }),
-    by({ deadline: { lt: now } }),
-    prisma.task.findMany({
-      where: open,
+  const [openBy, progressBy, overdueBy] = await Promise.all([by(), by({ status: 'progress' }), by({ deadline: { lt: now } })])
+  // Имена и задачи показываем только тем, кого смотрящий и так видит. Работа
+  // руководителя может быть общей с другим отделом: чужих людей называть нельзя,
+  // только общая сумма без имён и названий.
+  const ownerIds = [...new Set(openBy.map((g) => g.ownerId))]
+  const owners = ownerIds.length
+    ? await prisma.user.findMany({ where: { AND: [{ id: { in: ownerIds } }, viewer.role === 'admin' ? {} : { OR: [teamWhere(viewer), { id: viewer.id }] }] }, select: USER_SELECT })
+    : []
+  const known = new Set(owners.map((o) => o.id))
+  const sample = known.size
+    ? await prisma.task.findMany({
+      where: { ...open, ownerId: { in: [...known] } },
       orderBy: { deadline: 'asc' },
       take: WORKS_MAX * WORK_TASKS,
       select: { id: true, title: true, status: true, deadline: true, startAt: true, doneAt: true, origin: true, ownerId: true, workId: true },
-    }),
-  ])
-  const ownerIds = [...new Set(openBy.map((g) => g.ownerId))]
-  const owners = ownerIds.length
-    ? await prisma.user.findMany({ where: { id: { in: ownerIds } }, select: USER_SELECT })
+    })
     : []
   const labels = labelsFor(owners)
-  const countOf = (rows, workId, ownerId = null) => rows.filter((g) => g.workId === workId && (!ownerId || g.ownerId === ownerId)).reduce((sum, g) => sum + g._count, 0)
+  const countOf = (rows, workId, ownerId = null, others = false) => rows
+    .filter((g) => g.workId === workId && (!ownerId || g.ownerId === ownerId) && (!others || !known.has(g.ownerId)))
+    .reduce((sum, g) => sum + g._count, 0)
 
   const lines = []
   if (total > works.length) lines.push(`Показаны ${works.length} работ из ${total}, для остальных уточни название в query.`)
   for (const w of works) {
     const people = [...labelsFor(w.assignees).values()].join(', ') || 'никто не назначен'
     lines.push(`- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», отдел ${plain(w.department?.name, 30)}; ведут ${people}; открыто задач ${countOf(openBy, w.id)}, в процессе ${countOf(progressBy, w.id)}, просрочено ${countOf(overdueBy, w.id)}`)
-    const mine = openBy.filter((g) => g.workId === w.id).sort((a, b) => String(labels.get(a.ownerId)).localeCompare(String(labels.get(b.ownerId)), 'ru'))
+    const mine = openBy.filter((g) => g.workId === w.id && known.has(g.ownerId)).sort((a, b) => String(labels.get(a.ownerId)).localeCompare(String(labels.get(b.ownerId)), 'ru'))
     for (const g of mine) {
-      lines.push(`  ${labels.get(g.ownerId) ?? 'Сотрудник'}, открыто ${g._count}, в процессе ${countOf(progressBy, w.id, g.ownerId)}, просрочено ${countOf(overdueBy, w.id, g.ownerId)}`)
+      lines.push(`  ${labels.get(g.ownerId)}, открыто ${g._count}, в процессе ${countOf(progressBy, w.id, g.ownerId)}, просрочено ${countOf(overdueBy, w.id, g.ownerId)}`)
     }
+    const others = countOf(openBy, w.id, null, true)
+    if (others) lines.push(`  другие отделы, открыто ${others}, в процессе ${countOf(progressBy, w.id, null, true)}, просрочено ${countOf(overdueBy, w.id, null, true)}`)
     const shown = sample.filter((t) => t.workId === w.id).slice(0, WORK_TASKS)
-    for (const t of shown) lines.push(`  ${taskLine(t, now, { owner: labels.get(t.ownerId) ?? 'Сотрудник' })}`)
-    const rest = countOf(openBy, w.id) - shown.length
+    for (const t of shown) lines.push(`  ${taskLine(t, now, { owner: labels.get(t.ownerId) })}`)
+    const rest = countOf(openBy, w.id) - others - shown.length
     if (rest > 0) lines.push(`  и ещё ${rest}`)
   }
   return lines.join('\n')

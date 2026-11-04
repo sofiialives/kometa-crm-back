@@ -152,6 +152,31 @@ describe('работы в Иерархии: у каждого его задач�
     assert.match(text, /и ещё 3$/)
   })
 
+  test('руководитель: люди из других отделов без имён и задач, только сумма', async (t) => {
+    const roman = { id: 'r', name: 'Роман Котов', role: 'staff', active: true, departmentId: 'd', department: { name: 'Дизайн' } }
+    patch(t, prisma.work, 'findMany', async () => [{ id: 'w1', title: 'Лендинг', client: { name: 'Румикс' }, department: { name: 'Дизайн' }, assignees: [roman] }])
+    patch(t, prisma.work, 'count', async () => 1)
+    patch(t, prisma.task, 'groupBy', async ({ where }) => {
+      const base = [{ workId: 'w1', ownerId: 'r', _count: 2 }, { workId: 'w1', ownerId: 'igor', _count: 3 }]
+      if (where.status === 'progress') return [{ workId: 'w1', ownerId: 'igor', _count: 1 }]
+      if (where.deadline) return [{ workId: 'w1', ownerId: 'igor', _count: 2 }]
+      return base
+    })
+    const samples = patch(t, prisma.task, 'findMany', async ({ where }) => [{ id: 't0', title: 'Свой макет', status: 'today', origin: 'hierarchy', deadline: at('2026-11-04T16:00:00Z'), startAt: null, doneAt: null, ownerId: 'r', workId: 'w1' }].filter((x) => where.ownerId.in.includes(x.ownerId)))
+    const resolved = patch(t, prisma.user, 'findMany', async () => [roman])
+    const text = await worksBrief({ id: 'lead', role: 'lead', departmentId: 'd' }, null, NOW)
+    // Люди ищутся только среди своих: teamWhere руководителя и он сам.
+    assert.deepEqual(resolved[0][0].where.AND[1].OR, [{ role: 'staff', active: true, departmentId: 'd', id: { not: 'lead' } }, { id: 'lead' }])
+    assert.deepEqual(samples[0][0].where.ownerId, { in: ['r'] })
+    assert.match(text, /открыто задач 5, в процессе 1, просрочено 2/)
+    assert.match(text, /\n  \(Дизайн\) Роман, открыто 2/)
+    assert.match(text, /\n  другие отделы, открыто 3, в процессе 1, просрочено 2\n/)
+    assert.match(text, /\n  - \(Дизайн\) Роман, «Свой макет»/)
+    assert.doesNotMatch(text, /Сотрудник|igor/)
+    // «и ещё» считает только задачи видимых людей: его вторая, а чужие три уже в сумме.
+    assert.match(text, /и ещё 1$/)
+  })
+
   test('сотруднику работы не видны', async () => {
     assert.equal(await worksBrief({ role: 'staff' }, null, NOW), 'Работы в Иерархии тебе не видны.')
   })
