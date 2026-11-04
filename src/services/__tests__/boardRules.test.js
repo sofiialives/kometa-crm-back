@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   cardVisible, columnOf, fillWorkSpan, monthsOfService, resolveRange, serviceInPeriod, serviceVisible,
-  shapeService, totals, workSpan, workSpanError, dayStart,
+  shapeService, totals, workSpan, workSpanError, workSpanProblem, dayStart,
 } from '../boardRules.js'
 
 const iso = (d) => d.toISOString()
@@ -117,6 +117,26 @@ describe('срок работ услуги', () => {
     assert.equal(workSpanError(day('2028-01-01'), day('2028-12-31')), null) // високосный год, 366 дней
     assert.equal(workSpanError(day('2026-01-01'), day('2027-01-01')), null) // 366 дней
     assert.match(workSpanError(day('2026-01-01'), day('2027-01-02')), /366/) // 367 дней
+  })
+
+  test('срок проверяется вместе с месяцем услуги, если задана одна граница', () => {
+    const nov = day('2026-11-01')
+    assert.equal(workSpanProblem({ month: nov, workFrom: null, workTo: null }), null)
+    assert.equal(workSpanProblem({ month: nov, workFrom: day('2026-11-10'), workTo: null }), null)
+    // Начало в декабре, конца нет: он берётся из ноября, и выходит наоборот.
+    assert.match(workSpanProblem({ month: nov, workFrom: day('2026-12-05'), workTo: null }), /начало позже конца.*край месяца/)
+    // Конец в октябре, начала нет: начало берётся из ноября.
+    assert.match(workSpanProblem({ month: nov, workFrom: null, workTo: day('2026-10-20') }), /начало позже конца/)
+  })
+
+  test('обе границы заданы — без пояснения про месяц', () => {
+    const problem = workSpanProblem({ month: day('2026-11-01'), workFrom: day('2026-11-10'), workTo: day('2026-11-02') })
+    assert.equal(problem, 'Срок работ: начало позже конца')
+  })
+
+  test('слишком длинный срок через месяц услуги', () => {
+    // Конец через два года после месяца услуги: начало берётся из месяца.
+    assert.match(workSpanProblem({ month: day('2026-11-01'), workFrom: null, workTo: day('2028-12-01') }), /366/)
   })
 
   test('день — это полночь UTC', () => {

@@ -1,8 +1,8 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import {
-  cardVisible, columnOf, DAY_MS, monthsOfService, monthStart, resolveRange, serviceInPeriod, serviceVisible,
-  shapeService, totals,
+  cardVisible, columnOf, DAY_MS, dayStart, fillWorkSpan, monthsOfService, monthStart, resolveRange, serviceInPeriod,
+  serviceVisible, shapeService, totals, workSpanProblem,
 } from './boardRules.js'
 
 export { resolveRange }
@@ -25,6 +25,20 @@ const toCents = (dollars) => Math.round(Number(dollars) * 100)
 
 const expenseRows = (expenses) =>
   (expenses || []).map((e) => ({ title: e.title.trim(), amountCents: toCents(e.amount) }))
+
+/**
+ * Срок работ к записи в базу: дни целиком (полночь UTC), пусто — null.
+ * Проверяется вместе с месяцем услуги (см. workSpanProblem). Обе границы
+ * между собой проверяет ещё и схема, здесь это повторяется для случая, когда
+ * одна из них пришла в запросе, а вторая лежит в базе.
+ */
+function workSpanData(month, workFrom, workTo) {
+  const from = workFrom ? dayStart(workFrom) : null
+  const to = workTo ? dayStart(workTo) : null
+  const problem = workSpanProblem({ month, workFrom: from, workTo: to })
+  if (problem) throw ApiError.badRequest(problem)
+  return { workFrom: from, workTo: to }
+}
 
 const SERVICE_SELECT = {
   id: true,
@@ -210,6 +224,7 @@ export async function addClient(user, { clientId, clientName, contact, startedAt
                 title: s.title.trim(),
                 month: monthStart(s.month),
                 paidAt: s.paidAt || null,
+                ...workSpanData(s.month, s.workFrom, s.workTo),
                 revenueCents: toCents(s.revenue),
                 expenses: { create: expenseRows(s.expenses) },
               })),
@@ -294,33 +309,46 @@ export async function removeClient(user, id) {
  * один блок, и отдельные ручки на каждую строку расхода только добавили бы
  * запросов там, где хватает одного.
  */
-export async function addService(user, { boardClientId, title, month, paidAt, revenue, expenses }) {
+export async function addService(user, { boardClientId, title, month, paidAt, workFrom, workTo, revenue, expenses }) {
   assertAdmin(user)
   if (!(await prisma.boardClient.findUnique({ where: { id: boardClientId } }))) {
     throw ApiError.notFound('Клиент на доске не найден')
   }
 
-  return prisma.boardService.create({
+  const created = await prisma.boardService.create({
     data: {
       boardClientId,
       title: title.trim(),
       month: monthStart(month),
       paidAt: paidAt || null,
+      ...workSpanData(month, workFrom, workTo),
       revenueCents: toCents(revenue),
       expenses: { create: expenseRows(expenses) },
     },
     select: SERVICE_SELECT,
   })
+  return fillWorkSpan(created)
 }
 
-export async function editService(user, id, { title, month, paidAt, revenue, expenses }) {
+export async function editService(user, id, { title, month, paidAt, workFrom, workTo, revenue, expenses }) {
   assertAdmin(user)
   const service = await prisma.boardService.findUnique({ where: { id } })
   if (!service) throw ApiError.notFound('Услуга не найдена')
 
+  // Срок проверяем вместе с тем, что уже лежит в базе: прийти может одна
+  // граница или только новый месяц. Если ни то, ни другое не правят, срок не
+  // трогаем вовсе — иначе правка названия упиралась бы в старые данные.
+  const work = month !== undefined || workFrom !== undefined || workTo !== undefined
+    ? workSpanData(
+      month !== undefined ? month : service.month,
+      workFrom !== undefined ? workFrom : service.workFrom,
+      workTo !== undefined ? workTo : service.workTo,
+    )
+    : null
+
   // Расходы заменяем целиком, а не правим по одному: форма присылает весь
   // список, и так убранная строка действительно исчезает.
-  return prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx) => {
     if (expenses !== undefined) {
       await tx.boardExpense.deleteMany({ where: { serviceId: id } })
     }
@@ -330,12 +358,15 @@ export async function editService(user, id, { title, month, paidAt, revenue, exp
         ...(title !== undefined ? { title: title.trim() } : {}),
         ...(month !== undefined ? { month: monthStart(month) } : {}),
         ...(paidAt !== undefined ? { paidAt } : {}),
+        ...(workFrom !== undefined ? { workFrom: work.workFrom } : {}),
+        ...(workTo !== undefined ? { workTo: work.workTo } : {}),
         ...(revenue !== undefined ? { revenueCents: toCents(revenue) } : {}),
         ...(expenses !== undefined ? { expenses: { create: expenseRows(expenses) } } : {}),
       },
       select: SERVICE_SELECT,
     })
   })
+  return fillWorkSpan(updated)
 }
 
 export async function removeService(user, id) {

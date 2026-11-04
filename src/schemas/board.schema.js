@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { objectId } from './common.js'
+import { dayStart, workSpanError } from '../services/boardRules.js'
 
 const optional = (schema) => z.preprocess((v) => (v === '' ? undefined : v), schema.optional())
 
@@ -7,6 +8,16 @@ const optional = (schema) => z.preprocess((v) => (v === '' ? undefined : v), sch
 // отдельной строкой, а не выручкой со знаком минус. Потолок защищает от
 // случайно вставленной строки на двадцать цифр.
 const money = z.coerce.number().finite().min(0).max(1_000_000_000)
+
+// День начала или конца работ. null сбрасывает срок на весь месяц услуги —
+// как и отсутствие значения при создании, поэтому принимаем его везде.
+const workDay = optional(z.coerce.date().nullable())
+
+// Границы срока работ между собой. Проверка относительно месяца услуги, когда
+// указана только одна граница, живёт в сервисе: здесь месяца может не быть
+// (при правке он лежит в базе).
+const workSpanCheck = (b) => !b.workFrom || !b.workTo || workSpanError(dayStart(b.workFrom), dayStart(b.workTo)) === null
+const workSpanIssue = (b) => ({ message: workSpanError(dayStart(b.workFrom), dayStart(b.workTo)), path: ['workTo'] })
 
 const expenses = z
   .array(z.object({ title: z.string().trim().min(1, 'У расхода должно быть название').max(200), amount: money }))
@@ -54,9 +65,11 @@ export const addClientSchema = z.object({
           title: z.string().trim().min(1, 'Укажите название услуги').max(200),
           month: z.coerce.date(),
           paidAt: optional(z.coerce.date()),
+          workFrom: workDay,
+          workTo: workDay,
           revenue: money,
           expenses: expenses.optional(),
-        }))
+        }).refine(workSpanCheck, workSpanIssue))
         .max(20)
         .optional(),
     })
@@ -86,16 +99,21 @@ export const leaveSchema = z.object({
 })
 
 export const addServiceSchema = z.object({
-  body: z.object({
-    boardClientId: objectId,
-    title: z.string().trim().min(1, 'Укажите название услуги').max(200),
-    month: z.coerce.date(),
-    // День оплаты. В форме обязателен, здесь нет: услуги, заведённые до
-    // появления поля, правятся по частям и свою дату получат отдельно.
-    paidAt: optional(z.coerce.date()),
-    revenue: money,
-    expenses: expenses.optional(),
-  }),
+  body: z
+    .object({
+      boardClientId: objectId,
+      title: z.string().trim().min(1, 'Укажите название услуги').max(200),
+      month: z.coerce.date(),
+      // День оплаты. В форме обязателен, здесь нет: услуги, заведённые до
+      // появления поля, правятся по частям и свою дату получат отдельно.
+      paidAt: optional(z.coerce.date()),
+      // Срок работ, оба необязательные: пусто — весь месяц услуги.
+      workFrom: workDay,
+      workTo: workDay,
+      revenue: money,
+      expenses: expenses.optional(),
+    })
+    .refine(workSpanCheck, workSpanIssue),
 })
 
 export const editServiceSchema = z.object({
@@ -105,8 +123,13 @@ export const editServiceSchema = z.object({
       title: z.string().trim().min(1).max(200).optional(),
       month: z.coerce.date().optional(),
       paidAt: optional(z.coerce.date()),
+      // null сбрасывает границу: работа снова считается с начала или до
+      // конца месяца услуги.
+      workFrom: workDay,
+      workTo: workDay,
       revenue: money.optional(),
       expenses: expenses.optional(),
     })
-    .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
+    .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса')
+    .refine(workSpanCheck, workSpanIssue),
 })

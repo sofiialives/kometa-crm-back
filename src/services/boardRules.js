@@ -114,6 +114,19 @@ export function workSpanError(from, to) {
   return null
 }
 
+/**
+ * Проблема в сроке работ услуги или null. Проверяет срок вместе с месяцем
+ * услуги: если задана одна граница, вторая берётся из месяца, и срок «с 5
+ * декабря» у ноябрьской услуги вышел бы с началом позже конца.
+ */
+export function workSpanProblem({ month, workFrom, workTo }) {
+  if (!workFrom && !workTo) return null
+  const { from, to } = workSpan({ month, workFrom, workTo })
+  const problem = workSpanError(from, to)
+  if (!problem) return null
+  return workFrom && workTo ? problem : `${problem} (вторая граница не задана, взят край месяца услуги)`
+}
+
 /** Попадает ли момент в период. Период null — без границ, попадает всё. */
 export function inRange(value, range) {
   if (!range) return true
