@@ -12,9 +12,10 @@ const ADMIN = { id: 'owner', role: 'admin' }
 const task = (patchIn = {}) => ({ id: 't1', title: POSTS, status: 'today', ownerId: 'anton', owner: anton, ...patchIn })
 
 describe('названия задач в тексте поручения', () => {
-  test('берём названия в ёлочках, без повторов', () => {
+  test('названия в кавычках любого вида, без повторов', () => {
     assert.deepEqual(quotedTitles('Денис, как «Макет баннера» и «Макет баннера»? Ещё «Посты»'), ['Макет баннера', 'Посты'])
-    assert.deepEqual(quotedTitles('без ёлочек, только "кавычки"'), [])
+    assert.deepEqual(quotedTitles('как "Макет баннера", „Лендинг“, “Визитка” и \'Сайт\''), ['Макет баннера', 'Лендинг', 'Визитка', 'Сайт'])
+    assert.deepEqual(quotedTitles('без кавычек, только слова'), [])
   })
 
   test('то же название с точностью до регистра, ё и знаков; сокращение не короче шести букв', () => {
@@ -27,47 +28,76 @@ describe('названия задач в тексте поручения', () =>
 })
 
 describe('чужая задача в сообщении человеку', () => {
-  test('название совпало с открытой задачей другого и ни с одной задачей адресата — это место', async (t) => {
-    patch(t, prisma.task, 'findMany', async () => [task()])
-    const found = await foreignTitles([{ userId: 'denis', text: `Денис, как «${POSTS}»?` }], ADMIN)
-    assert.equal(found.length, 1)
-    assert.equal(found[0].userId, 'denis')
-    assert.equal(found[0].title, POSTS)
-    assert.deepEqual(found[0].owners.map((o) => o.id), ['anton'])
+  /** open — открытые задачи области смотрящего, own — задачи адресатов любого статуса. */
+  const rows = (t, { open = [], own = [] }) => patch(t, prisma.task, 'findMany', async ({ where }) => (where.AND.some((c) => c.owner) ? open : own))
+
+  test('точное название чужой открытой задачи в тексте, с кавычками или без — это место', async (t) => {
+    rows(t, { open: [task()] })
+    for (const text of [`Денис, как «${POSTS}»?`, `Денис, как "${POSTS}"?`, `Денис, как ${POSTS.toUpperCase()} идёт?`]) {
+      const found = await foreignTitles([{ userId: 'denis', text }], ADMIN)
+      assert.equal(found.length, 1, text)
+      assert.equal(found[0].userId, 'denis')
+      assert.equal(found[0].title, POSTS)
+      assert.deepEqual(found[0].owners.map((o) => o.id), ['anton'])
+    }
   })
 
-  test('у адресата есть своя задача с таким названием — всё в порядке', async (t) => {
-    patch(t, prisma.task, 'findMany', async () => [task(), task({ id: 't2', ownerId: 'denis', owner: denis })])
+  test('сокращение чужого названия — не повод считать задачу чужой', async (t) => {
+    rows(t, { open: [task()] })
+    assert.deepEqual(await foreignTitles([{ userId: 'denis', text: 'Денис, как «Десять постов»?' }], ADMIN), [])
+  })
+
+  test('название целыми словами: «макет баннера» не найдётся в «макет баннерами»', async (t) => {
+    rows(t, { open: [task({ title: 'Макет баннера' })] })
+    assert.equal((await foreignTitles([{ userId: 'denis', text: 'Как макет баннера?' }], ADMIN)).length, 1)
+    assert.equal((await foreignTitles([{ userId: 'denis', text: 'Как макет баннерами?' }], ADMIN)).length, 0)
+  })
+
+  test('короткие и общие названия чужих задач не проверяем', async (t) => {
+    rows(t, { open: [task({ title: 'Отчёт' })] })
+    assert.deepEqual(await foreignTitles([{ userId: 'denis', text: 'Денис, пришли отчёт по «Отчёт»' }], ADMIN), [])
+  })
+
+  test('у адресата есть своя открытая задача с таким названием — всё в порядке', async (t) => {
+    const calls = rows(t, { open: [task(), task({ id: 't2', ownerId: 'denis', owner: denis })] })
     assert.deepEqual(await foreignTitles([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN), [])
-  })
-
-  test('чужая задача уже сделана, названия нет нигде, нет ёлочек — не ошибка', async (t) => {
-    const calls = patch(t, prisma.task, 'findMany', async () => [task({ status: 'done' })])
-    assert.deepEqual(await foreignTitles([{ userId: 'denis', text: `Как «${POSTS}»?` }, { userId: 'x', text: 'Привет, как дела' }, { userId: 'y', text: 'Что с «Неизвестной»?' }], ADMIN), [])
     assert.equal(calls.length, 1)
   })
 
-  test('без ёлочек в базу не ходим', async (t) => {
-    const calls = patch(t, prisma.task, 'findMany', async () => [])
-    assert.deepEqual(await foreignTitles([{ userId: 'denis', text: 'Привет' }], ADMIN), [])
-    assert.equal(calls.length, 0)
+  test('своя задача адресата уже сделана — она есть во втором запросе, ошибки нет', async (t) => {
+    const calls = rows(t, { open: [task()], own: [task({ id: 't3', ownerId: 'denis', owner: denis, status: 'done' })] })
+    assert.deepEqual(await foreignTitles([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN), [])
+    assert.equal(calls.length, 2)
   })
 
-  test('в запросе фильтр видимости и поиск по названию без учёта регистра', async (t) => {
-    const calls = patch(t, prisma.task, 'findMany', async () => [])
-    await foreignTitles([{ userId: 'denis', text: 'Как «Макет»?' }], ADMIN)
+  test('назвали более длинную свою задачу, в которой чужое название лишь часть — не чужая', async (t) => {
+    rows(t, { open: [task({ title: 'Макет баннера' }), task({ id: 't4', title: 'Макет баннера для Румикс', ownerId: 'denis', owner: denis })] })
+    assert.deepEqual(await foreignTitles([{ userId: 'denis', text: 'Как «Макет баннера для Румикс»?' }], ADMIN), [])
+    assert.equal((await foreignTitles([{ userId: 'denis', text: 'Как «Макет баннера» для Румикс?' }], ADMIN)).length, 0)
+  })
+
+  test('в тексте нет названий чужих задач — во второй запрос не ходим', async (t) => {
+    const calls = rows(t, { open: [task()] })
+    assert.deepEqual(await foreignTitles([{ userId: 'denis', text: 'Привет, как дела' }], ADMIN), [])
+    assert.equal(calls.length, 1)
+  })
+
+  test('в запросе фильтр видимости, только открытые и круг владельцев смотрящего', async (t) => {
+    const calls = rows(t, {})
+    await foreignTitles([{ userId: 'denis', text: 'Как дела' }], ADMIN)
     const where = calls[0][0].where
     assert.equal(where.AND[0].OR[1].work.status, 'active')
-    assert.deepEqual(where.AND.at(-1).OR, [{ title: { contains: 'Макет', mode: 'insensitive' } }])
+    assert.deepEqual(where.AND[1], { status: { in: ['today', 'progress'] } })
+    assert.ok(where.AND[2].owner)
   })
 
   test('искать можно только среди адресатов, людей смотрящего и его самого, чужой отдел «не найден»', async (t) => {
-    const calls = patch(t, prisma.task, 'findMany', async () => [])
+    const calls = rows(t, {})
     const lead = { id: 'lead', role: 'lead', departmentId: 'design' }
-    await foreignTitles([{ userId: 'roman', text: `Роман, как «${POSTS}»?` }], lead)
+    await foreignTitles([{ userId: 'roman', text: 'Роман, как дела' }], lead)
     const scope = calls[0][0].where.AND.find((c) => c.owner).owner
     assert.deepEqual(scope, { OR: [{ role: 'staff', active: true, departmentId: 'design', id: { not: 'lead' } }, { id: 'lead' }, { id: { in: ['roman'] } }] })
-    await foreignTitles([{ userId: 'roman', text: `Роман, как «${POSTS}»?` }], ADMIN)
+    await foreignTitles([{ userId: 'roman', text: 'Роман, как дела' }], ADMIN)
     assert.deepEqual(calls[1][0].where.AND.find((c) => c.owner).owner.OR[0], { role: { in: ['staff', 'lead'] }, active: true })
   })
 
