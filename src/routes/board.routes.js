@@ -3,7 +3,7 @@ import { validate } from '../middlewares/validate.middleware.js'
 import { authenticate, authorize } from '../middlewares/auth.middleware.js'
 import {
   addClientSchema, addServiceSchema, boardIdParamSchema, boardQuerySchema,
-  cardQuerySchema, editClientSchema, editServiceSchema, leaveSchema,
+  cardQuerySchema, editClientSchema, editServiceSchema, expensePaidSchema, leaveSchema,
 } from '../schemas/board.schema.js'
 import * as boardController from '../controllers/board.controller.js'
 
@@ -27,5 +27,7 @@ router.delete('/clients/:id', validate(boardIdParamSchema), boardController.remo
 router.post('/services', validate(addServiceSchema), boardController.addService)
 router.patch('/services/:id', validate(editServiceSchema), boardController.editService)
 router.delete('/services/:id', validate(boardIdParamSchema), boardController.removeService)
+
+router.patch('/expenses/:id', validate(expensePaidSchema), boardController.setExpensePaid)
 
 export default router

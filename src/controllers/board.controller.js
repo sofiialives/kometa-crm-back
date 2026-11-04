@@ -46,3 +46,7 @@ export const removeService = asyncHandler(async (req, res) => {
   await boardService.removeService(req.user, req.params.id)
   res.status(204).send()
 })
+
+export const setExpensePaid = asyncHandler(async (req, res) => {
+  res.json(await boardService.setExpensePaid(req.user, req.params.id, req.body))
+})

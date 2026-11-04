@@ -496,6 +496,14 @@ model BoardService {
   // правки услуг даты нет, их заказчик проставит руками.
   paidAt        DateTime?
 
+  // Срок работ по услуге: с какого по какое число (включительно) над ней
+  // работали. Нужен для доделок: услуга, взятая в октябре, может тянуться
+  // в ноябрь, и в ноябре её видно, хотя выручка остаётся октябрьской.
+  // Хранятся полуночью UTC нужного дня. Пусто — работа шла весь
+  // месяц услуги, границы подставляются из поля month.
+  workFrom      DateTime?
+  workTo        DateTime?
+
   revenueCents  Int
 
   expenses      BoardExpense[]
@@ -517,6 +525,11 @@ model BoardExpense {
 
   title       String
   amountCents Int
+
+  // Выплачен ли расход («не выплачено» на доске — сумма расходов без
+  // отметки) и когда её поставили.
+  paid        Boolean      @default(false)
+  paidAt      DateTime?
 
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
