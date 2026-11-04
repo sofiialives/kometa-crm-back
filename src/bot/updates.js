@@ -29,11 +29,22 @@ const STRANGER_REPLY_MS = 24 * 60 * 60 * 1000
 const STRANGERS_MAX = 5000
 const strangers = new Map()
 
-export function shouldAnswerStranger(chatId, now = Date.now()) {
-  const last = strangers.get(String(chatId))
-  if (last && now - last < STRANGER_REPLY_MS) return false
+// Голый /start — исключение: человек сам открыл бота и пытается
+// подключиться, без подсказки он решит, что бот сломан. Но не чаще раза в
+// минуту и не больше трёх за сутки, иначе им можно гонять бота по кругу.
+const STRANGER_START_MS = 60 * 1000
+const STRANGER_STARTS_MAX = 3
+
+export function shouldAnswerStranger(chatId, now = Date.now(), { start = false } = {}) {
+  const key = String(chatId)
+  const rec = strangers.get(key)
+  const fresh = !rec || now - rec.first >= STRANGER_REPLY_MS
+  if (!fresh) {
+    if (!start) return false
+    if (now - rec.last < STRANGER_START_MS || rec.starts >= STRANGER_STARTS_MAX) return false
+  }
   if (strangers.size >= STRANGERS_MAX) strangers.clear()
-  strangers.set(String(chatId), now)
+  strangers.set(key, fresh ? { first: now, last: now, starts: 1 } : { ...rec, last: now, starts: rec.starts + 1 })
   return true
 }
 
@@ -63,12 +74,14 @@ async function handleMessage(msg, files = filesOf(msg)) {
   // Только личная переписка: в группе бот не работает — общего чата нет.
   if (!chatId || msg.chat?.type !== 'private') return
 
-  const code = text.startsWith('/start') ? text.slice('/start'.length).trim() : ''
+  // «/start@имя_бота» тоже бывает: имя бота — не код.
+  const start = /^\/start(@\S+)?/.exec(text)
+  const code = start ? text.slice(start[0].length).trim() : ''
   if (!code) {
     // Уже подключённый человек — дальше разговор ведёт агент.
     const user = await userByChat(chatId)
     if (user) return onText(user, chatId, text, new Date(), { media, files })
-    if (shouldAnswerStranger(chatId)) await sendMessage(chatId, HELP)
+    if (shouldAnswerStranger(chatId, Date.now(), { start: Boolean(start) })) await sendMessage(chatId, HELP)
     return
   }
 
@@ -78,6 +91,8 @@ async function handleMessage(msg, files = filesOf(msg)) {
   })
 
   if (!link || !link.user?.active || !link.codeExpiresAt || link.codeExpiresAt < new Date()) {
+    // Тот же лимит, что у голого /start, иначе «/start мусор» обходит его.
+    if (!shouldAnswerStranger(`code:${chatId}`, Date.now(), { start: true })) return
     await sendMessage(
       chatId,
       'Ссылка не подошла, скорее всего, она истекла.\n\n' +
