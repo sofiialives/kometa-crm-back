@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildBoard, cardVisible, columnOf, daysWithUs, expenseRows, fillWorkSpan, monthsOfService, resolvePaidAt, resolveRange, serviceInPeriod,
+  buildBoard, cardVisible, columnOf, daysWithUs, servicePrefilter, expenseRows, fillWorkSpan, monthsOfService, resolvePaidAt, resolveRange, serviceInPeriod,
   serviceVisible, shapeService, totals, workSpan, workSpanError, workSpanProblem, dayStart,
 } from '../boardRules.js'
 
@@ -618,6 +618,7 @@ describe('доска целиком', () => {
       leftAt: leftAt && day(leftAt),
       leftReason: leftAt ? 'причина' : null,
       services,
+      _count: { services: services.length },
     }
   }
 
@@ -694,5 +695,83 @@ describe('доска целиком', () => {
     assert.equal(daysWithUs({ startedAt: day('2026-11-01'), leftAt: null }, NOW), 3)
     assert.equal(daysWithUs({ startedAt: day('2026-10-01'), leftAt: day('2026-10-11') }, NOW), 10)
     assert.equal(daysWithUs({ startedAt: day('2026-11-10'), leftAt: null }, NOW), 0)
+  })
+})
+
+describe('предварительный отбор услуг в запросе', () => {
+  /**
+   * Проверка условия на строке, как это делает база: сравнения с null ложны,
+   * поле без условия пропускает всё. Поддержан только набор операторов,
+   * который использует servicePrefilter.
+   */
+  function matches(row, where) {
+    if (!where) return true
+    return Object.entries(where).every(([key, cond]) => {
+      if (key === 'OR') return cond.some((w) => matches(row, w))
+      if (cond === null) return row[key] === null
+      return Object.entries(cond).every(([op, bound]) => {
+        if (row[key] === null) return false
+        const t = row[key].getTime()
+        const b = bound.getTime()
+        if (op === 'gte') return t >= b
+        if (op === 'lt') return t < b
+        if (op === 'lte') return t <= b
+        throw new Error(`оператор ${op} не поддержан проверкой`)
+      })
+    })
+  }
+
+  const monthsList = ['2025-11', '2026-02', '2026-09', '2026-10', '2026-11', '2026-12', '2027-03']
+  const days = [
+    null, '2025-10-31', '2025-11-01', '2026-01-15', '2026-02-28', '2026-09-30', '2026-10-01', '2026-10-31',
+    '2026-11-01', '2026-11-04', '2026-11-30', '2026-12-01', '2026-12-31', '2027-02-14',
+  ]
+  const services = []
+  for (const m of monthsList) {
+    for (const from of days) {
+      for (const to of days) services.push(service(m, { workFrom: from, workTo: to }))
+    }
+  }
+
+  const ranges = {
+    'месяц, октябрь': month('2026-10'),
+    'месяц, ноябрь': month('2026-11'),
+    'месяц, январь': month('2026-01'),
+    'месяц, без данных': month('2030-01'),
+    'последний месяц': resolveRange({ mode: 'last', months: 1 }, new Date('2026-11-04T09:00:00.000Z')),
+    'последние три': resolveRange({ mode: 'last', months: 3 }, new Date('2026-11-04T09:00:00.000Z')),
+    'в первую московскую ночь': resolveRange({ mode: 'last', months: 2 }, new Date('2026-10-31T22:00:00.000Z')),
+    'период с серединой месяца': resolveRange({ mode: 'period', from: day('2026-09-15'), to: day('2026-11-10') }),
+    'период только с': resolveRange({ mode: 'period', from: day('2026-11-01') }),
+    'период только по': resolveRange({ mode: 'period', to: day('2026-10-31') }),
+    'период в один день': resolveRange({ mode: 'period', from: day('2026-11-04'), to: day('2026-11-04') }),
+  }
+
+  for (const [name, range] of Object.entries(ranges)) {
+    test(`не отсекает ни одной видимой услуги: ${name}`, () => {
+      const where = servicePrefilter(range)
+      const lost = services.filter((s) => serviceVisible(s, range) && !matches(s, where))
+      assert.deepEqual(lost, [])
+    })
+  }
+
+  test('за всё время условия нет', () => {
+    assert.equal(servicePrefilter(null), undefined)
+  })
+
+  test('но и всю таблицу не читает: у периода с обеими границами дальние услуги отсекаются', () => {
+    const closed = Object.entries(ranges).filter(([, r]) => r.gte && (r.lt || r.lte))
+    assert.ok(closed.length >= 8)
+    for (const [name, range] of closed) {
+      const taken = services.filter((s) => matches(s, servicePrefilter(range))).length
+      assert.ok(taken < services.length * 0.75, `${name}: взято ${taken} из ${services.length}`)
+    }
+  })
+
+  test('сам отбор ничего не прибавляет к видимым: после serviceVisible остаются те же', () => {
+    const range = ranges['месяц, ноябрь']
+    const exact = services.filter((s) => serviceVisible(s, range))
+    const viaQuery = services.filter((s) => matches(s, servicePrefilter(range))).filter((s) => serviceVisible(s, range))
+    assert.equal(viaQuery.length, exact.length)
   })
 })

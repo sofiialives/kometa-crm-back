@@ -2,7 +2,7 @@ import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import {
   buildBoard, daysWithUs, dayStart, expenseRows, fillWorkSpan, monthsOfService, monthStart, resolveRange,
-  resolvePaidAt, serviceVisible, shapeService, toCents, totals, workSpanProblem,
+  resolvePaidAt, servicePrefilter, serviceVisible, shapeService, toCents, totals, workSpanProblem,
 } from './boardRules.js'
 
 export { resolveRange }
@@ -72,13 +72,15 @@ export async function getBoard(user, query) {
   assertAdmin(user)
   const range = resolveRange(query)
 
-  // Услуги берём все, а не только за период: «видна ли» решают правила
-  // (месяц или срок работ), и в условие запроса с пустыми краями срока
-  // работ это не уложить. Доска одна на агентство, объёмы небольшие.
+  // Карточки берём все: нужно знать, кто на доске (сводка отдаёт их id), и
+  // видимость клиента без услуг зависит от его дат. Услуги — только те,
+  // что могут быть видны в периоде; окончательно решает serviceVisible, а
+  // сколько их всего, считает база.
   const cards = await prisma.boardClient.findMany({
     include: {
       client: { select: { id: true, name: true } },
-      services: { select: SERVICE_SELECT },
+      services: { where: servicePrefilter(range), select: SERVICE_SELECT },
+      _count: { select: { services: true } },
     },
     orderBy: { client: { name: 'asc' } },
   })
