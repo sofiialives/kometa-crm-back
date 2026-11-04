@@ -98,19 +98,51 @@ describe('отчёт по поручению не дублируется', () =>
     assert.equal(ctx.state.status, 'closed')
   })
 
-  test('часть: уже была — пропуск; сбой кода — ключ возвращается', async (t) => {
+  test('часть: уже ушла — пропуск; ушла или могла уйти — отмечена отправленной', async (t) => {
     const ctx = setup(t)
     let n = 0
     assert.deepEqual(await sendPart('x', 'a', async () => { n += 1; return { ok: true } }), { ok: true })
     assert.deepEqual(await sendPart('x', 'a', async () => { n += 1; return { ok: true } }), { ok: true, skipped: true })
     assert.equal(n, 1)
-    await assert.rejects(sendPart('x', 'b', async () => { throw new Error('сбой') }))
-    assert.equal(ctx.notices.has('round-report:x:b'), false)
+    assert.equal(ctx.notices.has('round-report:x:a'), true)
     const timedOut = await sendPart('x', 'c', async () => ({ ok: false, retry: true, unsure: true }))
     assert.equal(timedOut.unsure, true)
     assert.equal(ctx.notices.has('round-report:x:c'), true)
     await sendPart('x', 'd', async () => ({ ok: false, retry: false }))
-    assert.equal(ctx.notices.has('round-report:x:d'), true)
+    assert.equal(ctx.notices.has('round-report:x:d'), false)
+  })
+
+  test('явная ошибка доставки возвращает попытку, отметки «отправлено» нет', async (t) => {
+    const ctx = setup(t)
+    await sendPart('x', 'e', async () => ({ ok: false, retry: true }))
+    assert.equal(ctx.notices.has('round-report:x:e'), false)
+    assert.equal(ctx.notices.has('round-report:x:e:try:1'), false)
+    let n = 0
+    await sendPart('x', 'e', async () => { n += 1; return { ok: true } })
+    assert.equal(n, 1)
+  })
+
+  test('прошлая попытка оборвалась на захвате — часть отправляется ещё раз и отмечается', async (t) => {
+    const ctx = setup(t)
+    ctx.notices.add('round-report:r1:text:try:1')
+    const first = await sendRoundReport('r1')
+    assert.equal(first.ok, true)
+    assert.equal(ctx.sent.filter((m) => m === 'sendMessage').length, 1)
+    assert.equal(ctx.notices.has('round-report:r1:text'), true)
+    assert.equal(ctx.notices.has('round-report:r1:text:try:2'), true)
+    // Теперь отмечена отправленной: сброс застрявшего отчёта текст не повторит.
+    ctx.state.status = 'sent'
+    await sendRoundReport('r1')
+    assert.equal(ctx.sent.filter((m) => m === 'sendMessage').length, 1)
+  })
+
+  test('попытки оборвались все пять раз — шестой нет, отчёт закрывается', async (t) => {
+    const ctx = setup(t)
+    for (let n = 1; n <= 5; n += 1) ctx.notices.add(`round-report:r1:text:try:${n}`)
+    const res = await sendRoundReport('r1')
+    assert.equal(res.ok, false)
+    assert.equal(ctx.sent.filter((m) => m === 'sendMessage').length, 0)
+    assert.equal(ctx.state.status, 'closed')
   })
 })
 

@@ -419,25 +419,37 @@ async function composeReport(round, people, now = new Date()) {
 }
 
 /**
- * Отправить часть отчёта один раз. Ключ части лежит в BotNotice и занимается
- * до отправки: часть, которая ушла или могла уйти (телеграм не ответил за
- * 15 секунд), повторно не уходит ни со следующего прохода, ни после сброса
- * застрявшего отчёта. Ключ возвращается только при явной ошибке доставки,
- * когда телеграм точно не принял: тогда повтор безопасен.
- * Возвращает { ok } или { ok: false, retry, unsure }; skipped: часть уже была.
+ * Отправить часть отчёта один раз. Два вида ключей в BotNotice. Ключ
+ * «отправлено» ставится, когда часть ушла или могла уйти (телеграм не
+ * ответил за 15 секунд): с ним часть больше не повторяется ни со следующего
+ * прохода, ни после сброса застрявшего отчёта. Ключ попытки занимается до
+ * отправки: если процесс оборвался посреди (выкладка, сбой), «отправлено» не
+ * появится, и следующий проход отправит часть ещё раз, но не больше
+ * REPORT_TRIES попыток. Явная ошибка доставки возвращает ключ попытки.
+ * Возвращает { ok } или { ok: false, retry, unsure }; skipped: часть уже ушла.
  */
 export async function sendPart(roundId, part, send) {
-  const key = `round-report:${roundId}:${part}`
-  if ((await hasNotice(key)) || !(await claimNotice(key))) return { ok: true, skipped: true }
-  let res
-  try {
-    res = await send()
-  } catch (e) {
-    await releaseNotice(key)
-    throw e
+  const base = `round-report:${roundId}:${part}`
+  if (await hasNotice(base)) {
+    console.log(`[агент] отчёт ${roundId}, часть ${part}: уже отправлена, пропускаю`)
+    return { ok: true, skipped: true }
   }
-  if (!res.ok && !res.unsure && res.retry) await releaseNotice(key)
-  if (res.unsure) console.error(`[агент] отчёт ${roundId}, часть ${part}: телеграм не ответил, повторно не отправляю`)
+  let attempt = 0
+  for (let n = 1; n <= REPORT_TRIES && !attempt; n += 1) {
+    if (await claimNotice(`${base}:try:${n}`)) attempt = n
+  }
+  if (!attempt) {
+    console.error(`[агент] отчёт ${roundId}, часть ${part}: ${REPORT_TRIES} попыток оборвались, больше не пробую`)
+    return { ok: false, retry: false }
+  }
+  if (attempt > 1) console.log(`[агент] отчёт ${roundId}, часть ${part}: прошлая попытка оборвалась, отправляю снова (${attempt} из ${REPORT_TRIES})`)
+  const res = await send()
+  if (res.ok || res.unsure) {
+    await claimNotice(base)
+    if (res.unsure) console.error(`[агент] отчёт ${roundId}, часть ${part}: телеграм не ответил, повторно не отправляю`)
+  } else if (res.retry) {
+    await releaseNotice(`${base}:try:${attempt}`)
+  }
   return res
 }
 
