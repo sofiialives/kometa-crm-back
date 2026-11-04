@@ -14,7 +14,7 @@ import { REPORT_SCHEMA, verifiedQuote } from '../ai/report.js'
 import { clampMinutes, confirmText, draftText, linksIn, MAX_PEOPLE, reportText } from '../agent/rounds.js'
 import { teamRequest } from '../parse.js'
 import { enqueue, filesOf } from '../updates.js'
-import { currentTurn, ownerSystem, staffSystem } from '../ai/system.js'
+import { currentTurn, ownerSystem, roundSection, staffSystem } from '../ai/system.js'
 
 const M = (usd) => Math.round(usd * 1_000_000)
 
@@ -434,6 +434,21 @@ describe('поручения', () => {
     assert.equal(teamRequest('что по задачам на сегодня у отдела'), true)
     assert.equal(teamRequest('отхожу на 30 минут'), false)
     assert.equal(teamRequest('мои задачи'), false)
+  })
+})
+
+describe('разговор по поручению', () => {
+  const base = { ownerLabel: 'Яна', topic: 'Как баннер', text: 'Роман, как идёт баннер?', sentAt: new Date('2026-11-04T10:05:00Z'), deadlineAt: new Date('2026-11-04T12:00:00Z'), status: 'sent', replies: 1, maxReplies: 6 }
+
+  test('старый текст подан как сообщение, отправленное в такое-то время, а задачи берём свежие', () => {
+    const text = roundSection(base)
+    assert.match(text, /Сообщение, отправленное в 13:05\. Задачи с тех пор могли измениться, опирайся на свежие задачи в данных CRM ниже и не спрашивай про уже сделанные/)
+    assert.match(text, /Текст того сообщения «Роман, как идёт баннер\?»/)
+    assert.doesNotMatch(text, /Ты написал человеку/)
+  })
+
+  test('ответ уже записан — коротко, без просьбы выяснять', () => {
+    assert.match(roundSection({ ...base, status: 'answered' }), /Ответ ты уже записал/)
   })
 })
 

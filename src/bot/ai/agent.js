@@ -42,6 +42,8 @@ export const AI_LIMIT_TEXT = 'Лимит вопросов на сегодня з
 export const AI_MONTH_TEXT = 'Бюджет на ИИ в этом месяце закончился.\nДо 1-го числа я понимаю только команды.'
 const AI_FAIL_TEXT = 'Не получилось ответить, сбой у ИИ.\nПопробуй ещё раз через минуту.'
 const ROUND_ACK = 'Спасибо, записал и передам.'
+// В разговоре по поручению данные CRM главнее текста сообщения, которое писалось раньше.
+const FRESH_NOTE = '\nЭто свежие данные на сейчас. Если они расходятся с текстом сообщения по поручению, верь им.'
 
 /**
  * Важное — Яну: не ночью, не чаще раза в 10 минут и не больше пяти в день
@@ -154,6 +156,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
         ownerLabel: target.round.owner.role === 'admin' ? 'Яна' : `руководителя ${labelOf(target.round.owner)}`,
         topic: target.round.topic,
         text: target.text,
+        sentAt: target.sentAt,
         deadlineAt: target.round.deadlineAt,
         status: target.status,
         replies: target.replies,
@@ -166,7 +169,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
       kind: target ? 'round' : kind,
       system: [owner ? ownerSystem() : staffSystem({ lead }), dynamic],
       tools: toolsFor(ctx, { owner, lead, target }),
-      messages: toMessages(rows, currentTurn({ brief: cut(brief, MAX_INPUT_CHARS), text, notes: media.notes, media: media.blocks }), { strict: team }),
+      messages: toMessages(rows, currentTurn({ brief: cut(brief, MAX_INPUT_CHARS) + (target ? FRESH_NOTE : ''), text, notes: media.notes, media: media.blocks }), { strict: team }),
       maxTokens: team ? MAX_OUTPUT_TOKENS_TEAM : MAX_OUTPUT_TOKENS,
       maxSteps: team ? 8 : 4,
       effort: owner ? 'medium' : 'low',
