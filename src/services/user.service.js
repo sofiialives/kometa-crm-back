@@ -56,7 +56,7 @@ export async function listUsers({ departmentId } = {}, requestingUser) {
  */
 export async function inviteUser({ email, role, position, departmentId }) {
   const exists = await prisma.user.findUnique({ where: { email } })
-  if (exists) throw ApiError.conflict('Пользователь с таким email уже приглашён')
+  if (exists && exists.active) throw ApiError.conflict('Пользователь с таким email уже приглашён')
 
   const department = await prisma.department.findUnique({ where: { id: departmentId } })
   if (!department || department.archivedAt) throw ApiError.badRequest('Отдел не найден. Сначала создайте отдел')
@@ -77,20 +77,37 @@ export async function inviteUser({ email, role, position, departmentId }) {
 
   const defaultName = email.trim().charAt(0).toUpperCase()
 
-  const created = await prisma.user.create({
-    data: {
-      email,
-      role,
-      position: finalPosition,
-      name: defaultName,
-      departmentId,
-      status: 'invited',
-    },
-    select: PUBLIC_USER_SELECT,
-  })
-  // Новичку сразу достаются условия мотивации его отдела и роли.
-  await syncAssignmentsSafe({ userIds: [created.id] })
-  return created
+  let result
+  if (exists) {
+    result = await prisma.user.update({
+      where: { id: exists.id },
+      data: {
+        role,
+        position: finalPosition,
+        name: defaultName,
+        departmentId,
+        status: 'invited',
+        active: true,
+      },
+      select: PUBLIC_USER_SELECT,
+    })
+    await syncLead(exists.id, result)
+  } else {
+    result = await prisma.user.create({
+      data: {
+        email,
+        role,
+        position: finalPosition,
+        name: defaultName,
+        departmentId,
+        status: 'invited',
+      },
+      select: PUBLIC_USER_SELECT,
+    })
+  }
+  // Новичку (или возвращённому) сразу достаются условия мотивации его отдела и роли.
+  await syncAssignmentsSafe({ userIds: [result.id] })
+  return result
 }
 
 /**
