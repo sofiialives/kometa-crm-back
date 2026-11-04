@@ -62,9 +62,23 @@ describe('чужая задача в сообщении человеку', () =>
     }
   })
 
-  test('сокращение чужого названия — не повод считать задачу чужой', async (t) => {
-    rows(t, { open: [task()] })
-    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, как «Десять постов»?' }], ADMIN), [])
+  test('упоминание от шести букв, которое входит в чужую задачу и не совпадает со своими, — чужая задача', async (t) => {
+    rows(t, { open: [task()], own: [task({ id: 'd1', title: 'Баннер для Румикс', ownerId: 'denis', status: 'progress' })] })
+    const found = await problemsOf([{ userId: 'denis', text: 'Денис, как «Десять постов»?' }])
+    assert.equal(found.length, 1)
+    assert.equal(found[0].title, POSTS)
+  })
+
+  test('ложных срабатываний на свои задачи нет: упоминание входит и в свою задачу адресата', async (t) => {
+    rows(t, { open: [task()], own: [task({ id: 'd2', title: 'Десять постов для блога', ownerId: 'denis', status: 'done' })] })
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, как «Десять постов»?' }]), [])
+    rows(t, { open: [task(), task({ id: 'd3', title: 'Десять постов для блога', ownerId: 'denis' })] })
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, как «Десять постов»?' }]), [])
+  })
+
+  test('упоминание короче шести букв сокращением не считается', async (t) => {
+    rows(t, { open: [task({ title: 'Макет баннера' })] })
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, как «Макет»?' }]), [])
   })
 
   test('название целыми словами: «макет баннера» не найдётся в «макет баннерами»', async (t) => {
@@ -73,9 +87,16 @@ describe('чужая задача в сообщении человеку', () =>
     assert.equal((await problemsOf([{ userId: 'denis', text: 'Как макет баннерами?' }], ADMIN)).length, 0)
   })
 
-  test('короткие и общие названия чужих задач не проверяем', async (t) => {
-    rows(t, { open: [task({ title: 'Отчёт' })] })
-    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, пришли отчёт по «Отчёт»' }], ADMIN), [])
+  test('короткое название чужой задачи сравниваем точно по границам слов', async (t) => {
+    rows(t, { open: [task({ title: 'Отчёт' })], own: [] })
+    assert.equal((await problemsOf([{ userId: 'denis', text: 'Денис, пришли отчёт по SEO' }])).length, 1)
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, пришли отчётность по SEO' }]), [])
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, привет' }]), [])
+  })
+
+  test('короткое название, которое входит в свою задачу адресата, чужим не считается', async (t) => {
+    rows(t, { open: [task({ title: 'Отчёт' })], own: [task({ id: 'd4', title: 'Отчёт по SEO', ownerId: 'denis', status: 'progress' })] })
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, пришли отчёт по SEO' }]), [])
   })
 
   test('у адресата есть своя открытая задача с таким названием — всё в порядке', async (t) => {

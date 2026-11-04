@@ -14,8 +14,10 @@ const QUOTED = /«([^«»\n]{2,200})»|"([^"\n]{2,200})"|„([^„“”\n]{2,20
 const squash = (text) => String(text ?? '').toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 // Слова целиком: пробелы по краям, чтобы «макет» не нашёлся внутри «макетирование».
 const padded = (text) => ` ${squash(text)} `
-// Название короче этого (после нормализации) слишком общее, чтобы назвать по нему чужую задачу.
-export const MIN_TITLE = 8
+// Короткие названия тоже сравниваем, но по границам слов и точно; совсем короткие (одна-две буквы) нет.
+export const MIN_TITLE = 3
+// Упоминание от этого числа букв считаем сокращением названия: «Десять постов» вместо длинного.
+export const MIN_ABBREVIATION = 6
 
 // Сколько названий из одного текста проверяем и насколько короткое упоминание не берём.
 export const MENTIONS_MAX = 20
@@ -96,12 +98,13 @@ function ownerScope(viewer, addresseeIds) {
 
 /**
  * Открытые задачи области смотрящего, чьё название целиком встречается хотя
- * бы в одном из текстов (saids, с пробелами по краям). Читаем страницами и
+ * бы в одном из текстов (saids, с пробелами по краям) или содержит
+ * упоминание-сокращение (needles, нормализованные). Читаем страницами и
  * держим только совпавшие, так что большая область не мешает проверке.
  * null: не уложились в число страниц или совпавших слишком много, то есть
  * уже суженная выборка не поместилась и проверка неполная.
  */
-async function scanOpen(viewer, ids, saids) {
+async function scanOpen(viewer, ids, saids, needles) {
   const where = { AND: [VISIBLE, { status: { in: ['today', 'progress'] } }, { owner: ownerScope(viewer, ids) }] }
   const hits = []
   let cursor = null
@@ -115,7 +118,8 @@ async function scanOpen(viewer, ids, saids) {
     })
     for (const row of rows) {
       const key = padded(row.title)
-      if (key.trim().length >= MIN_TITLE && saids.some((said) => said.includes(key))) hits.push(row)
+      const exact = key.trim().length >= MIN_TITLE && saids.some((said) => said.includes(key))
+      if (exact || needles.some((n) => squash(row.title).includes(n))) hits.push(row)
     }
     if (hits.length > MATCHED_MAX) return null
     if (rows.length < PAGE_SIZE) {
@@ -132,42 +136,50 @@ async function scanOpen(viewer, ids, saids) {
 /**
  * Места, где адресату назвали чужую задачу. Берём открытые задачи людей из
  * области смотрящего и ищем их названия целиком в тексте, с кавычками или
- * без: название совпало точно (до регистра, ё и знаков) и такой задачи нет
- * у самого адресата, а у него нет и более длинной с этим названием внутри,
- * которую назвали целиком. items — [{ userId, text }], viewer — кто пишет
+ * без, по границам слов (и короткие тоже). Ещё чужой считаем ту задачу, в
+ * название которой входит упоминание в кавычках от шести букв. Своих задач
+ * адресата это не касается: если у него есть такая же, длиннее или та, в
+ * которую входит упоминание, ошибки нет. items — [{ userId, text }], viewer — кто пишет
  * поручение. Возвращает { problems: [{ userId, title, owners }], incomplete }.
  * incomplete: задач больше, чем мы читаем за раз, проверка неполная, и
  * молча пропускать её нельзя.
  */
 export async function foreignTitles(items, viewer) {
-  const open = await scanOpen(viewer, items.map((i) => i.userId), items.map((i) => padded(i.text)))
+  const prepared = items.map(({ userId, text }) => ({
+    userId,
+    said: padded(text),
+    // Упоминания в кавычках от 6 букв: возможное сокращение длинного названия.
+    mentions: quotedTitles(text).titles.map(squash).filter((m) => m.length >= MIN_ABBREVIATION),
+  }))
+  const needles = [...new Set(prepared.flatMap((p) => p.mentions))]
+  const open = await scanOpen(viewer, items.map((i) => i.userId), prepared.map((p) => p.said), needles)
   if (!open) return { problems: [], incomplete: true }
-  // Одинаковые названия у нескольких исполнителей работы — одна запись с несколькими владельцами.
-  const groups = new Map()
-  for (const t of open) {
-    const key = padded(t.title)
-    if (key.trim().length < MIN_TITLE) continue
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(t)
-  }
-  const found = []
-  for (const { userId, text } of items) {
-    const said = padded(text)
-    const mine = open.filter((t) => t.ownerId === userId).map((t) => padded(t.title))
-    for (const [key, tasks] of groups) {
-      if (!said.includes(key) || tasks.some((t) => t.ownerId === userId)) continue
-      if (mine.some((u) => u.includes(key) && said.includes(u))) continue
-      found.push({ userId, key, said, title: tasks[0].title, owners: [...new Map(tasks.map((t) => [t.owner.id, t.owner])).values()] })
+  // Подозрение: чужая открытая задача, чьё название целиком в тексте или содержит
+  // упоминание. Одинаковые названия у нескольких исполнителей — одна запись.
+  const suspects = new Map()
+  for (const { userId, said, mentions } of prepared) {
+    for (const t of open) {
+      if (t.ownerId === userId) continue
+      const key = padded(t.title)
+      const exact = key.trim().length >= MIN_TITLE && said.includes(key)
+      const mention = exact ? null : mentions.find((m) => squash(t.title).includes(m))
+      if (!exact && !mention) continue
+      const id = `${userId}|${key}`
+      if (!suspects.has(id)) suspects.set(id, { userId, key, mention, title: t.title, owners: new Map() })
+      suspects.get(id).owners.set(t.owner.id, t.owner)
     }
   }
-  if (!found.length) return { problems: [], incomplete: false }
+  // Свою задачу адресата подозревать нельзя: такая же или длиннее с этим названием
+  // внутри, либо та, в которую входит упоминание. Сначала по прочитанным открытым.
+  const excused = (s, titles) => titles.some((title) => padded(title).includes(s.key) || (s.mention && sameTitle(s.mention, title)))
+  const mineOpen = (userId) => open.filter((t) => t.ownerId === userId).map((t) => t.title)
+  let left = [...suspects.values()].filter((s) => !excused(s, mineOpen(s.userId)))
+  if (!left.length) return { problems: [], incomplete: false }
   // Своё название могло быть у сделанной задачи: её среди открытых нет.
-  const own = await ownTasks([...new Set(found.map((f) => f.userId))])
+  const own = await ownTasks([...new Set(left.map((s) => s.userId))])
   if (!own.full) return { problems: [], incomplete: true }
-  const problems = found
-    .filter((f) => !own.tasks.some((t) => t.ownerId === f.userId && padded(t.title).includes(f.key) && f.said.includes(padded(t.title))))
-    .map(({ userId, title, owners }) => ({ userId, title, owners }))
-  return { problems: problems.slice(0, PROBLEMS_MAX), incomplete: false }
+  left = left.filter((s) => !excused(s, own.tasks.filter((t) => t.ownerId === s.userId).map((t) => t.title)))
+  return { problems: left.slice(0, PROBLEMS_MAX).map((s) => ({ userId: s.userId, title: s.title, owners: [...s.owners.values()] })), incomplete: false }
 }
 
 /**
