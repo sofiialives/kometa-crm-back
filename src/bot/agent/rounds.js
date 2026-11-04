@@ -82,6 +82,46 @@ export function confirmText({ topic, collect, deadlineAt, count, links }) {
   return lines.join('\n')
 }
 
+/** Идущие поручения автора с отчётом, где среди адресатов есть кто-то из этого черновика. */
+async function overlapping(owner, ids, labels) {
+  const rounds = await prisma.botRound.findMany({
+    where: { ownerId: owner.id, status: 'sent', collect: true, targets: { some: { userId: { in: ids }, status: { in: ['pending', 'sent', 'answered'] } } } },
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+    include: { targets: { where: { userId: { in: ids }, status: { in: ['pending', 'sent', 'answered'] } }, select: { userId: true } } },
+  })
+  const round = rounds[0]
+  if (!round) return null
+  return { id: round.id, topic: round.topic, deadlineAt: round.deadlineAt, people: round.targets.map((t) => labels.get(t.userId)).filter(Boolean) }
+}
+
+/** Что сказать модели, когда тем же людям поручение уже идёт. */
+export function runningText(r) {
+  return `Черновик не создан. Тем же людям (${r.people.join(', ')}) уже идёт поручение «${plain(r.topic, 120)}», id ${r.id}, сбор до ${hm(r.deadlineAt)}. Если просят прислать отчёт через другое время, вызови set_round_deadline, новое поручение не нужно. Если Ян прямо просит ещё одно поручение, вызови message_people ещё раз с new_round true.`
+}
+
+/** Поручение, в котором ждём ответы и отчёт: последнее или по id, только своё. */
+function runningRound(owner, roundId) {
+  return prisma.botRound.findFirst({
+    where: { ownerId: owner.id, status: 'sent', collect: true, ...(roundId ? { id: String(roundId) } : {}) },
+    orderBy: { createdAt: 'desc' },
+  })
+}
+
+/**
+ * Поменять срок отчёта у идущего поручения: «пришли отчёт через 30 минут».
+ * Только тот, кто поручил. Срок считаем от сейчас, не короче 10 минут и не
+ * дольше 8 часов. Возвращает текст для модели.
+ */
+export async function setRoundDeadline(owner, roundId, minutes, now = new Date()) {
+  const round = await runningRound(owner, roundId)
+  if (!round) return 'Идущего поручения с отчётом нет, менять нечего. Если нужно новое, вызови message_people.'
+  const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
+  const changed = await prisma.botRound.updateMany({ where: { id: round.id, status: 'sent' }, data: { deadlineAt } })
+  if (!changed.count) return 'Отчёт уже собирается, срок не поменять. Скажи об этом коротко.'
+  return `Срок отчёта теперь ${hm(deadlineAt)}. Скажи об этом коротко. Новое поручение не создавай.`
+}
+
 /**
  * Что сказать модели, когда в тексте человеку названа чужая задача. Чьё это,
  * называем только тому, кого спрашивающий и так видит.
@@ -98,7 +138,7 @@ export function foreignText(problems, labels, viewer) {
  * Черновик поручения от агента. messages — [{ person_id, text }].
  * Возвращает { shown, text }: показан ли черновик и текст для модели.
  */
-export async function createDraft(owner, chatId, { topic, minutes, collect = true, messages = [] }, now = new Date()) {
+export async function createDraft(owner, chatId, { topic, minutes, collect = true, messages = [], new_round: newRound = false }, now = new Date()) {
   const seen = new Set()
   const people = []
   const skipped = []
@@ -128,6 +168,12 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   }
 
   const labels = labelsFor(people.map((p) => p.person))
+  // Тем же людям уже идёт поручение с отчётом: «пришли отчёт через 30 минут» это
+  // новый срок, а не новое поручение. Второе пошло бы людям и дало бы второй отчёт.
+  if (collect && !newRound) {
+    const running = await overlapping(owner, people.map((p) => p.person.id), labels)
+    if (running) return { shown: false, text: runningText(running) }
+  }
   // Чужая задача в тексте человека — модель могла перепутать людей. Черновик не создаём.
   const foreign = await foreignTitles(people.map((p) => ({ userId: p.person.id, text: p.text })), owner)
   if (foreign.incomplete) return { shown: false, text: 'Черновик не создан, проверить названия задач не вышло, их слишком много. Скажи об этом коротко и предложи попробовать позже.' }

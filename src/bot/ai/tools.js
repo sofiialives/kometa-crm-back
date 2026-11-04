@@ -1,7 +1,7 @@
 import { comeBack, runningLate, startBreak } from '../agent/away.js'
 import { askReminderTime, createReminder } from '../agent/remind.js'
 import { tellChat } from '../agent/notify.js'
-import { askReportNow, createDraft, finishAnswer, roundStatus } from '../agent/rounds.js'
+import { askReportNow, createDraft, finishAnswer, roundStatus, setRoundDeadline } from '../agent/rounds.js'
 import { uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
 import { personBrief, teamBrief, worksBrief } from './context.js'
@@ -165,6 +165,7 @@ export function teamTools(ctx, { team = false } = {}) {
         topic: { type: 'string', description: 'Что нужно узнать или передать, одной строкой, для отчёта.' },
         minutes: nullable('integer', 'Сколько минут собирать ответы, от 10 до 480. null, если не сказали, тогда 60.'),
         collect: { type: 'boolean', description: 'true, если нужны ответы и отчёт. false, если просто передать.' },
+        new_round: { type: 'boolean', description: 'true, только если Ян прямо просит ещё одно поручение, пока этим же людям идёт прежнее. Иначе false.' },
         messages: {
           type: 'array',
           items: object({ person_id: { type: 'string' }, text: { type: 'string', description: 'Сообщение этому человеку.' } }),
@@ -175,6 +176,15 @@ export function teamTools(ctx, { team = false } = {}) {
         ctx.quiet ||= res.shown
         return res.text
       },
+    },
+    {
+      name: 'set_round_deadline',
+      description: 'Поменять срок отчёта у идущего поручения. Когда просят прислать отчёт через столько-то минут, пока поручение идёт, вызови это, а не message_people: новое поручение тем же людям не нужно. Меняет только тот, кто поручил. minutes это через сколько минут от сейчас прислать отчёт, от 10 до 480. round_id null, это последнее идущее поручение.',
+      input_schema: object({
+        minutes: { type: 'integer', description: 'Через сколько минут от сейчас.' },
+        round_id: nullable('string', 'id поручения или null.'),
+      }),
+      run: (input) => setRoundDeadline(user, input.round_id, input.minutes, now),
     },
     {
       name: 'get_round',
