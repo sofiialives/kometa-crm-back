@@ -402,13 +402,41 @@ export function resolvePaidAt(previous, paid, sentAt = null, now = new Date()) {
  *
  * Чужой id (не из расходов этой услуги) и повторный id пропускаем: записать
  * его второй раз значило бы упасть на уникальном ключе.
+ *
+ * Устаревшая страница, открытая до обновления, шлёт строки без id и без paid.
+ * Такие строки сопоставляем с ещё не занятым прежним расходом той же услуги
+ * по паре «название и сумма» — иначе первое же сохранение с неё стёрло бы
+ * все отметки. Строка с id или paid — уже новая форма, её по паре не ищем.
  */
 export function expenseRows(expenses, previous = [], now = new Date()) {
+  const incoming = expenses || []
   const before = new Map(previous.map((p) => [p.id, p]))
   const taken = new Set()
-  return (expenses || []).map((e) => {
-    const prev = e.id && before.has(e.id) && !taken.has(e.id) ? before.get(e.id) : null
-    if (prev) taken.add(prev.id)
+  const matched = incoming.map(() => null)
+
+  // Сначала по id: строка, которая знает свой расход, не должна остаться без
+  // него из-за того, что похожая строка без id оказалась в списке раньше.
+  incoming.forEach((e, i) => {
+    if (e.id && before.has(e.id) && !taken.has(e.id)) {
+      matched[i] = before.get(e.id)
+      taken.add(e.id)
+    }
+  })
+
+  // Потом строки старой формы.
+  incoming.forEach((e, i) => {
+    if (e.id || e.paid !== undefined) return
+    const title = e.title.trim()
+    const amountCents = toCents(e.amount)
+    const prev = previous.find((p) => !taken.has(p.id) && p.title === title && p.amountCents === amountCents)
+    if (prev) {
+      matched[i] = prev
+      taken.add(prev.id)
+    }
+  })
+
+  return incoming.map((e, i) => {
+    const prev = matched[i]
     const paid = e.paid === undefined ? Boolean(prev?.paid) : e.paid
     return {
       ...(prev ? { id: prev.id, createdAt: prev.createdAt } : {}),

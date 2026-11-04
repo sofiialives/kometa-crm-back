@@ -524,6 +524,84 @@ describe('отметка «выплачено» у расходов', () => {
   })
 })
 
+describe('устаревшая форма без id и paid не стирает отметки', () => {
+  const NOW = new Date('2026-11-04T10:00:00.000Z')
+  const PAID_AT = day('2026-10-20')
+  const CREATED = new Date('2026-10-01T08:00:00.000Z')
+  const stored = (id, title, amountCents, paid, paidAt = null) => ({ id, title, amountCents, paid, paidAt, createdAt: CREATED })
+  const before = [
+    stored('e1', 'Копирайтер', 5000, true, PAID_AT),
+    stored('e2', 'Дизайнер', 3000, false),
+    stored('e3', 'Подписка', 1000, true), // выплачен до появления отметки, без даты
+  ]
+
+  test('строка сопоставляется по названию и сумме: отметка, дата и id остаются', () => {
+    const rows = expenseRows([
+      { title: 'Копирайтер', amount: 50 },
+      { title: 'Дизайнер', amount: 30 },
+      { title: 'Подписка', amount: 10 },
+    ], before, NOW)
+    assert.deepEqual(rows.map((r) => [r.id, r.paid, r.paidAt]), [['e1', true, PAID_AT], ['e2', false, null], ['e3', true, null]])
+    assert.equal(rows[0].createdAt, CREATED)
+  })
+
+  test('порядок строк в запросе не важен, пробелы по краям названия тоже', () => {
+    const rows = expenseRows([{ title: '  Подписка ', amount: 10 }, { title: 'Копирайтер', amount: 50 }], before, NOW)
+    assert.deepEqual(rows.map((r) => r.id), ['e3', 'e1'])
+  })
+
+  test('сумма изменилась — это уже другая строка, отметки у неё нет', () => {
+    const [row] = expenseRows([{ title: 'Копирайтер', amount: 60 }], before, NOW)
+    assert.equal(row.id, undefined)
+    assert.equal(row.paid, false)
+    assert.equal(row.paidAt, null)
+  })
+
+  test('название изменилось — тоже другая строка', () => {
+    const [row] = expenseRows([{ title: 'Копирайтер Иван', amount: 50 }], before, NOW)
+    assert.equal(row.id, undefined)
+    assert.equal(row.paid, false)
+  })
+
+  test('одинаковые строки забирают одинаковые расходы по очереди, один расход — одной строке', () => {
+    const twins = [stored('a', 'Реклама', 100, true, PAID_AT), stored('b', 'Реклама', 100, false)]
+    const rows = expenseRows([
+      { title: 'Реклама', amount: 1 }, { title: 'Реклама', amount: 1 }, { title: 'Реклама', amount: 1 },
+    ], twins, NOW)
+    assert.deepEqual(rows.map((r) => [r.id, r.paid]), [['a', true], ['b', false], [undefined, false]])
+  })
+
+  test('строка со своим id не теряет расход из-за похожей строки без id выше неё', () => {
+    const rows = expenseRows([
+      { title: 'Копирайтер', amount: 50 },
+      { id: 'e1', title: 'Копирайтер', amount: 50, paid: true },
+    ], before, NOW)
+    assert.equal(rows[1].id, 'e1')
+    assert.equal(rows[1].paidAt, PAID_AT)
+    assert.equal(rows[0].id, undefined)
+    assert.equal(rows[0].paid, false)
+  })
+
+  test('строки новой формы не ищутся по паре: с paid без id это новый расход', () => {
+    const [row] = expenseRows([{ title: 'Копирайтер', amount: 50, paid: false }], before, NOW)
+    assert.equal(row.id, undefined)
+    assert.equal(row.paid, false)
+  })
+
+  test('чужой id тоже не повод искать по паре', () => {
+    const [row] = expenseRows([{ id: 'чужой', title: 'Копирайтер', amount: 50 }], before, NOW)
+    assert.equal(row.id, undefined)
+    assert.equal(row.paid, false)
+  })
+
+  test('сумма сравнивается в центах, без плавающей точки', () => {
+    const [row] = expenseRows([{ title: 'Копирайтер', amount: 50.0000001 }], before, NOW)
+    assert.equal(row.id, 'e1')
+    const cents = [stored('c', 'Копейки', 1010, true, PAID_AT)]
+    assert.equal(expenseRows([{ title: 'Копейки', amount: 10.1 }], cents, NOW)[0].id, 'c')
+  })
+})
+
 describe('доска целиком', () => {
   const NOW = new Date('2026-11-04T09:00:00.000Z')
   const expense = (amountCents, paid = false) => ({ amountCents, paid })
