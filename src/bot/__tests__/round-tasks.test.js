@@ -14,15 +14,18 @@ const task = (patchIn = {}) => ({ id: 't1', title: POSTS, status: 'today', owner
 
 describe('названия задач в тексте поручения', () => {
   test('названия в кавычках любого вида, без повторов', () => {
-    assert.deepEqual(quotedTitles('Денис, как «Макет баннера» и «Макет баннера»? Ещё «Посты»'), ['Макет баннера', 'Посты'])
-    assert.deepEqual(quotedTitles('как "Макет баннера", „Лендинг“, “Визитка” и \'Сайт\''), ['Макет баннера', 'Лендинг', 'Визитка', 'Сайт'])
-    assert.deepEqual(quotedTitles('без кавычек, только слова'), [])
+    assert.deepEqual(quotedTitles('Денис, как «Макет баннера» и «Макет баннера»? Ещё «Посты»'), { titles: ['Макет баннера', 'Посты'], truncated: false })
+    assert.deepEqual(quotedTitles('как "Макет баннера", „Лендинг“, “Визитка” и \'Сайт\'').titles, ['Макет баннера', 'Лендинг', 'Визитка', 'Сайт'])
+    assert.deepEqual(quotedTitles('без кавычек, только слова'), { titles: [], truncated: false })
   })
 
-  test('короткие упоминания отбрасываем сразу, и не больше двадцати названий', () => {
-    assert.deepEqual(quotedTitles('«а» и «ок» и «Сайт»'), ['Сайт'])
+  test('короткие упоминания отбрасываем сразу, больше двадцати не берём, и об этом сказано', () => {
+    assert.deepEqual(quotedTitles('«а» и «ок» и «Сайт»'), { titles: ['Сайт'], truncated: true })
     const text = Array.from({ length: 50 }, (_, i) => `«Задача ${i}»`).join(' ')
-    assert.equal(quotedTitles(text).length, MENTIONS_MAX)
+    const many = quotedTitles(text)
+    assert.equal(many.titles.length, MENTIONS_MAX)
+    assert.equal(many.truncated, true)
+    assert.equal(quotedTitles(Array.from({ length: MENTIONS_MAX }, (_, i) => `«Задача ${i}»`).join(' ')).truncated, false)
   })
 
   test('то же название с точностью до регистра, ё и знаков; сокращение не короче шести букв', () => {
@@ -166,6 +169,21 @@ describe('свежие задачи при отправке', () => {
     patch(t, prisma.task, 'findMany', async () => [mine({ status: 'done' }), mine({ id: 't2', title: 'Макет баннера', status: 'progress' })])
     assert.equal(await allTitlesDone('denis', `Как «${POSTS}» и «Макет баннера»?`), false)
     assert.equal(await allTitlesDone('denis', `Как «${POSTS}»?`), true)
+  })
+
+  test('не писать можно, только если каждое упоминание найдено сделанным; иначе сообщение уходит как обычно', async (t) => {
+    const mine = (patchIn) => task({ ownerId: 'denis', owner: denis, ...patchIn })
+    patch(t, prisma.task, 'findMany', async () => [mine({ status: 'done' }), mine({ id: 't2', title: 'Макет баннера', status: 'done' })])
+    assert.equal(await allTitlesDone('denis', `Как «${POSTS}» и «Макет баннера»?`), true)
+    // Второе упоминание, например клиент, среди задач не нашлось: проверено не всё.
+    assert.equal(await allTitlesDone('denis', `Как «${POSTS}» для «Румикс»?`), false)
+    // Короткое упоминание отброшено до запроса: список неполный.
+    assert.equal(await allTitlesDone('denis', `Как «${POSTS}» и «ок»?`), false)
+    // Больше двадцати упоминаний: остальные не проверены.
+    const titles = Array.from({ length: MENTIONS_MAX + 1 }, (_, i) => `Задача номер ${i}`)
+    patch(t, prisma.task, 'findMany', async () => titles.map((title, i) => mine({ id: `d${i}`, title, status: 'done' })))
+    assert.equal(await allTitlesDone('denis', titles.slice(0, MENTIONS_MAX).map((x) => `«${x}»`).join(' ')), true)
+    assert.equal(await allTitlesDone('denis', titles.map((x) => `«${x}»`).join(' ')), false)
   })
 
   test('в отчёте отдельно сказано, кому не писали и почему', () => {

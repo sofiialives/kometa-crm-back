@@ -22,18 +22,29 @@ export const MENTIONS_MAX = 20
 export const MIN_MENTION = 4
 
 /**
- * Названия в кавычках из текста, без повторов. Это названия задач, а бывает
- * и клиентов. Слишком короткие отбрасываем сразу, больше MENTIONS_MAX не
- * берём: в запрос к базе уходит ограниченное число.
+ * Названия в кавычках из текста, без повторов: { titles, truncated }. Это
+ * названия задач, а бывает и клиентов. Слишком короткие отбрасываем сразу,
+ * больше MENTIONS_MAX не берём: в запрос уходит ограниченное число.
+ * truncated: что-то отброшено или обрезано, то есть список неполный, и
+ * решать по нему «всё проверено» нельзя.
  */
 export function quotedTitles(text) {
-  const found = []
+  const titles = []
+  let truncated = false
   for (const m of String(text ?? '').matchAll(QUOTED)) {
     const title = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]).trim()
-    if (squash(title).length >= MIN_MENTION && !found.includes(title)) found.push(title)
-    if (found.length >= MENTIONS_MAX) break
+    if (squash(title).length < MIN_MENTION) {
+      truncated = true
+      continue
+    }
+    if (titles.includes(title)) continue
+    if (titles.length >= MENTIONS_MAX) {
+      truncated = true
+      break
+    }
+    titles.push(title)
   }
-  return found
+  return { titles, truncated }
 }
 
 /**
@@ -126,19 +137,23 @@ export async function foreignTitles(items, viewer) {
 }
 
 /**
- * Все ли задачи, названные в тексте человеку, у него уже сделаны. Читаем
- * заново на момент отправки: черновик лежит до трёх часов, за это время
- * человек мог закрыть то, о чём мы хотим спросить. Названий нет или хоть
- * одна задача ещё открыта — нет.
+ * Можно ли не писать человеку: каждое названное в тексте упоминание
+ * проверено и найдено сделанным. Читаем заново на момент отправки:
+ * черновик лежит до трёх часов, за это время человек мог закрыть то, о чём
+ * мы хотим спросить. Если упоминаний нет, часть отброшена или обрезана,
+ * какое-то не нашлось среди его задач или хоть одна задача ещё открыта,
+ * сообщение уходит как обычно.
  */
 export async function allTitlesDone(userId, text) {
-  const titles = quotedTitles(text)
-  if (!titles.length) return false
+  const { titles, truncated } = quotedTitles(text)
+  if (!titles.length || truncated) return false
   const mine = await tasksNamed(titles, { ownerId: userId })
   // Упёрлись в предел выборки — не уверены, что видим все задачи, пишем как есть.
   if (mine.length >= NAMED_MAX) return false
-  const named = titles.flatMap((title) => mine.filter((t) => sameTitle(title, t.title)))
-  return named.length > 0 && named.every((t) => t.status === 'done')
+  return titles.every((title) => {
+    const found = mine.filter((t) => sameTitle(title, t.title))
+    return found.length > 0 && found.every((t) => t.status === 'done')
+  })
 }
 
 /** Числа открытых задач словами: личные и по Иерархии раздельно. */
@@ -161,10 +176,10 @@ export function countsSummary(counts) {
  */
 export async function taskStates(targets, now = new Date()) {
   const ids = [...new Set(targets.map((t) => t.userId))]
-  const titles = [...new Set(targets.flatMap((t) => quotedTitles(t.text)))]
+  const titles = [...new Set(targets.flatMap((t) => quotedTitles(t.text).titles))]
   const [counts, named] = await Promise.all([taskCounts(ids, now), tasksNamed(titles, { ownerId: { in: ids } })])
   return new Map(targets.map(({ userId, text }) => {
-    const mentions = quotedTitles(text)
+    const mentions = quotedTitles(text).titles
     const mine = named.filter((t) => t.ownerId === userId && mentions.some((m) => sameTitle(m, t.title)))
     return [userId, {
       named: mine.slice(0, 5).map((t) => ({ title: t.title, state: [stateWord(t, now), ...(isOverdue(t, now) ? ['просрочена'] : [])].join(', ') })),
