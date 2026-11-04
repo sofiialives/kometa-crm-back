@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { teamWhere } from '../ai/context.js'
-import { VISIBLE } from './taskScope.js'
+import { isOverdue, stateWord, taskCounts, VISIBLE } from './taskScope.js'
 
 /**
  * Задачи в текстах поручений. Агент называет в сообщении человеку задачи, и
@@ -61,7 +61,7 @@ async function tasksNamed(titles, extra = {}) {
   return prisma.task.findMany({
     where: { AND: [VISIBLE, extra, { OR: titles.map((title) => ({ title: { contains: title, mode: 'insensitive' } })) }] },
     take: NAMED_MAX,
-    select: { id: true, title: true, status: true, ownerId: true, owner: OWNER },
+    select: { id: true, title: true, status: true, deadline: true, origin: true, ownerId: true, owner: OWNER },
   })
 }
 
@@ -139,4 +139,37 @@ export async function allTitlesDone(userId, text) {
   if (mine.length >= NAMED_MAX) return false
   const named = titles.flatMap((title) => mine.filter((t) => sameTitle(title, t.title)))
   return named.length > 0 && named.every((t) => t.status === 'done')
+}
+
+/** Числа открытых задач словами: личные и по Иерархии раздельно. */
+export function countsSummary(counts) {
+  const parts = []
+  const names = { personal: 'личные', hierarchy: 'по Иерархии' }
+  for (const kind of ['personal', 'hierarchy']) {
+    const c = counts?.[kind]
+    if (c?.open) parts.push(`${names[kind]} открыто ${c.open}, в процессе ${c.progress}, просрочено ${c.overdue}`)
+  }
+  return parts.join(', ') || 'открытых задач нет'
+}
+
+/**
+ * Состояние задач адресатов на момент отчёта, а не на момент вопроса:
+ * человек за это время мог всё сделать. Для каждого — задачи, названные в
+ * отправленном ему тексте (с состоянием: сделана, в процессе, открыта,
+ * просрочена) и числа по всем его открытым задачам. targets — [{ userId, text }].
+ * Возвращает Map: userId → { named: [{ title, state }], counts, summary }.
+ */
+export async function taskStates(targets, now = new Date()) {
+  const ids = [...new Set(targets.map((t) => t.userId))]
+  const titles = [...new Set(targets.flatMap((t) => quotedTitles(t.text)))]
+  const [counts, named] = await Promise.all([taskCounts(ids, now), tasksNamed(titles, { ownerId: { in: ids } })])
+  return new Map(targets.map(({ userId, text }) => {
+    const mentions = quotedTitles(text)
+    const mine = named.filter((t) => t.ownerId === userId && mentions.some((m) => sameTitle(m, t.title)))
+    return [userId, {
+      named: mine.slice(0, 5).map((t) => ({ title: t.title, state: [stateWord(t, now), ...(isOverdue(t, now) ? ['просрочена'] : [])].join(', ') })),
+      counts: counts.get(userId),
+      summary: countsSummary(counts.get(userId)),
+    }]
+  }))
 }

@@ -8,7 +8,7 @@ import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
 import { hm } from './format.js'
 import { chatOf, claimNotice, hasNotice, releaseNotice, tell, tellChat } from './notify.js'
-import { allTitlesDone, foreignTitles } from './roundTasks.js'
+import { allTitlesDone, foreignTitles, taskStates } from './roundTasks.js'
 
 /**
  * Поручения агенту: «опроси команду, меня не будет два часа», «напиши
@@ -314,7 +314,7 @@ function plainReport(p) {
 }
 
 /** Текст отчёта для того, кто поручил. ai — { [userId]: { points, quote } } или null. */
-export function reportText({ round, answered, silent, failed, skipped = [], ai }) {
+export function reportText({ round, answered, silent, failed, skipped = [], ai, states = null }) {
   const lines = [
     '<b>Отчёт по опросу</b>',
     escapeHtml(cut(round.topic, 300)),
@@ -329,6 +329,10 @@ export function reportText({ round, answered, silent, failed, skipped = [], ai }
     // Пункты пишет модель — в стиле бота; цитата — слово в слово.
     for (const point of (r.points ?? []).slice(0, 4)) lines.push(`• ${escapeHtml(plainStyle(cut(String(point).replace(/^\s*[-—–*•]\s*/, ''), 300)))}`)
     if (r.quote) lines.push(`<i>«${escapeHtml(cut(r.quote, 200))}»</i>`)
+    // Задачи на момент отчёта рядом с ответом: слова человека и CRM могут расходиться.
+    const st = states?.get(p.userId)
+    if (st?.named.length) lines.push('Задачи сейчас', ...st.named.map((n) => `• ${escapeHtml(plain(n.title, 90))}, ${n.state}`))
+    else if (st) lines.push(`Задачи сейчас, ${st.summary}`)
     const files = p.messages.filter((m) => IN.includes(m.direction) && m.fileId).length
     if (files) lines.push(`Прислал файлов ${files}, они ниже`)
   }
@@ -392,19 +396,26 @@ async function gather(round) {
   }
 }
 
-async function composeReport(round, people) {
+async function composeReport(round, people, now = new Date()) {
+  // Задачи перечитываем на момент отчёта. Не вышло прочитать — отчёт без них, а не без отчёта.
+  const states = people.answered.length
+    ? await taskStates(people.answered.map((t) => ({ userId: t.userId, text: t.text })), now).catch((e) => {
+      console.error(`[агент] задачи для отчёта: ${e.name}`)
+      return null
+    })
+    : null
   const ai = people.answered.length
     ? await aiReport({
       ownerId: round.ownerId,
       role: round.owner?.role ?? 'admin',
       topic: round.topic,
-      people: people.answered.map((t) => ({ id: t.userId, label: t.label, summary: t.summary, messages: t.messages })),
+      people: people.answered.map((t) => ({ id: t.userId, label: t.label, summary: t.summary, messages: t.messages, tasks: states?.get(t.userId) ?? null })),
     }).catch((e) => {
       console.error(`[агент] отчёт моделью: ${e.name}`)
       return null
     })
     : null
-  return reportText({ round, ...people, ai })
+  return reportText({ round, ...people, ai, states })
 }
 
 /**
@@ -456,7 +467,7 @@ export async function sendRoundReport(roundId, now = new Date()) {
       return { ok: false, reason: 'no_chat' }
     }
     const people = await gather(round)
-    const text = round.reportText ?? await composeReport(round, people)
+    const text = round.reportText ?? await composeReport(round, people, now)
     if (!round.reportText) await prisma.botRound.update({ where: { id: round.id }, data: { reportText: text } })
     // Отчёт несёт слова сотрудников — в памяти агента он не его реплика.
     const res = await sendPart(round.id, 'text', () => tellChat(chatId, text, { userId: round.ownerId, source: 'report' }))
