@@ -154,7 +154,7 @@ export function teamTools(ctx, { team = false } = {}) {
     },
     {
       name: 'get_works',
-      description: 'Активные работы в Иерархии: клиент, работа, кто ведёт, сколько задач открыто и просрочено. query это часть названия клиента или работы, null для всех.',
+      description: 'Активные работы в Иерархии: клиент, работа, кто ведёт, у кого из людей сколько открытых и просроченных задач и сами задачи с именами. query это часть названия клиента или работы, null для всех.',
       input_schema: object({ query: nullable('string', 'Клиент или работа, или null.') }),
       run: (input) => worksBrief(user, input.query, now),
     },

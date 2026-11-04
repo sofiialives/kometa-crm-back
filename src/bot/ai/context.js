@@ -2,10 +2,10 @@ import { prisma } from '../../config/prisma.js'
 import { PARTICIPANT_ROLES } from '../../services/motivation/access.js'
 import { currentMonthKey } from '../../services/motivation/month.js'
 import { computeRows } from '../../services/motivation/teamRows.js'
-import { mskDateStart } from '../../services/motivation/taskRules.js'
 import { monthTitle } from '../../services/motivation/exportTable.js'
 import { mskDayKey } from '../plan.js'
-import { duration, hm } from '../agent/format.js'
+import { dateShort, duration, hm } from '../agent/format.js'
+import { BLOCKS, dayBounds, dueText, isOverdue, KIND_TITLE, stateWord, taskCounts, tasksOf, VISIBLE } from '../agent/taskScope.js'
 import { plain } from './limits.js'
 
 /**
@@ -20,10 +20,8 @@ import { plain } from './limits.js'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const USER_SELECT = { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } }
-const STATUS = { today: 'не начата', progress: 'в процессе', done: 'готово' }
 const dollars = (cents) => `$${(cents / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })}`
 const firstName = (name) => String(name || '').trim().split(/\s+/)[0] || 'Сотрудник'
-const dateShort = (date) => new Date(date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' })
 
 /**
  * Как называть людей в ответах и отчётах — «(Отдел) Имя», как просил Ян.
@@ -45,11 +43,6 @@ export const labelOf = (user) => labelsFor([user]).get(user.id)
 function nowLine(now) {
   const t = new Date(now).toLocaleString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' })
   return `Сейчас ${t}, время московское.`
-}
-
-function dayBounds(now) {
-  const start = mskDateStart(mskDayKey(now))
-  return { start, end: new Date(start.getTime() + DAY_MS) }
 }
 
 function motivationLine(row, monthKey, failed = false) {
@@ -82,47 +75,54 @@ function awayText(away, ended) {
   return ended ? 'закончил день' : 'на месте'
 }
 
-const TASK_SELECT = {
-  id: true, title: true, status: true, deadline: true, startAt: true, doneAt: true, origin: true,
-  work: { select: { title: true, client: { select: { name: true } } } },
+// Сколько строк в каждом списке задач; остальное приписывается как «и ещё N».
+const TAKE = { overdue: 8, today: 12, later: 6, done: 8 }
+const TAKE_PERSON = { overdue: 12, today: 15, later: 8, done: 8 }
+const BLOCK_TITLE = { overdue: 'Просроченные', today: 'На сегодня', later: 'На завтра и позже', done: 'Сделано сегодня' }
+
+/**
+ * Числа по одному виду задач словами. Личные считаются по статусу («не
+ * начато» — со сроком не позже сегодня), из Иерархии «не начата» не бывает.
+ */
+export function countsText(kind, c, { later = true } = {}) {
+  const parts = [`открыто ${c.open}`]
+  if (kind === 'personal') parts.push(`не начато ${c.notStarted}`)
+  parts.push(`в процессе ${c.progress}`, `просрочено ${c.overdue}`)
+  if (later) parts.push(`на завтра и позже ${c.later}`)
+  parts.push(`сделано сегодня ${c.done}`)
+  return parts.join(', ')
 }
 
-/** Задачи человека, разложенные так, как о них спрашивают. */
-async function tasksOf(userId, now, { take = 12 } = {}) {
+/** Строка задачи. owner — «(Отдел) Имя», если в одном списке бывают чужие задачи. */
+export function taskLine(t, now, { owner = null } = {}) {
+  const parts = []
+  if (owner) parts.push(owner)
+  parts.push(`«${plain(t.title, 90)}»`)
+  if (t.status === 'done') {
+    parts.push(t.doneAt ? `сделана в ${hm(t.doneAt)}` : 'сделана')
+  } else {
+    parts.push(stateWord(t, now))
+    if (isOverdue(t, now)) parts.push('просрочена')
+    parts.push(dueText(t, now))
+  }
   const { start, end } = dayBounds(now)
-  const open = { ownerId: userId, status: { in: ['today', 'progress'] } }
-  const [todayList, progressList, overdueList, doneList, later] = await Promise.all([
-    prisma.task.findMany({ where: { ownerId: userId, status: 'today', deadline: { gte: start, lt: end } }, orderBy: { deadline: 'asc' }, take, select: TASK_SELECT }),
-    prisma.task.findMany({ where: { ownerId: userId, status: 'progress', deadline: { gte: start } }, orderBy: { deadline: 'asc' }, take, select: TASK_SELECT }),
-    prisma.task.findMany({ where: { ...open, deadline: { lt: start } }, orderBy: { deadline: 'desc' }, take, select: TASK_SELECT }),
-    prisma.task.findMany({ where: { ownerId: userId, status: 'done', doneAt: { gte: start } }, orderBy: { doneAt: 'desc' }, take, select: TASK_SELECT }),
-    prisma.task.count({ where: { ownerId: userId, status: 'today', deadline: { gte: end } } }),
-  ])
-  return { todayList, progressList, overdueList, doneList, later }
-}
-
-function taskLine(t, now) {
-  const { start, end } = dayBounds(now)
-  const today = t.deadline >= start && t.deadline < end
-  const parts = [`«${plain(t.title, 90)}»`]
-  parts.push(t.origin === 'hierarchy' ? `Иерархия${t.work ? `, клиент ${plain(t.work.client?.name, 40)}, работа «${plain(t.work.title, 60)}»` : ''}` : 'личная')
-  if (t.status === 'done') parts.push(t.doneAt ? `сделана в ${hm(t.doneAt)}` : 'сделана')
-  else parts.push(STATUS[t.status], today ? `срок сегодня ${hm(t.deadline)}` : `срок ${dateShort(t.deadline)}`)
-  if (t.startAt && t.status === 'today' && today) parts.push(`начало ${hm(t.startAt)}`)
+  if (t.startAt && t.status === 'today' && t.deadline >= start && t.deadline < end) parts.push(`начало ${hm(t.startAt)}`)
+  if (t.origin === 'hierarchy' && t.work) parts.push(`клиент ${plain(t.work.client?.name, 40)}, работа «${plain(t.work.title, 60)}»`)
   return `- ${parts.join(', ')}`
 }
 
-function tasksBlock(tasks, now) {
-  const lines = []
-  const block = (title, list, empty) => {
-    if (list.length) lines.push(`${title}, ${list.length}\n${list.map((t) => taskLine(t, now)).join('\n')}`)
-    else if (empty) lines.push(empty)
+/** Задачи одного человека: личные и по Иерархии раздельно, числа настоящие. */
+export function tasksBlock(sections, now) {
+  const lines = ['Просрочена значит срок прошёл, а задача не сделана, как в CRM. Числа ниже пересекаются, не складывай их.']
+  for (const { kind, counts, lists } of sections) {
+    lines.push(KIND_TITLE[kind], countsText(kind, counts))
+    for (const block of BLOCKS) {
+      const list = lists[block]
+      if (!list.length) continue
+      lines.push(`${BLOCK_TITLE[block]}, ${counts[block]}`, ...list.map((t) => taskLine(t, now)))
+      if (counts[block] > list.length) lines.push(`и ещё ${counts[block] - list.length}`)
+    }
   }
-  block('Не начатые на сегодня', tasks.todayList, 'Не начатых задач на сегодня нет.')
-  block('В процессе', tasks.progressList, 'В процессе задач нет.')
-  block('Просроченные', tasks.overdueList, null)
-  block('Сделано сегодня', tasks.doneList, 'Сегодня пока ничего не закрыто.')
-  if (tasks.later) lines.push(`Не начатых со сроком позже ещё ${tasks.later}.`)
   return lines.join('\n')
 }
 
@@ -156,7 +156,7 @@ export async function staffBrief(userId, now = new Date()) {
   const monthKey = currentMonthKey(now)
   const [{ rows, failed }, tasks, calls, aways, checkin, ended] = await Promise.all([
     rowsSafe([user], monthKey, now),
-    tasksOf(userId, now),
+    tasksOf(userId, now, TAKE),
     callsOf(userId, now),
     activeAwayOf([userId], now),
     prisma.botCheckinAnswer.findFirst({
@@ -196,14 +196,13 @@ export async function teamBrief(viewer, now = new Date()) {
   const ids = users.map((u) => u.id)
   const monthKey = currentMonthKey(now)
   const day = mskDayKey(now)
-  const { start, end } = dayBounds(now)
-  const [{ rows, failed }, aways, breaks, answers, open, done, dayEnds, pending] = await Promise.all([
+  const { start } = dayBounds(now)
+  const [{ rows, failed }, aways, breaks, answers, counts, dayEnds, pending] = await Promise.all([
     rowsSafe(users, monthKey, now),
     activeAwayOf(ids, now),
     prisma.motivationAway.findMany({ where: { userId: { in: ids }, kind: 'break', from: { gte: start } }, select: { userId: true, from: true, until: true, returnedAt: true } }),
     prisma.botCheckinAnswer.findMany({ where: { userId: { in: ids }, checkin: { day } }, select: { userId: true, status: true } }),
-    prisma.task.findMany({ where: { ownerId: { in: ids }, status: { in: ['today', 'progress'] }, deadline: { lt: end } }, select: { ownerId: true, status: true, deadline: true } }),
-    prisma.task.groupBy({ by: ['ownerId'], where: { ownerId: { in: ids }, status: 'done', doneAt: { gte: start } }, _count: true }),
+    taskCounts(ids, now),
     prisma.botNotice.findMany({ where: { key: { startsWith: `dayend:${day}:` } }, select: { key: true } }),
     viewer.role === 'admin' ? prisma.motivationReview.count({ where: { status: 'pending' } }) : Promise.resolve(null),
   ])
@@ -215,12 +214,12 @@ export async function teamBrief(viewer, now = new Date()) {
   const lines = [nowLine(now)]
   if (pending !== null) lines.push(`Заявок на баллы ждут решения ${pending}.`)
   if (failed) lines.push('Баллы и банки сейчас недоступны.')
-  lines.push(`Команда, ${users.length} чел. Задачи личные и из Иерархии вместе, со сроком до конца сегодня.`)
+  lines.push(`Команда, ${users.length} чел. Задачи считаются раздельно, личные и по Иерархии, это разные списки. По Иерархии только работы в статусе active. Просрочена значит срок прошёл, а задача не сделана, как в CRM. Числа у человека пересекаются, не складывай их.`)
   for (const u of users) {
-    const mine = open.filter((t) => t.ownerId === u.id)
     const parts = [`${labels.get(u.id)}, id ${u.id}${u.role === 'lead' ? ', руководитель' : ''}`]
     parts.push(awayText(aways.get(u.id), ended.has(u.id)))
-    parts.push(`задач не начато ${mine.filter((t) => t.status === 'today' && t.deadline >= start).length}, в процессе ${mine.filter((t) => t.status === 'progress' && t.deadline >= start).length}, просрочено ${mine.filter((t) => t.deadline < start).length}, сделано сегодня ${done.find((d) => d.ownerId === u.id)?._count ?? 0}`)
+    const c = counts.get(u.id)
+    parts.push(`личные задачи ${countsText('personal', c.personal, { later: false })}`, `задачи по Иерархии ${countsText('hierarchy', c.hierarchy, { later: false })}`)
     const r = rowOf.get(u.id)?.result
     if (r) parts.push(`баллы ${r.prizePoints}, банк ${dollars(r.bankCents)}, уровень ${r.currentLevel} из ${r.levels.length}`)
     const own = breaks.filter((b) => b.userId === u.id)
@@ -242,6 +241,19 @@ export async function personInScope(viewer, personId) {
   return prisma.user.findFirst({ where: { AND: [teamWhere(viewer), { id: String(personId) }] }, select: { ...USER_SELECT, telegram: { select: { chatId: true } } } })
 }
 
+/** Работы, в которых у человека есть открытые задачи, и сколько их — только его, только в активных работах. */
+async function openWorks(userId, take = 10) {
+  const by = await prisma.task.groupBy({
+    by: ['workId'],
+    where: { AND: [VISIBLE, { ownerId: userId, origin: 'hierarchy', status: { in: ['today', 'progress'] } }] },
+    _count: true,
+  })
+  if (!by.length) return []
+  const works = await prisma.work.findMany({ where: { id: { in: by.map((g) => g.workId) } }, select: { id: true, title: true, client: { select: { name: true } } } })
+  const counts = new Map(by.map((g) => [g.workId, g._count]))
+  return works.map((w) => ({ ...w, count: counts.get(w.id) })).sort((a, b) => b.count - a.count).slice(0, take)
+}
+
 /** Всё о человеке: задачи, работы, мотивация, отлучки, что писал боту. */
 export async function personBrief(viewer, personId, now = new Date()) {
   const user = await personInScope(viewer, personId)
@@ -250,16 +262,11 @@ export async function personBrief(viewer, personId, now = new Date()) {
   const { start } = dayBounds(now)
   const [{ rows, failed }, tasks, calls, aways, breaks, works, said, ended] = await Promise.all([
     rowsSafe([user], monthKey, now),
-    tasksOf(user.id, now, { take: 15 }),
+    tasksOf(user.id, now, TAKE_PERSON),
     callsOf(user.id, now),
     activeAwayOf([user.id], now),
     prisma.motivationAway.findMany({ where: { userId: user.id, kind: 'break', from: { gte: start } }, orderBy: { from: 'asc' }, select: { from: true, until: true, returnedAt: true, reason: true } }),
-    prisma.work.findMany({
-      where: { status: 'active', assignees: { some: { id: user.id } } },
-      orderBy: { updatedAt: 'desc' },
-      take: 10,
-      select: { title: true, client: { select: { name: true } }, tasks: { where: { ownerId: user.id, status: { in: ['today', 'progress'] } }, select: { id: true } } },
-    }),
+    openWorks(user.id),
     prisma.botMessage.findMany({
       where: { userId: user.id, direction: { in: ['in', 'reply'] }, createdAt: { gte: new Date(now.getTime() - DAY_MS) } },
       orderBy: { createdAt: 'desc' },
@@ -274,8 +281,8 @@ export async function personBrief(viewer, personId, now = new Date()) {
     motivationLine(rows[0], monthKey, failed),
     `Задачи\n${tasksBlock(tasks, now)}`,
     works.length
-      ? `Работы в Иерархии\n${works.map((w) => `- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», его открытых задач ${w.tasks.length}`).join('\n')}`
-      : 'Работ в Иерархии нет.',
+      ? `Работы в Иерархии, где у него есть открытые задачи\n${works.map((w) => `- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», его открытых задач ${w.count}`).join('\n')}`
+      : 'Открытых задач в работах Иерархии у него нет.',
     callsLine(calls),
   ]
   if (breaks.length) lines.push(`Отлучки сегодня\n${breaks.map((b) => `- с ${hm(b.from)} до ${hm(b.returnedAt ?? b.until)}${b.reason ? `, «${plain(b.reason, 60)}»` : ''}`).join('\n')}`)
@@ -283,28 +290,70 @@ export async function personBrief(viewer, personId, now = new Date()) {
   return lines.join('\n')
 }
 
-/** Клиенты и работы в Иерархии: кто ведёт и сколько открытых задач. */
+// Сколько открытых задач одной работы показываем строками; остальное — «и ещё N».
+const WORK_TASKS = 6
+const WORKS_MAX = 40
+
+/**
+ * Клиенты и работы в Иерархии: кто ведёт, а у кого какие открытые задачи.
+ * Задачи названы по людям: у каждой строки владелец «(Отдел) Имя», числа
+ * считает база. Ведёт и владеет задачами не всегда одни и те же люди.
+ */
 export async function worksBrief(viewer, query = null, now = new Date()) {
   // Работы видят только Ян (все) и руководитель (своего отдела).
   if (viewer?.role !== 'admin' && viewer?.role !== 'lead') return 'Работы в Иерархии тебе не видны.'
   const scope = viewer.role === 'admin' ? {} : { departmentId: viewer.departmentId ?? '__none__' }
   const q = String(query ?? '').trim().slice(0, 60)
-  const works = await prisma.work.findMany({
-    where: { status: 'active', ...scope, ...(q ? { OR: [{ title: { contains: q, mode: 'insensitive' } }, { client: { name: { contains: q, mode: 'insensitive' } } }] } : {}) },
-    orderBy: [{ client: { name: 'asc' } }, { title: 'asc' }],
-    take: 40,
-    select: {
-      title: true,
-      client: { select: { name: true } },
-      department: { select: { name: true } },
-      assignees: { where: { active: true }, select: { id: true, name: true, role: true, department: { select: { name: true } } } },
-      tasks: { where: { status: { in: ['today', 'progress'] } }, select: { status: true, deadline: true } },
-    },
-  })
+  const where = { status: 'active', ...scope, ...(q ? { OR: [{ title: { contains: q, mode: 'insensitive' } }, { client: { name: { contains: q, mode: 'insensitive' } } }] } : {}) }
+  const [works, total] = await Promise.all([
+    prisma.work.findMany({
+      where,
+      orderBy: [{ client: { name: 'asc' } }, { title: 'asc' }],
+      take: WORKS_MAX,
+      select: {
+        id: true,
+        title: true,
+        client: { select: { name: true } },
+        department: { select: { name: true } },
+        assignees: { where: { active: true }, select: { id: true, name: true, role: true, department: { select: { name: true } } } },
+      },
+    }),
+    prisma.work.count({ where }),
+  ])
   if (!works.length) return q ? `Активных работ по «${plain(q, 40)}» нет.` : 'Активных работ нет.'
-  const { start } = dayBounds(now)
-  return works.map((w) => {
+  const open = { workId: { in: works.map((w) => w.id) }, origin: 'hierarchy', status: { in: ['today', 'progress'] } }
+  const by = (extra = {}) => prisma.task.groupBy({ by: ['workId', 'ownerId'], where: { ...open, ...extra }, _count: true })
+  const [openBy, progressBy, overdueBy, sample] = await Promise.all([
+    by(),
+    by({ status: 'progress' }),
+    by({ deadline: { lt: now } }),
+    prisma.task.findMany({
+      where: open,
+      orderBy: { deadline: 'asc' },
+      take: WORKS_MAX * WORK_TASKS,
+      select: { id: true, title: true, status: true, deadline: true, startAt: true, doneAt: true, origin: true, ownerId: true, workId: true },
+    }),
+  ])
+  const ownerIds = [...new Set(openBy.map((g) => g.ownerId))]
+  const owners = ownerIds.length
+    ? await prisma.user.findMany({ where: { id: { in: ownerIds } }, select: USER_SELECT })
+    : []
+  const labels = labelsFor(owners)
+  const countOf = (rows, workId, ownerId = null) => rows.filter((g) => g.workId === workId && (!ownerId || g.ownerId === ownerId)).reduce((sum, g) => sum + g._count, 0)
+
+  const lines = []
+  if (total > works.length) lines.push(`Показаны ${works.length} работ из ${total}, для остальных уточни название в query.`)
+  for (const w of works) {
     const people = [...labelsFor(w.assignees).values()].join(', ') || 'никто не назначен'
-    return `- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», отдел ${plain(w.department?.name, 30)}; ведут ${people}; открытых задач ${w.tasks.length}, в процессе ${w.tasks.filter((t) => t.status === 'progress').length}, просрочено ${w.tasks.filter((t) => t.deadline < start).length}`
-  }).join('\n')
+    lines.push(`- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», отдел ${plain(w.department?.name, 30)}; ведут ${people}; открыто задач ${countOf(openBy, w.id)}, в процессе ${countOf(progressBy, w.id)}, просрочено ${countOf(overdueBy, w.id)}`)
+    const mine = openBy.filter((g) => g.workId === w.id).sort((a, b) => String(labels.get(a.ownerId)).localeCompare(String(labels.get(b.ownerId)), 'ru'))
+    for (const g of mine) {
+      lines.push(`  ${labels.get(g.ownerId) ?? 'Сотрудник'}, открыто ${g._count}, в процессе ${countOf(progressBy, w.id, g.ownerId)}, просрочено ${countOf(overdueBy, w.id, g.ownerId)}`)
+    }
+    const shown = sample.filter((t) => t.workId === w.id).slice(0, WORK_TASKS)
+    for (const t of shown) lines.push(`  ${taskLine(t, now, { owner: labels.get(t.ownerId) ?? 'Сотрудник' })}`)
+    const rest = countOf(openBy, w.id) - shown.length
+    if (rest > 0) lines.push(`  и ещё ${rest}`)
+  }
+  return lines.join('\n')
 }

@@ -21,6 +21,11 @@ export function at(date, now = new Date()) {
   return `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)} в ${hm(date)}`
 }
 
+/** «16 октября» по Москве. */
+export function dateShort(date) {
+  return new Date(date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' })
+}
+
 /** «5 мин», «1 ч», «1 ч 20 мин». */
 export function duration(minutes) {
   const m = Math.max(0, Math.round(minutes))
