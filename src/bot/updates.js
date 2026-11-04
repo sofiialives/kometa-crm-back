@@ -74,12 +74,14 @@ async function handleMessage(msg, files = filesOf(msg)) {
   // Только личная переписка: в группе бот не работает — общего чата нет.
   if (!chatId || msg.chat?.type !== 'private') return
 
-  const code = text.startsWith('/start') ? text.slice('/start'.length).trim() : ''
+  // «/start@имя_бота» тоже бывает: имя бота — не код.
+  const start = /^\/start(@\S+)?/.exec(text)
+  const code = start ? text.slice(start[0].length).trim() : ''
   if (!code) {
     // Уже подключённый человек — дальше разговор ведёт агент.
     const user = await userByChat(chatId)
     if (user) return onText(user, chatId, text, new Date(), { media, files })
-    if (shouldAnswerStranger(chatId, Date.now(), { start: text === '/start' })) await sendMessage(chatId, HELP)
+    if (shouldAnswerStranger(chatId, Date.now(), { start: Boolean(start) })) await sendMessage(chatId, HELP)
     return
   }
 
