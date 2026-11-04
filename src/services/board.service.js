@@ -1,6 +1,9 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
-import { monthStart, resolveRange } from './boardRules.js'
+import {
+  cardVisible, columnOf, DAY_MS, monthsOfService, monthStart, resolveRange, serviceInPeriod, serviceVisible,
+  shapeService, totals,
+} from './boardRules.js'
 
 export { resolveRange }
 
@@ -15,8 +18,6 @@ function assertAdmin(user) {
   if (user.role !== 'admin') throw ApiError.forbidden('Доска клиентов доступна только админу')
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000
-
 // Деньги приходят с фронта в долларах, в базе лежат в центах. Округляем
 // здесь один раз: дальше по всему коду только целые числа, и сложение
 // никогда не даёт 0.30000000000000004.
@@ -30,19 +31,13 @@ const SERVICE_SELECT = {
   title: true,
   month: true,
   paidAt: true,
+  workFrom: true,
+  workTo: true,
   revenueCents: true,
-  expenses: { select: { id: true, title: true, amountCents: true }, orderBy: { createdAt: 'asc' } },
-}
-
-/** Выручка, расход и прибыль по набору услуг. Единственное место, где это считается. */
-function totals(services) {
-  let revenueCents = 0
-  let expenseCents = 0
-  for (const s of services) {
-    revenueCents += s.revenueCents
-    for (const e of s.expenses) expenseCents += e.amountCents
-  }
-  return { revenueCents, expenseCents, profitCents: revenueCents - expenseCents }
+  expenses: {
+    select: { id: true, title: true, amountCents: true, paid: true, paidAt: true },
+    orderBy: { createdAt: 'asc' },
+  },
 }
 
 /** Сколько дней клиент с нами. У ушедшего счёт останавливается датой ухода. */
@@ -58,52 +53,75 @@ function daysWithUs(card) {
 /**
  * Вся доска: сводка сверху и две колонки карточек.
  *
- * Колонка — это текущее состояние клиента, а не вычисление по выбранному
- * месяцу. Так решил заказчик: клиент без платежа в месяце «уже будет во
- * вкладке ушёл висеть». Поэтому, открыв июль, ушедшего в августе увидишь
- * среди ушедших.
+ * Всё считается по выбранному периоду. Услуга в нём видна, если её месяц в
+ * периоде или в эти дни шла работа по ней (доделки). Карточка клиента есть
+ * в периоде, если есть видимая услуга; клиент вообще без услуг виден по
+ * своим датам, а клиент, пришедший в ноябре, в октябре не висит (см.
+ * cardVisible).
  *
- * Цифры на карточке — за выбранный период. Иначе переключение месяцев
- * ничего бы не меняло, а вся доска ради этого и делается. Исключение —
- * «дней с нами» и «услуг за всё время»: они по смыслу общие.
+ * Колонка тоже зависит от периода: в «Ушедших» клиент, который ушёл в нём
+ * или раньше, а если ушёл позже, то в том периоде он ещё «В работе» (см.
+ * columnOf). Раньше колонка была текущим состоянием клиента, и ушедший в
+ * августе числился ушедшим даже в июле.
+ *
+ * Деньги, напротив, остаются в своём месяце: в суммы входят только услуги,
+ * месяц которых в периоде. Доделки в карточке показываются, но не считаются.
+ * Исключение из «за период» — «дней с нами» и «услуг за всё время»: они по
+ * смыслу общие.
  */
 export async function getBoard(user, query) {
   assertAdmin(user)
   const range = resolveRange(query)
 
+  // Услуги берём все, а не только за период: «видна ли» решают правила
+  // (месяц или срок работ), и в условие запроса с пустыми краями срока
+  // работ это не уложить. Доска одна на агентство, объёмы небольшие.
   const cards = await prisma.boardClient.findMany({
     include: {
       client: { select: { id: true, name: true } },
-      services: { where: range ? { month: range } : undefined, select: SERVICE_SELECT },
-      _count: { select: { services: true } },
+      services: { select: SERVICE_SELECT },
     },
     orderBy: { client: { name: 'asc' } },
   })
 
-  const shaped = cards.map((c) => ({
-    id: c.id,
-    client: c.client,
-    contact: c.contact,
-    status: c.status,
-    startedAt: c.startedAt,
-    leftAt: c.leftAt,
-    leftReason: c.leftReason,
-    daysWithUs: daysWithUs(c),
-    // Количество услуг за всё время — так и написано в задании, «не
-    // зависящее от периода».
-    serviceCountTotal: c._count.services,
-    serviceCountInPeriod: c.services.length,
-    ...totals(c.services),
-  }))
+  const active = []
+  const left = []
+  const visibleServices = []
 
-  const active = shaped.filter((c) => c.status === 'active')
-  const left = shaped.filter((c) => c.status === 'left')
+  for (const c of cards) {
+    const visible = c.services.filter((s) => serviceVisible(s, range))
+    if (!cardVisible({
+      startedAt: c.startedAt, leftAt: c.leftAt, serviceCount: c.services.length, visibleCount: visible.length,
+    }, range)) continue
+
+    visibleServices.push(...visible)
+    const card = {
+      id: c.id,
+      client: c.client,
+      contact: c.contact,
+      status: c.status,
+      startedAt: c.startedAt,
+      leftAt: c.leftAt,
+      leftReason: c.leftReason,
+      daysWithUs: daysWithUs(c),
+      // Количество услуг за всё время — так и написано в задании, «не
+      // зависящее от периода».
+      serviceCountTotal: c.services.length,
+      // Сколько услуг дают деньги в периоде, а сколько видно всего: разница
+      // — доделки, их деньги лежат в другом месяце.
+      serviceCountInPeriod: visible.filter((s) => serviceInPeriod(s, range)).length,
+      serviceCountVisible: visible.length,
+      ...totals(visible, range),
+    }
+    const column = columnOf(c, range) === 'left' ? left : active
+    column.push(card)
+  }
 
   return {
     // Сводка считается по обеим колонкам сразу: выручка ушедшего клиента за
     // тот месяц, когда он ещё работал, — это выручка агентства за тот месяц.
     summary: {
-      ...totals(cards.flatMap((c) => c.services)),
+      ...totals(visibleServices, range),
       activeCount: active.length,
       leftCount: left.length,
     },
@@ -112,7 +130,11 @@ export async function getBoard(user, query) {
   }
 }
 
-/** Карточка целиком: услуги выбранного периода с расходами по каждой. */
+/**
+ * Карточка целиком: услуги, видимые в выбранном периоде, с расходами по
+ * каждой. Итоги — только по услугам, чей месяц в периоде; у остальных
+ * (доделок) inPeriod = false.
+ */
 export async function getCard(user, id, query) {
   assertAdmin(user)
   const range = resolveRange(query)
@@ -123,7 +145,6 @@ export async function getCard(user, id, query) {
       client: { select: { id: true, name: true } },
       addedBy: { select: { id: true, name: true } },
       services: {
-        where: range ? { month: range } : undefined,
         select: SERVICE_SELECT,
         orderBy: [{ month: 'desc' }, { title: 'asc' }],
       },
@@ -132,20 +153,19 @@ export async function getCard(user, id, query) {
   })
   if (!card) throw ApiError.notFound('Клиент на доске не найден')
 
-  const services = card.services.map((s) => ({
-    ...s,
-    // Прибыль по услуге считает сервер, а не форма: одно место, где живёт
-    // эта арифметика, и в отчётах она не разойдётся с тем, что видно в
-    // карточке.
-    ...totals([s]),
-  }))
+  const visible = card.services.filter((s) => serviceVisible(s, range))
+
+  // Прибыль по услуге считает сервер, а не форма: одно место, где живёт
+  // эта арифметика, и в отчётах она не разойдётся с тем, что видно в
+  // карточке.
+  const services = visible.map((s) => shapeService(s, range))
 
   return {
     ...card,
     services,
     daysWithUs: daysWithUs(card),
     serviceCountTotal: card._count.services,
-    ...totals(card.services),
+    ...totals(visible, range),
   }
 }
 
@@ -330,14 +350,15 @@ export async function removeService(user, id) {
 
 /**
  * Месяцы, по которым вообще есть данные, — для выпадающего списка.
- * Предлагать пустые месяцы незачем.
+ * Предлагать пустые месяцы незачем. Месяц, в который тянется срок работ,
+ * не пустой: в нём видны доделки.
  */
 export async function listMonths(user) {
   assertAdmin(user)
-  const rows = await prisma.boardService.findMany({
-    select: { month: true },
-    distinct: ['month'],
-    orderBy: { month: 'desc' },
-  })
-  return rows.map((r) => r.month)
+  const rows = await prisma.boardService.findMany({ select: { month: true, workFrom: true, workTo: true } })
+  const months = new Map()
+  for (const row of rows) {
+    for (const m of monthsOfService(row)) months.set(m.getTime(), m)
+  }
+  return [...months.values()].sort((a, b) => b.getTime() - a.getTime())
 }
