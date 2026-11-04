@@ -167,3 +167,84 @@ describe('галочка «выплачено» у расхода', () => {
     assert.equal(mark({ paid: true }, 'плохой id').success, false)
   })
 })
+
+describe('границы сумм', () => {
+  test('21 000 000 долларов ещё можно, больше — нельзя', () => {
+    assert.equal(add({ revenue: 21_000_000 }).success, true)
+    const r = add({ revenue: 21_000_001 })
+    assert.equal(r.success, false)
+    assert.match(r.error.issues[0].message, /больше 21 000 000/)
+  })
+
+  test('максимальная сумма в центах помещается в четырёхбайтовое целое', () => {
+    assert.ok(21_000_000 * 100 <= 2_147_483_647)
+  })
+
+  test('то же для расхода и для правки услуги', () => {
+    assert.equal(edit({ revenue: 25_000_000 }).success, false)
+    assert.equal(edit({ expenses: [{ title: 'Реклама', amount: 25_000_000 }] }).success, false)
+    assert.equal(edit({ expenses: [{ title: 'Реклама', amount: 21_000_000 }] }).success, true)
+  })
+
+  test('отрицательная сумма и не число — отказ с русским сообщением', () => {
+    const negative = add({ revenue: -1 })
+    assert.equal(negative.success, false)
+    assert.equal(negative.error.issues[0].message, 'Сумма не может быть отрицательной')
+    const text = add({ revenue: 'много' })
+    assert.equal(text.success, false)
+    assert.equal(text.error.issues[0].message, 'Сумма должна быть числом')
+  })
+})
+
+describe('границы дат: от 2000 до 2100 года', () => {
+  const refused = (r, path) => {
+    assert.equal(r.success, false)
+    assert.equal(r.error.issues[0].message, 'Дата должна быть между 2000 и 2100 годом')
+    if (path) assert.deepEqual(r.error.issues[0].path, path)
+  }
+
+  test('края диапазона проходят', () => {
+    assert.equal(add({ month: '2000-01-01' }).success, true)
+    assert.equal(add({ month: '2100-12-01', workTo: '2100-12-31' }).success, true)
+  })
+
+  test('месяц услуги вне диапазона — отказ', () => {
+    refused(add({ month: '1999-12-01' }), ['body', 'month'])
+    refused(add({ month: '2101-01-01' }), ['body', 'month'])
+    refused(add({ month: '0026-11-01' }), ['body', 'month'])
+    refused(edit({ month: '2101-01-01' }), ['body', 'month'])
+  })
+
+  test('срок работ вне диапазона — отказ', () => {
+    refused(add({ workFrom: '1999-12-31' }), ['body', 'workFrom'])
+    refused(add({ workTo: '2101-01-01' }), ['body', 'workTo'])
+    refused(edit({ workFrom: '1900-01-01' }), ['body', 'workFrom'])
+  })
+
+  test('день оплаты услуги вне диапазона — отказ', () => {
+    refused(add({ paidAt: '2101-05-05' }), ['body', 'paidAt'])
+    refused(edit({ paidAt: '1999-05-05' }), ['body', 'paidAt'])
+  })
+
+  test('день выплаты расхода вне диапазона — отказ', () => {
+    refused(edit({ expenses: [{ title: 'Реклама', amount: 1, paid: true, paidAt: '2101-01-01' }] }))
+    refused(expensePaidSchema.safeParse({ params: { id: 'e1' }, body: { paid: true, paidAt: '1999-01-01' } }), ['body', 'paidAt'])
+  })
+
+  test('в форме нового клиента те же границы', () => {
+    const r = addClientSchema.safeParse({
+      body: { clientName: 'Ozon', services: [{ title: 'SEO', month: '2101-01-01', revenue: 1 }] },
+    })
+    refused(r, ['body', 'services', 0, 'month'])
+  })
+
+  test('null и пустая строка границу не нарушают', () => {
+    assert.equal(edit({ workFrom: null, workTo: '' }).success, true)
+  })
+
+  test('не дата — понятное сообщение вместо английского', () => {
+    const r = add({ workFrom: 'вчера' })
+    assert.equal(r.success, false)
+    assert.equal(r.error.issues[0].message, 'Некорректная дата')
+  })
+})
