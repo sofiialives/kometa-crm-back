@@ -30,12 +30,21 @@ const STRANGERS_MAX = 5000
 const strangers = new Map()
 
 // Голый /start — исключение: человек сам открыл бота и пытается
-// подключиться, без подсказки он решит, что бот сломан.
+// подключиться, без подсказки он решит, что бот сломан. Но не чаще раза в
+// минуту и не больше трёх за сутки, иначе им можно гонять бота по кругу.
+const STRANGER_START_MS = 60 * 1000
+const STRANGER_STARTS_MAX = 3
+
 export function shouldAnswerStranger(chatId, now = Date.now(), { start = false } = {}) {
-  const last = strangers.get(String(chatId))
-  if (!start && last && now - last < STRANGER_REPLY_MS) return false
+  const key = String(chatId)
+  const rec = strangers.get(key)
+  const fresh = !rec || now - rec.first >= STRANGER_REPLY_MS
+  if (!fresh) {
+    if (!start) return false
+    if (now - rec.last < STRANGER_START_MS || rec.starts >= STRANGER_STARTS_MAX) return false
+  }
   if (strangers.size >= STRANGERS_MAX) strangers.clear()
-  strangers.set(String(chatId), now)
+  strangers.set(key, fresh ? { first: now, last: now, starts: 1 } : { ...rec, last: now, starts: rec.starts + 1 })
   return true
 }
 
