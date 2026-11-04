@@ -3,7 +3,7 @@ import { escapeHtml, sendAlbum, sendFileById } from '../telegram.js'
 import { isQuietHour } from '../plan.js'
 import { aiReport } from '../ai/report.js'
 import { plainStyle } from '../ai/style.js'
-import { labelOf, labelsFor, personInScope } from '../ai/context.js'
+import { labelOf, labelsFor, personInScope, speaker } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
 import { hm } from './format.js'
@@ -39,6 +39,10 @@ const REPORT_TRIES = 5
 // Файлов одного человека в отчёте — не больше 20, остальные пометкой.
 const MAX_FILES = 20
 const IN = ['in', 'reply', 'file']
+// Что бот писал человеку сам: ответ агента или сообщение по поручению.
+const OWN = ['ai', 'round']
+// Сколько реплик одного человека показываем по get_round.
+const TALK_MAX = 12
 const PERSON = { select: { id: true, name: true, role: true, departmentId: true, department: { select: { name: true } } } }
 // Ссылка: адрес со схемой, www или домен, в том числе кириллический
 // (пример.рф). \\b в JS не видит кириллицу — границы через «не буква».
@@ -251,7 +255,10 @@ export async function roundStatus(owner, roundId = null) {
     const files = said.filter((m) => m.fileId).length
     const state = t.status === 'failed' ? 'не дошло' : said.length ? (t.status === 'answered' ? 'ответил' : 'отвечает') : 'пока молчит'
     lines.push(`- ${labels.get(t.userId)}, ${state}${files ? `, прислал файлов ${files}` : ''}${t.summary ? `. Суть «${plain(t.summary, 300)}»` : ''}`)
-    for (const m of said.slice(0, 8)) lines.push(`  ${hm(m.createdAt)} «${plain(m.text, 300)}»`)
+    // Переписка по порядку: что бот написал человеку и что он ответил.
+    const talk = t.messages.filter((m) => IN.includes(m.direction) || (m.direction === 'out' && OWN.includes(m.source)))
+    if (talk.length > TALK_MAX) lines.push(`  раньше ещё сообщений ${talk.length - TALK_MAX}`)
+    for (const m of talk.slice(-TALK_MAX)) lines.push(`  ${hm(m.createdAt)} ${speaker(m)} «${plain(m.text, 300)}»`)
   }
   return lines.join('\n')
 }

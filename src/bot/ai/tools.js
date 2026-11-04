@@ -148,7 +148,7 @@ export function teamTools(ctx, { team = false } = {}) {
     }] : []),
     {
       name: 'get_person',
-      description: 'Всё о человеке: личные задачи и задачи из Иерархии с клиентами, работы, звонки, отлучки, баллы, что писал боту за сутки. person_id из сводки.',
+      description: 'Всё о человеке: личные задачи и задачи из Иерархии с клиентами, работы, звонки, отлучки, баллы, переписка с ботом за сутки, и что бот писал ему сам. person_id из сводки.',
       input_schema: object({ person_id: { type: 'string' } }),
       run: (input) => personBrief(user, input.person_id, now),
     },
@@ -178,7 +178,7 @@ export function teamTools(ctx, { team = false } = {}) {
     },
     {
       name: 'get_round',
-      description: 'Что ответили по поручению: кто ответил, что написал, что прислал, кто молчит. round_id null, это последнее поручение.',
+      description: 'Что ответили по поручению: кто ответил, что написал, что прислал, кто молчит, и что бот писал каждому. round_id null, это последнее поручение.',
       input_schema: object({ round_id: nullable('string', 'id поручения или null.') }),
       run: (input) => roundStatus(user, input.round_id),
     },
