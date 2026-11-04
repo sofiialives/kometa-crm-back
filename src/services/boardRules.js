@@ -16,16 +16,18 @@ export function monthStart(value) {
 /**
  * Границы выбранного периода.
  *
- * Возвращает null для режима «за всё время» — тогда фильтра по месяцу нет
+ * Возвращает null для режима «за всё время» — тогда фильтра по периоду нет
  * вовсе.
  *
- * В режиме произвольного периода услуга попадает в выборку, если первое
- * число её месяца лежит в заданном диапазоне. Границы при этом НЕ округляем
+ * В режиме произвольного периода месяц услуги входит в период, если первое
+ * число месяца лежит в заданном диапазоне. Границы при этом НЕ округляем
  * до месяца: округление наружу превратило бы «последние 90 дней» в четыре
  * месяца вместо трёх, и сводка показала бы больше, чем есть.
  *
- * Следствие: данные помесячные, половинок месяца не бывает. «С 15 сентября»
- * сентябрь уже не захватит — его первое число осталось позади.
+ * Следствие: выручка помесячная, половинок месяца не бывает. «С 15 сентября»
+ * сентябрьскую выручку уже не захватит — первое число месяца осталось
+ * позади. Сама услуга в таком периоде при этом видна, если работа по ней
+ * шла в эти дни (см. serviceVisible).
  */
 export function resolveRange({ mode, month, months, from, to }, now = new Date()) {
   if (mode === 'all') return null
@@ -59,4 +61,205 @@ export function resolveRange({ mode, month, months, from, to }, now = new Date()
   if (from) range.gte = new Date(from)
   if (to) range.lte = new Date(to)
   return Object.keys(range).length ? range : null
+}
+
+// ---------------------------------------------------------------------------
+// Дни, сроки работ, пересечение с периодом
+// ---------------------------------------------------------------------------
+
+export const DAY_MS = 24 * 60 * 60 * 1000
+
+/** Самый длинный срок работ по одной услуге, дней (оба края включительно). */
+export const MAX_WORK_DAYS = 366
+
+/** Полночь UTC того дня, на который приходится момент: сроки работ хранятся днями. */
+export function dayStart(value) {
+  const d = new Date(value)
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+}
+
+/** Первое число следующего месяца. */
+function nextMonthStart(value) {
+  const m = monthStart(value)
+  return new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))
+}
+
+/**
+ * Срок работ с заполненными границами. Пустая граница — это край месяца
+ * услуги: начало месяца слева и его последний день справа. Оба конца — дни
+ * (полночь UTC), последний день входит в срок целиком.
+ */
+export function workSpan({ month, workFrom, workTo }) {
+  return {
+    from: workFrom ? dayStart(workFrom) : monthStart(month),
+    to: workTo ? dayStart(workTo) : new Date(nextMonthStart(month).getTime() - DAY_MS),
+  }
+}
+
+/** Услуга с заполненными workFrom/workTo — в таком виде её видит фронт. */
+export function fillWorkSpan(service) {
+  const { from, to } = workSpan(service)
+  return { ...service, workFrom: from, workTo: to }
+}
+
+/**
+ * Проблема в сроке работ или null. Принимает дни (см. dayStart).
+ * Один текст на всех: его же показывает проверка входных данных.
+ */
+export function workSpanError(from, to) {
+  if (from.getTime() > to.getTime()) return 'Срок работ: начало позже конца'
+  if ((to.getTime() - from.getTime()) / DAY_MS + 1 > MAX_WORK_DAYS) {
+    return `Срок работ не может быть длиннее ${MAX_WORK_DAYS} дней`
+  }
+  return null
+}
+
+/** Попадает ли момент в период. Период null — без границ, попадает всё. */
+export function inRange(value, range) {
+  if (!range) return true
+  const t = new Date(value).getTime()
+  if (range.gte && t < range.gte.getTime()) return false
+  if (range.lt && t >= range.lt.getTime()) return false
+  if (range.lte && t > range.lte.getTime()) return false
+  return true
+}
+
+/**
+ * Пересекается ли отрезок [start, end) с периодом. Края — миллисекунды,
+ * end может быть Infinity («пока не закончилось»). Пустой отрезок не
+ * пересекается ни с чем.
+ */
+export function overlapsRange(range, start, end) {
+  if (!range) return true
+  if (end <= start) return false
+  if (range.gte && end <= range.gte.getTime()) return false
+  if (range.lt && start >= range.lt.getTime()) return false
+  if (range.lte && start > range.lte.getTime()) return false
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// Услуги в периоде
+// ---------------------------------------------------------------------------
+
+/**
+ * Месяц услуги внутри периода — только такая услуга даёт выручку и расходы
+ * в этом периоде: деньги по ней принадлежат её месяцу, а не месяцам доделок.
+ */
+export function serviceInPeriod(service, range) {
+  return inRange(service.month, range)
+}
+
+/**
+ * Услугу показываем в периоде, если её месяц в периоде ИЛИ срок работ
+ * пересекается с периодом. Второй случай — доделки: услуга октября, над
+ * которой работали ещё и в ноябре, видна в ноябре, но деньги остаются в
+ * октябре. Последний день срока входит целиком, поэтому отрезок заканчивается
+ * не в полночь этого дня, а в полночь следующего.
+ */
+export function serviceVisible(service, range) {
+  if (!range) return true
+  if (serviceInPeriod(service, range)) return true
+  const { from, to } = workSpan(service)
+  return overlapsRange(range, from.getTime(), to.getTime() + DAY_MS)
+}
+
+/**
+ * Выручка, расходы, «не выплачено» и прибыль по набору услуг. Единственное
+ * место, где это считается.
+ *
+ * Считаются только услуги, месяц которых в периоде. Доделки, видимые лишь
+ * из-за срока работ, в сумму не входят, иначе деньги одной услуги легли бы в
+ * два месяца сразу. Без периода (null) — считаются все.
+ *
+ * «Не выплачено» — расходы без отметки; на прибыль не влияет: расход
+ * остаётся расходом, выплачен он или ещё нет.
+ */
+export function totals(services, range = null) {
+  let revenueCents = 0
+  let expenseCents = 0
+  let unpaidCents = 0
+  for (const s of services) {
+    if (!serviceInPeriod(s, range)) continue
+    revenueCents += s.revenueCents
+    for (const e of s.expenses) {
+      expenseCents += e.amountCents
+      if (!e.paid) unpaidCents += e.amountCents
+    }
+  }
+  return { revenueCents, expenseCents, unpaidCents, profitCents: revenueCents - expenseCents }
+}
+
+/**
+ * Услуга для ответа: заполненный срок работ и признак «её месяц в периоде».
+ * Цифры самой услуги (выручка, расходы, прибыль) остаются её собственными, и
+ * у доделки тоже: по inPeriod фронт отличает те, что идут в итоги.
+ */
+export function shapeService(service, range) {
+  return {
+    ...fillWorkSpan(service),
+    inPeriod: serviceInPeriod(service, range),
+    ...totals([service]),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Карточки клиентов в периоде
+// ---------------------------------------------------------------------------
+
+/**
+ * Есть ли карточка в выбранном периоде.
+ *
+ * Если у клиента есть видимая услуга — есть. Если услуги у него заведены, но
+ * ни одна в период не попала — нет: клиент, пришедший в ноябре, не должен
+ * висеть в октябре с «услуг не было».
+ *
+ * Клиент вообще без услуг виден по своим датам: с месяца начала работы и
+ * дальше, пока не ушёл (месяц ухода ещё включён). Карточку только что
+ * заведённого клиента без единой услуги иначе нигде не найти.
+ */
+export function cardVisible({ startedAt, leftAt, serviceCount, visibleCount }, range) {
+  if (!range) return true
+  if (visibleCount > 0) return true
+  if (serviceCount > 0) return false
+  const end = leftAt ? nextMonthStart(leftAt).getTime() : Infinity
+  return overlapsRange(range, monthStart(startedAt).getTime(), end)
+}
+
+/**
+ * В какой колонке карточка в выбранном периоде: 'active' или 'left'.
+ *
+ * В «Ушедших» клиент, который ушёл в этом периоде или раньше: если ушёл
+ * раньше, а карточка всё равно видна, значит, по нему идут доделки. Ушёл
+ * позже конца периода — в том периоде он ещё работал, поэтому «В работе».
+ * Без периода колонку решает текущий статус.
+ */
+export function columnOf({ status, leftAt }, range) {
+  if (status !== 'left') return 'active'
+  if (!range || !leftAt) return 'left'
+  if (inRange(leftAt, range)) return 'left'
+  const before = range.gte && new Date(leftAt).getTime() < range.gte.getTime()
+  return before ? 'left' : 'active'
+}
+
+// ---------------------------------------------------------------------------
+// Список месяцев
+// ---------------------------------------------------------------------------
+
+/**
+ * Месяцы, о которых «знает» услуга: её собственный и все, которые захватывает
+ * срок работ. Для выпадающего списка: открыв такой месяц, доделки в нём
+ * действительно видны.
+ */
+export function monthsOfService(service) {
+  const own = monthStart(service.month)
+  const months = [own]
+  const { from, to } = workSpan(service)
+  if (from.getTime() > to.getTime()) return months
+  // Больше года подряд не бывает (MAX_WORK_DAYS), счётчик — страховка от
+  // кривых данных, чтобы цикл не крутился вечно.
+  for (let m = monthStart(from), i = 0; m.getTime() <= to.getTime() && i < 36; m = nextMonthStart(m), i += 1) {
+    if (m.getTime() !== own.getTime()) months.push(m)
+  }
+  return months
 }
