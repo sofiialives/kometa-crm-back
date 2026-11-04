@@ -3,6 +3,7 @@ import { escapeHtml } from '../telegram.js'
 import { mskDateStart } from '../../services/motivation/taskRules.js'
 import { mskDayKey } from '../plan.js'
 import { hm, short } from './format.js'
+import { dueText, tasksOf } from './taskScope.js'
 
 /**
  * «Что у меня на сегодня?», «мои задачи», «что по звонкам» — бот отвечает
@@ -33,44 +34,43 @@ export function listIntent(text) {
   return null
 }
 
-const dateShort = (date) => new Date(date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Moscow' })
 const title = (t) => escapeHtml(short(t.title, 80))
+// Личные и задачи по Иерархии — разные списки, вместе их не складываем.
+const NAME = {
+  personal: { today: 'Личные задачи на сегодня', overdue: 'Личные просроченные задачи', where: 'во вкладке «Задачи»', later: 'личных' },
+  hierarchy: { today: 'Задачи по Иерархии на сегодня', overdue: 'Просроченные задачи по Иерархии', where: 'в Иерархии', later: 'по Иерархии' },
+}
+const client = (t) => (t.origin === 'hierarchy' && t.work?.client?.name ? `клиент ${escapeHtml(short(t.work.client.name, 40))}` : null)
 
-function todayLine(t, now) {
-  const parts = [title(t)]
+function todayLine(t) {
+  const parts = [title(t), client(t)].filter(Boolean)
   if (t.startAt && t.status === 'today') parts.push(`начало ${hm(t.startAt)}`)
   parts.push(`до ${hm(t.deadline)}`)
   if (t.status === 'progress') parts.push('в процессе')
-  if (t.deadline < now) parts.push('срок прошёл')
   return `• ${parts.join(', ')}`
 }
 
-/** Задачи: на сегодня, сколько позже, просроченные. */
+/**
+ * Задачи: на сегодня, сколько позже, просроченные. Личные и по Иерархии
+ * раздельно; просрочена задача, как в CRM, когда срок меньше «сейчас».
+ * Числа в заголовках настоящие, а список обрезан: остальное в CRM.
+ */
 export async function tasksText(userId, now = new Date()) {
-  const dayStart = mskDateStart(mskDayKey(now))
-  const dayEnd = new Date(dayStart.getTime() + DAY_MS)
-  const active = { ownerId: userId, status: { in: ['today', 'progress'] } }
-  const TASK = { title: true, status: true, deadline: true, startAt: true }
-  const [today, todayCount, laterCount, overdue, overdueCount] = await Promise.all([
-    prisma.task.findMany({ where: { ...active, deadline: { gte: dayStart, lt: dayEnd } }, orderBy: { deadline: 'asc' }, take: MAX_TODAY, select: TASK }),
-    prisma.task.count({ where: { ...active, deadline: { gte: dayStart, lt: dayEnd } } }),
-    prisma.task.count({ where: { ...active, deadline: { gte: dayEnd } } }),
-    prisma.task.findMany({ where: { ...active, deadline: { lt: dayStart } }, orderBy: { deadline: 'desc' }, take: MAX_OVERDUE, select: TASK }),
-    prisma.task.count({ where: { ...active, deadline: { lt: dayStart } } }),
-  ])
-
+  const sections = await tasksOf(userId, now, { today: MAX_TODAY, overdue: MAX_OVERDUE, later: 0, done: 0 })
   const blocks = []
-  if (today.length) {
-    const lines = [`<b>Задачи на сегодня, ${todayCount}</b>`, ...today.map((t) => todayLine(t, now))]
-    if (todayCount > today.length) lines.push(`И ещё ${todayCount - today.length} в CRM, во вкладке «Задачи».`)
+  if (!sections.some((s) => s.counts.today)) blocks.push('<b>Задач на сегодня нет</b>')
+  for (const { kind, counts, lists } of sections) {
+    if (!counts.today) continue
+    const lines = [`<b>${NAME[kind].today}, ${counts.today}</b>`, ...lists.today.map(todayLine)]
+    if (counts.today > lists.today.length) lines.push(`И ещё ${counts.today - lists.today.length} в CRM, ${NAME[kind].where}`)
     blocks.push(lines.join('\n'))
-  } else {
-    blocks.push('<b>Задач на сегодня нет</b>')
   }
-  if (laterCount) blocks.push(`Со сроком позже ещё ${laterCount}.`)
-  if (overdue.length) {
-    const lines = [`<b>Просроченные задачи, ${overdueCount}</b>`, ...overdue.map((t) => `• ${title(t)}, срок ${dateShort(t.deadline)}`)]
-    if (overdueCount > overdue.length) lines.push(`И ещё ${overdueCount - overdue.length} в CRM, во вкладке «Задачи».`)
+  const later = sections.filter((s) => s.counts.later).map((s) => `${NAME[s.kind].later} ${s.counts.later}`)
+  if (later.length) blocks.push(`Со сроком на завтра и позже ещё ${later.join(', ')}`)
+  for (const { kind, counts, lists } of sections) {
+    if (!counts.overdue) continue
+    const lines = [`<b>${NAME[kind].overdue}, ${counts.overdue}</b>`, ...lists.overdue.map((t) => `• ${[title(t), client(t), dueText(t, now)].filter(Boolean).join(', ')}`)]
+    if (counts.overdue > lists.overdue.length) lines.push(`И ещё ${counts.overdue - lists.overdue.length} в CRM, ${NAME[kind].where}`)
     blocks.push(lines.join('\n'))
   }
   return blocks.join('\n\n')
