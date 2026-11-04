@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
 import { createDraft, decideDraft, foreignText, reportText, roundStatus, sentNote } from '../agent/rounds.js'
-import { MATCHED_MAX, MENTIONS_MAX, OWN_MAX, PAGE_SIZE, PAGES_MAX, allTitlesDone, foreignTitles, quotedTitles, sameTitle } from '../agent/roundTasks.js'
+import { MENTIONS_MAX, OWN_MAX, SCAN_MAX, allTitlesDone, foreignTitles, quotedTitles, sameTitle } from '../agent/roundTasks.js'
 import { patch } from './patch.js'
 
 const denis = { id: 'denis', name: 'Денис Лебедев', role: 'staff', active: true, departmentId: 'd', department: { name: 'SMM' } }
@@ -39,17 +39,13 @@ describe('названия задач в тексте поручения', () =>
 
 describe('чужая задача в сообщении человеку', () => {
   /**
-   * open — открытые задачи области смотрящего (читаются страницами, потом
-   * владельцы найденных по id), own — задачи адресатов любого статуса.
+   * open — открытые задачи области смотрящего (одним запросом; владельцы
+   * найденных читаются отдельно из users), own — задачи адресатов любого статуса.
    */
-  const rows = (t, { open = [], own = [] }) => patch(t, prisma.task, 'findMany', async ({ where, take, cursor }) => {
-    if (where.id) return open.filter((x) => where.id.in.includes(x.id))
-    if (where.AND.some((c) => c.owner)) {
-      const from = cursor ? open.findIndex((x) => x.id === cursor.id) + 1 : 0
-      return open.slice(from, from + take)
-    }
-    return own
-  })
+  const rows = (t, { open = [], own = [] }) => {
+    patch(t, prisma.user, 'findMany', async ({ where }) => [...new Map(open.filter((x) => where.id.in.includes(x.ownerId)).map((x) => [x.ownerId, x.owner])).values()])
+    return patch(t, prisma.task, 'findMany', async ({ where, take }) => (where.AND.some((c) => c.owner) ? open.slice(0, take) : own))
+  }
 
   test('точное название чужой открытой задачи в тексте, с кавычками или без — это место', async (t) => {
     rows(t, { open: [task()] })
@@ -102,13 +98,13 @@ describe('чужая задача в сообщении человеку', () =>
   test('у адресата есть своя открытая задача с таким названием — всё в порядке', async (t) => {
     const calls = rows(t, { open: [task(), task({ id: 't2', ownerId: 'denis', owner: denis })] })
     assert.deepEqual(await problemsOf([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN), [])
-    assert.equal(calls.length, 2)
+    assert.equal(calls.length, 1)
   })
 
   test('своя задача адресата уже сделана — она есть во втором запросе, ошибки нет', async (t) => {
     const calls = rows(t, { open: [task()], own: [task({ id: 't3', ownerId: 'denis', owner: denis, status: 'done' })] })
     assert.deepEqual(await problemsOf([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN), [])
-    assert.equal(calls.length, 3)
+    assert.equal(calls.length, 2)
   })
 
   test('назвали более длинную свою задачу, в которой чужое название лишь часть — не чужая', async (t) => {
@@ -121,8 +117,8 @@ describe('чужая задача в сообщении человеку', () =>
     const calls = rows(t, { open: [task()] })
     const text = `Денис, как «${POSTS}» и ${Array.from({ length: 50 }, (_, i) => `«Задача ${i}»`).join(' ')}`
     await foreignTitles([{ userId: 'denis', text }, { userId: 'roman', text }], ADMIN)
-    const own = calls[2][0].where
-    assert.equal(calls.length, 3)
+    const own = calls[1][0].where
+    assert.equal(calls.length, 2)
     assert.deepEqual(own.AND[1], { ownerId: { in: ['denis', 'roman'] } })
     assert.doesNotMatch(JSON.stringify(own), /contains|Задача/)
   })
@@ -142,27 +138,26 @@ describe('чужая задача в сообщении человеку', () =>
     assert.ok(where.AND[2].owner)
   })
 
-  test('большая область не блокирует проверку: читаем страницами, держим только совпавшие', async (t) => {
-    const filler = Array.from({ length: PAGE_SIZE * 3 + 500 }, (_, i) => task({ id: `a${String(i).padStart(5, '0')}`, title: `Другая задача ${i}`, ownerId: 'x', owner: anton }))
-    const calls = rows(t, { open: [...filler, task({ id: 'z-posts' })] })
+  test('область из 4999 задач проверяется одним запросом, ровно 5000 — неполная проверка', async (t) => {
+    const filler = (n) => Array.from({ length: n }, (_, i) => task({ id: `a${i}`, title: `Другая задача ${i}`, ownerId: 'x', owner: anton }))
+    const calls = rows(t, { open: [...filler(SCAN_MAX - 2), task({ id: 'z-posts' })] })
     const res = await foreignTitles([{ userId: 'denis', text: `Денис, как «${POSTS}»?` }], ADMIN)
     assert.equal(res.incomplete, false)
     assert.equal(res.problems.length, 1)
-    // Три полные страницы и четвёртая неполная, потом владельцы найденных, потом свои задачи.
-    assert.equal(calls.length, 3 + 1 + 1 + 1)
-  })
-
-  test('упёрлись в число страниц — проверка неполная, и это видно', async (t) => {
-    const calls = patch(t, prisma.task, 'findMany', async ({ take }) => Array.from({ length: take }, (_, i) => task({ id: `p${i}`, title: `Другая задача ${i}`, ownerId: 'x' })))
+    assert.equal(calls.filter(([q]) => q.where.AND.some((c) => c.owner)).length, 1)
+    assert.equal(calls[0][0].take, SCAN_MAX)
+    assert.deepEqual(calls[0][0].select, { id: true, title: true, ownerId: true })
+    rows(t, { open: filler(SCAN_MAX) })
     assert.deepEqual(await foreignTitles([{ userId: 'denis', text: 'Как дела' }], ADMIN), { problems: [], incomplete: true })
-    assert.equal(calls.length, PAGES_MAX)
   })
 
-  test('совпавших названий больше предела — суженная выборка не поместилась, неполная', async (t) => {
-    const named = Array.from({ length: MATCHED_MAX + 1 }, (_, i) => task({ id: `m${i}`, title: `Большая задача номер ${i}` }))
-    rows(t, { open: named })
-    const text = named.map((x) => x.title).join(', ')
-    assert.deepEqual(await foreignTitles([{ userId: 'denis', text }], ADMIN), { problems: [], incomplete: true })
+  test('упоминаний для сокращений берём не больше MENTIONS_MAX после дедупликации', async (t) => {
+    rows(t, { open: [task({ title: 'Задача номер 25 про сайт' })] })
+    const text = Array.from({ length: 30 }, (_, i) => `«Задача номер ${String(i).padStart(2, '0')}» «Задача номер ${String(i).padStart(2, '0')}»`).join(' ')
+    // Двадцать пятое упоминание в список не попало и сокращением не считается.
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text }]), [])
+    rows(t, { open: [task({ title: 'Задача номер 03 про сайт' })] })
+    assert.equal((await problemsOf([{ userId: 'denis', text }])).length, 1)
   })
 
   test('свои задачи адресатов не влезли в предел — тоже неполная', async (t) => {
