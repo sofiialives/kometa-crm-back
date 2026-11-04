@@ -7,7 +7,7 @@ import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_EN
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
 import { hm } from './format.js'
-import { chatOf, tell, tellChat } from './notify.js'
+import { chatOf, claimNotice, hasNotice, releaseNotice, tell, tellChat } from './notify.js'
 import { allTitlesDone, foreignTitles } from './roundTasks.js'
 
 /**
@@ -358,7 +358,8 @@ async function sendFiles(chatId, ownerId, label, messages) {
   const send = async (fn, count) => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const res = await fn()
-      if (res.ok) return
+      // Телеграм не ответил за 15-30 секунд: файлы могли дойти, второй раз не шлём.
+      if (res.ok || res.unsure) return
       if (!res.retry) break
       await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)))
     }
@@ -407,10 +408,35 @@ async function composeReport(round, people) {
 }
 
 /**
+ * Отправить часть отчёта один раз. Ключ части лежит в BotNotice и занимается
+ * до отправки: часть, которая ушла или могла уйти (телеграм не ответил за
+ * 15 секунд), повторно не уходит ни со следующего прохода, ни после сброса
+ * застрявшего отчёта. Ключ возвращается только при явной ошибке доставки,
+ * когда телеграм точно не принял: тогда повтор безопасен.
+ * Возвращает { ok } или { ok: false, retry, unsure }; skipped: часть уже была.
+ */
+export async function sendPart(roundId, part, send) {
+  const key = `round-report:${roundId}:${part}`
+  if ((await hasNotice(key)) || !(await claimNotice(key))) return { ok: true, skipped: true }
+  let res
+  try {
+    res = await send()
+  } catch (e) {
+    await releaseNotice(key)
+    throw e
+  }
+  if (!res.ok && !res.unsure && res.retry) await releaseNotice(key)
+  if (res.unsure) console.error(`[агент] отчёт ${roundId}, часть ${part}: телеграм не ответил, повторно не отправляю`)
+  return res
+}
+
+/**
  * Закрыть поручение и прислать отчёт. Один раз: сбор переводится в
  * reporting одним запросом, второй проход его уже не возьмёт. Текст
  * отчёта сохраняется: временный сбой телеграма — следующий проход
- * отправит его снова, не собирая моделью заново.
+ * отправит его снова, не собирая моделью заново. Каждая часть (текст,
+ * файлы каждого человека) уходит через sendPart: что уже ушло или могло
+ * уйти, второй раз не уйдёт, даже если отчёт застрял и взят снова.
  */
 export async function sendRoundReport(roundId, now = new Date()) {
   const claimed = await prisma.botRound.updateMany({ where: { id: roundId, status: 'sent' }, data: { status: 'reporting', closedAt: now } })
@@ -433,12 +459,18 @@ export async function sendRoundReport(roundId, now = new Date()) {
     const text = round.reportText ?? await composeReport(round, people)
     if (!round.reportText) await prisma.botRound.update({ where: { id: round.id }, data: { reportText: text } })
     // Отчёт несёт слова сотрудников — в памяти агента он не его реплика.
-    const res = await tellChat(chatId, text, { userId: round.ownerId, source: 'report' })
-    if (!res.ok) {
+    const res = await sendPart(round.id, 'text', () => tellChat(chatId, text, { userId: round.ownerId, source: 'report' }))
+    // Не принял телеграм явно (429, 5xx) — повторим; нет — закрываем.
+    if (!res.ok && !res.unsure) {
       await (res.retry ? retry() : close())
       return { ok: false, reason: 'telegram' }
     }
-    for (const t of people.answered) await sendFiles(chatId, round.ownerId, t.label, t.messages)
+    for (const t of people.answered) {
+      await sendPart(round.id, `files:${t.userId}`, async () => {
+        await sendFiles(chatId, round.ownerId, t.label, t.messages)
+        return { ok: true }
+      })
+    }
     await close()
     return { ok: true }
   } catch (e) {
