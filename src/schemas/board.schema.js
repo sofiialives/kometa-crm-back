@@ -92,7 +92,7 @@ export const addClientSchema = z.object({
       clientId: optional(objectId),
       clientName: optional(z.string().trim().min(1).max(200)),
       contact: optional(z.string().trim().max(300)),
-      startedAt: optional(z.coerce.date()),
+      startedAt: optional(boundedDate),
       // Услуги заводятся прямо в форме создания — так описано в задании.
       services: z
         .array(z.object({
@@ -118,7 +118,7 @@ export const editClientSchema = z.object({
   body: z
     .object({
       contact: z.string().trim().max(300).nullable().optional(),
-      startedAt: z.coerce.date().optional(),
+      startedAt: boundedDate.optional(),
     })
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })
@@ -128,7 +128,7 @@ export const leaveSchema = z.object({
   body: z.object({
     // Причина обязательна: ради неё колонка ушедших и заводится.
     reason: z.string().trim().min(1, 'Укажите причину ухода').max(500),
-    leftAt: optional(z.coerce.date()),
+    leftAt: optional(boundedDate),
   }),
 })
 

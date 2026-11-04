@@ -1,7 +1,7 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import {
-  buildBoard, daysWithUs, dayStart, expenseRows, fillWorkSpan, monthsOfService, monthStart, resolveRange,
+  buildBoard, daysWithUs, dayStart, expenseRows, fillWorkSpan, monthsOfService, monthStart, moscowToday, resolveRange,
   resolvePaidAt, servicePrefilter, serviceVisible, shapeService, toCents, totals, workSpanProblem,
 } from './boardRules.js'
 
@@ -132,6 +132,10 @@ export async function getCard(user, id, query) {
 export async function addClient(user, { clientId, clientName, contact, startedAt, services }) {
   assertAdmin(user)
 
+  // Сроки работ проверяем до того, как заводить клиента в справочнике:
+  // иначе при ошибке в услуге он остался бы там без карточки на доске.
+  const spans = (services || []).map((s) => workSpanData(s.month, s.workFrom, s.workTo))
+
   let id = clientId
   if (!id) {
     // Клиента можно завести прямо здесь, не уходя в справочник. Список при
@@ -153,7 +157,8 @@ export async function addClient(user, { clientId, clientName, contact, startedAt
       data: {
         clientId: id,
         contact: contact || null,
-        startedAt: startedAt || new Date(),
+        // По Москве: в первые три часа месяца UTC ещё живёт прошлым.
+        startedAt: startedAt || moscowToday(),
         addedById: user.id,
         // Услуги можно завести сразу в форме — так и описано в задании:
         // «нажали на кнопочку новый клиент, у нас прямо большой лист,
@@ -162,11 +167,11 @@ export async function addClient(user, { clientId, clientName, contact, startedAt
         ...(services?.length
           ? {
             services: {
-              create: services.map((s) => ({
+              create: services.map((s, i) => ({
                 title: s.title.trim(),
                 month: monthStart(s.month),
                 paidAt: s.paidAt || null,
-                ...workSpanData(s.month, s.workFrom, s.workTo),
+                ...spans[i],
                 revenueCents: toCents(s.revenue),
                 expenses: { create: expenseRows(s.expenses) },
               })),
@@ -205,7 +210,7 @@ export async function markLeft(user, id, { reason, leftAt }) {
   const card = await prisma.boardClient.findUnique({ where: { id } })
   if (!card) throw ApiError.notFound('Клиент на доске не найден')
 
-  const at = leftAt ? new Date(leftAt) : new Date()
+  const at = leftAt ? new Date(leftAt) : moscowToday()
   if (at < new Date(card.startedAt)) {
     throw ApiError.badRequest('Дата ухода раньше начала работы с клиентом')
   }
