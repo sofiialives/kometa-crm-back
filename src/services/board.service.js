@@ -359,7 +359,9 @@ export async function setExpensePaid(user, id, { paid, paidAt }) {
  */
 export async function listMonths(user) {
   assertAdmin(user)
-  const rows = await prisma.boardService.findMany({ select: { month: true, workFrom: true, workTo: true } })
+  // Одинаковых сочетаний месяца и срока много (у каждого клиента услуги
+  // одного месяца), поэтому группируем в базе, а не читаем строку на услугу.
+  const rows = await prisma.boardService.groupBy({ by: ['month', 'workFrom', 'workTo'] })
   const months = new Map()
   for (const row of rows) {
     for (const m of monthsOfService(row)) months.set(m.getTime(), m)
