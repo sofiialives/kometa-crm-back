@@ -3,11 +3,12 @@ import { escapeHtml, sendAlbum, sendFileById } from '../telegram.js'
 import { isQuietHour } from '../plan.js'
 import { aiReport } from '../ai/report.js'
 import { plainStyle } from '../ai/style.js'
-import { labelOf, labelsFor, personInScope, speaker } from '../ai/context.js'
+import { inTeam, labelOf, labelsFor, personInScope, speaker } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
 import { hm } from './format.js'
 import { chatOf, tell, tellChat } from './notify.js'
+import { foreignTitles } from './roundTasks.js'
 
 /**
  * Поручения агенту: «опроси команду, меня не будет два часа», «напиши
@@ -80,6 +81,18 @@ export function confirmText({ topic, collect, deadlineAt, count, links }) {
 }
 
 /**
+ * Что сказать модели, когда в тексте человеку названа чужая задача. Чьё это,
+ * называем только тому, кого спрашивающий и так видит.
+ */
+export function foreignText(problems, labels, viewer) {
+  const lines = problems.map((p) => {
+    const owner = p.owners.length === 1 && inTeam(viewer, p.owners[0]) ? labelOf(p.owners[0]) : 'другого человека'
+    return `- ${labels.get(p.userId)}, «${plain(p.title, 120)}» это задача ${owner}, а у него такой нет`
+  })
+  return `Черновик не создан, ничего не показано и не уйдёт. В этих сообщениях названы чужие задачи\n${lines.join('\n')}\nПерепиши эти сообщения и вызови message_people ещё раз. Называй у человека только его задачи из get_person, точно с тем названием.`
+}
+
+/**
  * Черновик поручения от агента. messages — [{ person_id, text }].
  * Возвращает { shown, text }: показан ли черновик и текст для модели.
  */
@@ -113,6 +126,9 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   }
 
   const labels = labelsFor(people.map((p) => p.person))
+  // Чужая задача в тексте человека — модель могла перепутать людей. Черновик не создаём.
+  const foreign = await foreignTitles(people.map((p) => ({ userId: p.person.id, text: p.text })))
+  if (foreign.length) return { shown: false, text: foreignText(foreign, labels, owner) }
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
   const subject = cut(plain(String(topic ?? ''), 500) || 'Узнать, как дела', 500)
   // Прежний черновик этого человека больше не нужен: новый его заменяет.

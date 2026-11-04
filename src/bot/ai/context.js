@@ -190,6 +190,12 @@ export function teamWhere(viewer) {
   return { id: '__none__' }
 }
 
+/** В поле зрения ли уже загруженный человек: то же правило, что teamWhere. */
+export function inTeam(viewer, user) {
+  if (viewer?.role === 'admin') return true
+  return viewer?.role === 'lead' && Boolean(viewer.departmentId) && user.role === 'staff' && user.active !== false && user.departmentId === viewer.departmentId && user.id !== viewer.id
+}
+
 /** Сводка по команде, по строке на человека. */
 export async function teamBrief(viewer, now = new Date()) {
   const users = await prisma.user.findMany({
