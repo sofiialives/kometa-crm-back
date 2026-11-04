@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
 import { reportText } from '../agent/rounds.js'
-import { countsSummary, taskStates } from '../agent/roundTasks.js'
+import { countsSummary, OWN_MAX, taskStates } from '../agent/roundTasks.js'
 import { aiReport, tasksText } from '../ai/report.js'
 import { ownerSystem, staffSystem } from '../ai/system.js'
 import { patch } from './patch.js'
@@ -36,6 +36,30 @@ describe('отчёт показывает задачи на момент отч�
     // Ищем только задачи самого адресата.
     assert.deepEqual(asked[0][0].where.AND[1], { ownerId: { in: ['roman'] } })
     assert.equal(states.get('roman').summary, 'открытых задач нет')
+  })
+
+  test('названия сверяются точно, без подстроки; каждого адресата читаем отдельным запросом', async (t) => {
+    patch(t, prisma.task, 'groupBy', async () => [])
+    const asked = patch(t, prisma.task, 'findMany', async ({ where }) => {
+      const id = where.AND[1].ownerId.in[0]
+      return [{ id: `t-${id}`, title: 'Баннер для Румикс', status: 'progress', deadline: at('2026-11-04T16:00:00Z'), origin: 'personal', ownerId: id }]
+    })
+    const states = await taskStates([
+      { userId: 'a', text: 'Как «Баннер для Румикс»?' },
+      { userId: 'b', text: 'Как «Баннер для»?' },
+    ], NOW)
+    assert.equal(asked.length, 2)
+    assert.deepEqual(asked.map(([q]) => q.where.AND[1].ownerId.in), [['a'], ['b']])
+    assert.deepEqual(states.get('a').named, [{ title: 'Баннер для Румикс', state: 'в процессе' }])
+    assert.deepEqual(states.get('b').named, [])
+  })
+
+  test('задач у человека больше предела чтения — названные не показываем, только числа', async (t) => {
+    patch(t, prisma.task, 'groupBy', async ({ where }) => (where.AND[2].deadline?.lt === NOW ? [{ ownerId: 'a', origin: 'personal', _count: 3 }] : []))
+    patch(t, prisma.task, 'findMany', async () => Array.from({ length: OWN_MAX + 1 }, (_, i) => ({ id: `x${i}`, title: i ? `Задача ${i}` : 'Баннер для Румикс', status: 'today', deadline: at('2026-11-04T16:00:00Z'), origin: 'personal', ownerId: 'a' })))
+    const states = await taskStates([{ userId: 'a', text: 'Как «Баннер для Румикс»?' }], NOW)
+    assert.deepEqual(states.get('a').named, [])
+    assert.equal(states.get('a').summary, 'личные открыто 3, в процессе 0, просрочено 3')
   })
 
   test('рядом с ответом: «Задачи сейчас» по названным, а без названий — числа', () => {

@@ -218,19 +218,23 @@ export function countsSummary(counts) {
  * Состояние задач адресатов на момент отчёта, а не на момент вопроса:
  * человек за это время мог всё сделать. Для каждого — задачи, названные в
  * отправленном ему тексте (с состоянием: сделана, в процессе, открыта,
- * просрочена) и числа по всем его открытым задачам. targets — [{ userId, text }].
+ * просрочена) и числа по всем его открытым задачам. Каждого читаем отдельно
+ * и названия сверяем точно (после нормализации, без подстроки). Задач у
+ * человека больше предела чтения — названные не показываем, только числа.
+ * targets — [{ userId, text }].
  * Возвращает Map: userId → { named: [{ title, state }], counts, summary }.
  */
 export async function taskStates(targets, now = new Date()) {
-  const ids = [...new Set(targets.map((t) => t.userId))]
-  const [counts, { tasks: named }] = await Promise.all([taskCounts(ids, now), ownTasks(ids)])
-  return new Map(targets.map(({ userId, text }) => {
-    const mentions = quotedTitles(text).titles
-    const mine = named.filter((t) => t.ownerId === userId && mentions.some((m) => sameTitle(m, t.title)))
+  const counts = await taskCounts(targets.map((t) => t.userId), now)
+  const entries = await Promise.all(targets.map(async ({ userId, text }) => {
+    const { tasks, full } = await ownTasks([userId])
+    const mentions = quotedTitles(text).titles.map(squash)
+    const mine = full ? tasks.filter((t) => t.ownerId === userId && mentions.includes(squash(t.title))) : []
     return [userId, {
       named: mine.slice(0, 5).map((t) => ({ title: t.title, state: [stateWord(t, now), ...(isOverdue(t, now) ? ['просрочена'] : [])].join(', ') })),
       counts: counts.get(userId),
       summary: countsSummary(counts.get(userId)),
     }]
   }))
+  return new Map(entries)
 }
