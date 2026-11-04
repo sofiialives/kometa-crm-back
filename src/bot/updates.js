@@ -89,6 +89,8 @@ async function handleMessage(msg, files = filesOf(msg)) {
   })
 
   if (!link || !link.user?.active || !link.codeExpiresAt || link.codeExpiresAt < new Date()) {
+    // Тот же лимит, что у голого /start, иначе «/start мусор» обходит его.
+    if (!shouldAnswerStranger(`code:${chatId}`, Date.now(), { start: true })) return
     await sendMessage(
       chatId,
       'Ссылка не подошла, скорее всего, она истекла.\n\n' +
