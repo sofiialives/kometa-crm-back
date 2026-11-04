@@ -5,8 +5,6 @@ import {
   resolvePaidAt, servicePrefilter, serviceVisible, shapeService, toCents, totals, workSpanProblem,
 } from './boardRules.js'
 
-export { resolveRange }
-
 /**
  * Доска клиентов — финансовый учёт агентства.
  *
