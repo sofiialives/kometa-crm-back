@@ -2,7 +2,7 @@ import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import {
   cardVisible, columnOf, DAY_MS, dayStart, expenseRows, fillWorkSpan, monthsOfService, monthStart, resolveRange,
-  serviceInPeriod, serviceVisible, shapeService, toCents, totals, workSpanProblem,
+  resolvePaidAt, serviceInPeriod, serviceVisible, shapeService, toCents, totals, workSpanProblem,
 } from './boardRules.js'
 
 export { resolveRange }
@@ -32,6 +32,8 @@ function workSpanData(month, workFrom, workTo) {
   return { workFrom: from, workTo: to }
 }
 
+const EXPENSE_SELECT = { id: true, title: true, amountCents: true, paid: true, paidAt: true }
+
 const SERVICE_SELECT = {
   id: true,
   title: true,
@@ -40,10 +42,7 @@ const SERVICE_SELECT = {
   workFrom: true,
   workTo: true,
   revenueCents: true,
-  expenses: {
-    select: { id: true, title: true, amountCents: true, paid: true, paidAt: true },
-    orderBy: { createdAt: 'asc' },
-  },
+  expenses: { select: EXPENSE_SELECT, orderBy: { createdAt: 'asc' } },
 }
 
 /** Сколько дней клиент с нами. У ушедшего счёт останавливается датой ухода. */
@@ -371,6 +370,31 @@ export async function removeService(user, id) {
     await prisma.boardService.delete({ where: { id } })
   } catch (e) {
     if (e.code === 'P2025') throw ApiError.notFound('Услуга не найдена')
+    throw e
+  }
+}
+
+/**
+ * Галочка «выплачено» у одного расхода. Отдельная ручка, а не правка услуги:
+ * ставят её щелчком прямо в списке, и пересылать ради этого всю форму
+ * незачем. Дата выплаты считается так же, как при правке услуги (см.
+ * resolvePaidAt): поставили — сегодня, сняли — стёрлась, повторный запрос
+ * дату не двигает.
+ */
+export async function setExpensePaid(user, id, { paid }) {
+  assertAdmin(user)
+  const expense = await prisma.boardExpense.findUnique({ where: { id } })
+  if (!expense) throw ApiError.notFound('Расход не найден')
+
+  try {
+    return await prisma.boardExpense.update({
+      where: { id },
+      data: { paid, paidAt: resolvePaidAt(expense, paid) },
+      select: { ...EXPENSE_SELECT, serviceId: true },
+    })
+  } catch (e) {
+    // Расход могли убрать правкой услуги между чтением и записью.
+    if (e.code === 'P2025') throw ApiError.notFound('Расход не найден')
     throw e
   }
 }

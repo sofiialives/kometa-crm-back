@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { addClientSchema, addServiceSchema, editServiceSchema } from '../board.schema.js'
+import { addClientSchema, addServiceSchema, editServiceSchema, expensePaidSchema } from '../board.schema.js'
 
 const BASE = { boardClientId: 'client1', title: 'Ведение канала', month: '2026-11-01', revenue: 500 }
 
@@ -113,5 +113,24 @@ describe('расходы услуги', () => {
 
   test('те же поля принимаются при создании услуги', () => {
     assert.equal(add({ expenses: [{ title: 'Подписка', amount: 10, paid: false }] }).success, true)
+  })
+})
+
+describe('галочка «выплачено» у расхода', () => {
+  const mark = (body, id = 'expense1') => expensePaidSchema.safeParse({ params: { id }, body })
+
+  test('true и false принимаются', () => {
+    assert.equal(mark({ paid: true }).success, true)
+    assert.equal(mark({ paid: false }).success, true)
+  })
+
+  test('строка, число и пустое тело — отказ', () => {
+    assert.equal(mark({ paid: 'false' }).success, false)
+    assert.equal(mark({ paid: 1 }).success, false)
+    assert.equal(mark({}).success, false)
+  })
+
+  test('id с недопустимыми символами — отказ', () => {
+    assert.equal(mark({ paid: true }, 'плохой id').success, false)
   })
 })

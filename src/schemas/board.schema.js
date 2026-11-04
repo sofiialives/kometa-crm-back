@@ -106,6 +106,13 @@ export const leaveSchema = z.object({
   }),
 })
 
+// Галочка «выплачено» у одного расхода. Только булево значение: строка
+// "false" в JavaScript истинна, и такую ошибку лучше отбить на входе.
+export const expensePaidSchema = z.object({
+  params: z.object({ id: objectId }),
+  body: z.object({ paid: z.boolean({ required_error: 'Укажите paid', invalid_type_error: 'paid должно быть true или false' }) }),
+})
+
 export const addServiceSchema = z.object({
   body: z
     .object({
