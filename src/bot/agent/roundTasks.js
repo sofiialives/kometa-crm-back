@@ -17,12 +17,21 @@ const padded = (text) => ` ${squash(text)} `
 // Название короче этого (после нормализации) слишком общее, чтобы назвать по нему чужую задачу.
 export const MIN_TITLE = 8
 
-/** Названия в кавычках из текста, без повторов. Это названия задач, а бывает и клиентов. */
+// Сколько названий из одного текста проверяем и насколько короткое упоминание не берём.
+export const MENTIONS_MAX = 20
+export const MIN_MENTION = 4
+
+/**
+ * Названия в кавычках из текста, без повторов. Это названия задач, а бывает
+ * и клиентов. Слишком короткие отбрасываем сразу, больше MENTIONS_MAX не
+ * берём: в запрос к базе уходит ограниченное число.
+ */
 export function quotedTitles(text) {
   const found = []
   for (const m of String(text ?? '').matchAll(QUOTED)) {
     const title = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]).trim()
-    if (title && !found.includes(title)) found.push(title)
+    if (squash(title).length >= MIN_MENTION && !found.includes(title)) found.push(title)
+    if (found.length >= MENTIONS_MAX) break
   }
   return found
 }
@@ -39,8 +48,11 @@ export function sameTitle(mention, title) {
   return Boolean(a) && (a === b || (a.length >= 6 && b.includes(a)))
 }
 
-// Сколько открытых задач людей из области смотрящего читаем за раз для проверки.
-const CANDIDATES_MAX = 3000
+// Сколько открытых задач людей из области смотрящего читаем за раз для проверки,
+// сколько мест с чужими задачами показываем и сколько задач ищем по названиям.
+export const CANDIDATES_MAX = 3000
+const PROBLEMS_MAX = 20
+const NAMED_MAX = 300
 const OWNER = { select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } }
 
 /** Задачи из CRM (любого статуса, видимые), чьё название содержит названия из текстов. extra — отбор, например по владельцу. */
@@ -48,7 +60,7 @@ async function tasksNamed(titles, extra = {}) {
   if (!titles.length) return []
   return prisma.task.findMany({
     where: { AND: [VISIBLE, extra, { OR: titles.map((title) => ({ title: { contains: title, mode: 'insensitive' } })) }] },
-    take: 300,
+    take: NAMED_MAX,
     select: { id: true, title: true, status: true, ownerId: true, owner: OWNER },
   })
 }
@@ -69,14 +81,18 @@ function ownerScope(viewer, addresseeIds) {
  * без: название совпало точно (до регистра, ё и знаков) и такой задачи нет
  * у самого адресата, а у него нет и более длинной с этим названием внутри,
  * которую назвали целиком. items — [{ userId, text }], viewer — кто пишет
- * поручение. Возвращает [{ userId, title, owners }].
+ * поручение. Возвращает { problems: [{ userId, title, owners }], incomplete }.
+ * incomplete: задач больше, чем мы читаем за раз, проверка неполная, и
+ * молча пропускать её нельзя.
  */
 export async function foreignTitles(items, viewer) {
-  const open = await prisma.task.findMany({
+  const read = await prisma.task.findMany({
     where: { AND: [VISIBLE, { status: { in: ['today', 'progress'] } }, { owner: ownerScope(viewer, items.map((i) => i.userId)) }] },
-    take: CANDIDATES_MAX,
+    take: CANDIDATES_MAX + 1,
     select: { id: true, title: true, ownerId: true, owner: OWNER },
   })
+  if (read.length > CANDIDATES_MAX) return { problems: [], incomplete: true }
+  const open = read
   // Одинаковые названия у нескольких исполнителей работы — одна запись с несколькими владельцами.
   const groups = new Map()
   for (const t of open) {
@@ -95,16 +111,18 @@ export async function foreignTitles(items, viewer) {
       found.push({ userId, key, said, title: tasks[0].title, owners: [...new Map(tasks.map((t) => [t.owner.id, t.owner])).values()] })
     }
   }
-  if (!found.length) return []
+  if (!found.length) return { problems: [], incomplete: false }
   // Своё название могло быть у сделанной задачи: её среди открытых нет.
   const own = await prisma.task.findMany({
     where: { AND: [VISIBLE, { ownerId: { in: [...new Set(found.map((f) => f.userId))] } }, { OR: found.map((f) => ({ title: { contains: f.title, mode: 'insensitive' } })) }] },
-    take: CANDIDATES_MAX,
+    take: CANDIDATES_MAX + 1,
     select: { title: true, ownerId: true },
   })
-  return found
+  if (own.length > CANDIDATES_MAX) return { problems: [], incomplete: true }
+  const problems = found
     .filter((f) => !own.some((t) => t.ownerId === f.userId && padded(t.title).includes(f.key) && f.said.includes(padded(t.title))))
     .map(({ userId, title, owners }) => ({ userId, title, owners }))
+  return { problems: problems.slice(0, PROBLEMS_MAX), incomplete: false }
 }
 
 /**
@@ -117,6 +135,8 @@ export async function allTitlesDone(userId, text) {
   const titles = quotedTitles(text)
   if (!titles.length) return false
   const mine = await tasksNamed(titles, { ownerId: userId })
+  // Упёрлись в предел выборки — не уверены, что видим все задачи, пишем как есть.
+  if (mine.length >= NAMED_MAX) return false
   const named = titles.flatMap((title) => mine.filter((t) => sameTitle(title, t.title)))
   return named.length > 0 && named.every((t) => t.status === 'done')
 }
