@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  cardVisible, columnOf, fillWorkSpan, monthsOfService, resolveRange, serviceInPeriod, serviceVisible,
-  shapeService, totals, workSpan, workSpanError, workSpanProblem, dayStart,
+  cardVisible, columnOf, expenseRows, fillWorkSpan, monthsOfService, resolvePaidAt, resolveRange, serviceInPeriod,
+  serviceVisible, shapeService, totals, workSpan, workSpanError, workSpanProblem, dayStart,
 } from '../boardRules.js'
 
 const iso = (d) => d.toISOString()
@@ -372,5 +372,94 @@ describe('месяцы для списка выбора', () => {
 
   test('кривой срок не ломает список', () => {
     assert.deepEqual(keys(service('2026-10', { workFrom: '2026-12-10', workTo: '2026-12-01' })), ['2026-10'])
+  })
+})
+
+describe('отметка «выплачено» у расходов', () => {
+  const NOW = new Date('2026-11-04T10:00:00.000Z')
+  const EARLIER = new Date('2026-10-20T09:00:00.000Z')
+  const CREATED = new Date('2026-10-01T08:00:00.000Z')
+  // Расходы услуги, как они лежат в базе до правки.
+  const before = [
+    { id: 'e1', title: 'Копирайтер', amountCents: 5000, paid: true, paidAt: EARLIER, createdAt: CREATED },
+    { id: 'e2', title: 'Дизайнер', amountCents: 3000, paid: false, paidAt: null, createdAt: CREATED },
+  ]
+
+  test('поставили галочку — дата выплаты сейчас, сняли — пусто', () => {
+    assert.equal(resolvePaidAt(null, true, NOW), NOW)
+    assert.equal(resolvePaidAt(before[0], false, NOW), null)
+    assert.equal(resolvePaidAt(null, false, NOW), null)
+  })
+
+  test('уже выплаченный остаётся с прежней датой', () => {
+    assert.equal(resolvePaidAt(before[0], true, NOW), EARLIER)
+  })
+
+  test('невыплаченный, которому ставят галочку, получает сегодняшнюю дату', () => {
+    assert.equal(resolvePaidAt(before[1], true, NOW), NOW)
+  })
+
+  test('выплаченный без даты (так быть не должно) получает дату сейчас', () => {
+    assert.equal(resolvePaidAt({ paid: true, paidAt: null }, true, NOW), NOW)
+  })
+
+  test('правка услуги не теряет отметку: тот же id, прежняя дата выплаты', () => {
+    const [row] = expenseRows([{ id: 'e1', title: ' Копирайтер ', amount: 60, paid: true }], before, NOW)
+    assert.equal(row.id, 'e1')
+    assert.equal(row.paid, true)
+    assert.equal(row.paidAt, EARLIER)
+    assert.equal(row.createdAt, CREATED)
+    assert.equal(row.title, 'Копирайтер')
+    assert.equal(row.amountCents, 6000)
+  })
+
+  test('если форма про галочку не знает, отметка остаётся как была', () => {
+    const rows = expenseRows([{ id: 'e1', title: 'Копирайтер', amount: 50 }, { id: 'e2', title: 'Дизайнер', amount: 30 }], before, NOW)
+    assert.deepEqual(rows.map((r) => [r.paid, r.paidAt]), [[true, EARLIER], [false, null]])
+  })
+
+  test('галочку снимают — дата стирается', () => {
+    const [row] = expenseRows([{ id: 'e1', title: 'Копирайтер', amount: 50, paid: false }], before, NOW)
+    assert.equal(row.paid, false)
+    assert.equal(row.paidAt, null)
+  })
+
+  test('галочку ставят у прежнего расхода — дата выплаты сейчас', () => {
+    const [row] = expenseRows([{ id: 'e2', title: 'Дизайнер', amount: 30, paid: true }], before, NOW)
+    assert.equal(row.paid, true)
+    assert.equal(row.paidAt, NOW)
+  })
+
+  test('новая строка без id начинается невыплаченной, с галочкой — выплаченной сегодня', () => {
+    const rows = expenseRows([{ title: 'Подписка', amount: 10 }, { id: null, title: 'Сервис', amount: 5, paid: true }], before, NOW)
+    assert.deepEqual(rows.map((r) => [r.id, r.paid, r.paidAt]), [[undefined, false, null], [undefined, true, NOW]])
+  })
+
+  test('чужой id не переносится и не берёт чужую отметку', () => {
+    const [row] = expenseRows([{ id: 'other-service-expense', title: 'Кто-то', amount: 1, paid: true }], before, NOW)
+    assert.equal(row.id, undefined)
+    assert.equal(row.paidAt, NOW)
+  })
+
+  test('один id дважды: второй раз это уже новая строка', () => {
+    const rows = expenseRows([{ id: 'e1', title: 'А', amount: 1 }, { id: 'e1', title: 'Б', amount: 2 }], before, NOW)
+    assert.equal(rows[0].id, 'e1')
+    assert.equal(rows[1].id, undefined)
+    assert.equal(rows[1].paid, false)
+  })
+
+  test('убранная из формы строка исчезает вместе с отметкой', () => {
+    const rows = expenseRows([{ id: 'e2', title: 'Дизайнер', amount: 30 }], before, NOW)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].id, 'e2')
+  })
+
+  test('при создании услуги id не используется, галочка даёт сегодняшнюю дату', () => {
+    const rows = expenseRows([{ id: 'e1', title: 'Копирайтер', amount: 12.34, paid: true }], [], NOW)
+    assert.deepEqual(rows, [{ title: 'Копирайтер', amountCents: 1234, paid: true, paidAt: NOW }])
+  })
+
+  test('нет расходов — пустой список', () => {
+    assert.deepEqual(expenseRows(undefined), [])
   })
 })

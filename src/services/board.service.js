@@ -1,8 +1,8 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import {
-  cardVisible, columnOf, DAY_MS, dayStart, fillWorkSpan, monthsOfService, monthStart, resolveRange, serviceInPeriod,
-  serviceVisible, shapeService, totals, workSpanProblem,
+  cardVisible, columnOf, DAY_MS, dayStart, expenseRows, fillWorkSpan, monthsOfService, monthStart, resolveRange,
+  serviceInPeriod, serviceVisible, shapeService, toCents, totals, workSpanProblem,
 } from './boardRules.js'
 
 export { resolveRange }
@@ -17,14 +17,6 @@ export { resolveRange }
 function assertAdmin(user) {
   if (user.role !== 'admin') throw ApiError.forbidden('Доска клиентов доступна только админу')
 }
-
-// Деньги приходят с фронта в долларах, в базе лежат в центах. Округляем
-// здесь один раз: дальше по всему коду только целые числа, и сложение
-// никогда не даёт 0.30000000000000004.
-const toCents = (dollars) => Math.round(Number(dollars) * 100)
-
-const expenseRows = (expenses) =>
-  (expenses || []).map((e) => ({ title: e.title.trim(), amountCents: toCents(e.amount) }))
 
 /**
  * Срок работ к записи в базу: дни целиком (полночь UTC), пусто — null.
@@ -347,9 +339,13 @@ export async function editService(user, id, { title, month, paidAt, workFrom, wo
     : null
 
   // Расходы заменяем целиком, а не правим по одному: форма присылает весь
-  // список, и так убранная строка действительно исчезает.
+  // список, и так убранная строка действительно исчезает. Отметка
+  // «выплачено» при этом переживает замену (см. expenseRows): прежние
+  // расходы читаем до удаления.
   const updated = await prisma.$transaction(async (tx) => {
+    let rows
     if (expenses !== undefined) {
+      rows = expenseRows(expenses, await tx.boardExpense.findMany({ where: { serviceId: id } }))
       await tx.boardExpense.deleteMany({ where: { serviceId: id } })
     }
     return tx.boardService.update({
@@ -361,7 +357,7 @@ export async function editService(user, id, { title, month, paidAt, workFrom, wo
         ...(workFrom !== undefined ? { workFrom: work.workFrom } : {}),
         ...(workTo !== undefined ? { workTo: work.workTo } : {}),
         ...(revenue !== undefined ? { revenueCents: toCents(revenue) } : {}),
-        ...(expenses !== undefined ? { expenses: { create: expenseRows(expenses) } } : {}),
+        ...(expenses !== undefined ? { expenses: { create: rows } } : {}),
       },
       select: SERVICE_SELECT,
     })

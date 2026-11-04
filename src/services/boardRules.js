@@ -276,3 +276,53 @@ export function monthsOfService(service) {
   }
   return months
 }
+
+// ---------------------------------------------------------------------------
+// Деньги и расходы
+// ---------------------------------------------------------------------------
+
+// Деньги приходят с фронта в долларах, в базе лежат в центах. Округляем
+// здесь один раз: дальше по всему коду только целые числа, и сложение
+// никогда не даёт 0.30000000000000004.
+export const toCents = (dollars) => Math.round(Number(dollars) * 100)
+
+/**
+ * Дата выплаты расхода после того, как отметку поставили или сняли.
+ *
+ * Снята — даты нет. Стоит и раньше стояла — остаётся прежняя: повторный
+ * запрос или правка услуги не должны менять день, когда деньги ушли. Поставили
+ * только что — сейчас.
+ */
+export function resolvePaidAt(previous, paid, now = new Date()) {
+  if (!paid) return null
+  return previous?.paid && previous.paidAt ? previous.paidAt : now
+}
+
+/**
+ * Строки расходов к записи в базу.
+ *
+ * При правке услуги расходы удаляются и создаются заново, и отметка
+ * «выплачено» не должна пропасть. Поэтому строку из формы сопоставляем с
+ * прежним расходом услуги по id: тогда id и дата создания остаются, а дата
+ * выплаты считается по resolvePaidAt. Если в строке нет paid, отметка
+ * остаётся как была: фронт, не знающий про галочку, не должен её сбрасывать.
+ *
+ * Чужой id (не из расходов этой услуги) и повторный id пропускаем: записать
+ * его второй раз значило бы упасть на уникальном ключе.
+ */
+export function expenseRows(expenses, previous = [], now = new Date()) {
+  const before = new Map(previous.map((p) => [p.id, p]))
+  const taken = new Set()
+  return (expenses || []).map((e) => {
+    const prev = e.id && before.has(e.id) && !taken.has(e.id) ? before.get(e.id) : null
+    if (prev) taken.add(prev.id)
+    const paid = e.paid === undefined ? Boolean(prev?.paid) : e.paid
+    return {
+      ...(prev ? { id: prev.id, createdAt: prev.createdAt } : {}),
+      title: e.title.trim(),
+      amountCents: toCents(e.amount),
+      paid,
+      paidAt: resolvePaidAt(prev, paid, now),
+    }
+  })
+}

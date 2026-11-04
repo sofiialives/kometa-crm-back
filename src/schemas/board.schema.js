@@ -19,8 +19,16 @@ const workDay = optional(z.coerce.date().nullable())
 const workSpanCheck = (b) => !b.workFrom || !b.workTo || workSpanError(dayStart(b.workFrom), dayStart(b.workTo)) === null
 const workSpanIssue = (b) => ({ message: workSpanError(dayStart(b.workFrom), dayStart(b.workTo)), path: ['workTo'] })
 
+// id и paid нужны при правке услуги: расходы пересоздаются целиком, и по id
+// сервер находит прежний расход, чтобы не потерять отметку «выплачено». У новой
+// строки id нет (или null). Без paid отметка остаётся как была.
 const expenses = z
-  .array(z.object({ title: z.string().trim().min(1, 'У расхода должно быть название').max(200), amount: money }))
+  .array(z.object({
+    id: optional(objectId.nullable()),
+    title: z.string().trim().min(1, 'У расхода должно быть название').max(200),
+    amount: money,
+    paid: z.boolean().optional(),
+  }))
   .max(30)
 
 /**

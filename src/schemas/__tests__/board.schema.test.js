@@ -85,3 +85,33 @@ describe('срок работ у услуг в форме нового клие�
     assert.equal(addClient({ workFrom: '2026-11-21', workTo: '2026-11-20' }).success, false)
   })
 })
+
+describe('расходы услуги', () => {
+  const expenseOf = (expense) => edit({ expenses: [{ title: 'Копирайтер', amount: 50, ...expense }] })
+
+  test('id и paid необязательные', () => {
+    assert.equal(expenseOf({}).success, true)
+    const r = expenseOf({ id: 'cmt1ik0w80001ijqro3uumtss', paid: true })
+    assert.equal(r.success, true)
+    assert.equal(r.data.body.expenses[0].id, 'cmt1ik0w80001ijqro3uumtss')
+    assert.equal(r.data.body.expenses[0].paid, true)
+  })
+
+  test('у новой строки id пустой или null', () => {
+    assert.equal(expenseOf({ id: null }).success, true)
+    assert.equal(expenseOf({ id: '' }).success, true)
+  })
+
+  test('paid — только булево значение', () => {
+    assert.equal(expenseOf({ paid: 'да' }).success, false)
+    assert.equal(expenseOf({ paid: null }).success, false)
+  })
+
+  test('id с недопустимыми символами — отказ', () => {
+    assert.equal(expenseOf({ id: 'не id!' }).success, false)
+  })
+
+  test('те же поля принимаются при создании услуги', () => {
+    assert.equal(add({ expenses: [{ title: 'Подписка', amount: 10, paid: false }] }).success, true)
+  })
+})
