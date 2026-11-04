@@ -190,10 +190,16 @@ export function teamWhere(viewer) {
   return { id: '__none__' }
 }
 
-/** В поле зрения ли уже загруженный человек: то же правило, что teamWhere. */
+/**
+ * В поле зрения ли уже загруженный человек: точное зеркало teamWhere, чтобы
+ * проверка в памяти и выборка из базы не расходились.
+ */
 export function inTeam(viewer, user) {
-  if (viewer?.role === 'admin') return true
-  return viewer?.role === 'lead' && Boolean(viewer.departmentId) && user.role === 'staff' && user.active !== false && user.departmentId === viewer.departmentId && user.id !== viewer.id
+  if (viewer?.role === 'admin') return PARTICIPANT_ROLES.includes(user?.role) && user.active === true
+  if (viewer?.role === 'lead' && viewer.departmentId) {
+    return user?.role === 'staff' && user.active === true && user.departmentId === viewer.departmentId && user.id !== viewer.id
+  }
+  return false
 }
 
 /** Сводка по команде, по строке на человека. */

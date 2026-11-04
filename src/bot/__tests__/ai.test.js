@@ -8,7 +8,7 @@ import { costMicros, OWNER_RESERVE_USD, pickModel, PRICES, USER_DAILY_USD } from
 import { findTool, preflight, replyText, runAgent } from '../ai/engine.js'
 import { toMessages } from '../ai/memory.js'
 import { pdfPages, readable, sniff } from '../ai/media.js'
-import { labelsFor, teamWhere } from '../ai/context.js'
+import { inTeam, labelsFor, teamWhere } from '../ai/context.js'
 import { roundTools, staffTools, teamTools } from '../ai/tools.js'
 import { REPORT_SCHEMA, verifiedQuote } from '../ai/report.js'
 import { clampMinutes, confirmText, draftText, linksIn, MAX_PEOPLE, reportText } from '../agent/rounds.js'
@@ -460,6 +460,22 @@ describe('кто кого видит', () => {
   test('руководитель без отдела и сотрудник — никого', () => {
     assert.deepEqual(teamWhere({ role: 'lead', departmentId: null }), { id: '__none__' })
     assert.deepEqual(teamWhere({ role: 'staff', departmentId: 'd' }), { id: '__none__' })
+  })
+
+  test('inTeam повторяет teamWhere: роль и active проверяются у обоих', () => {
+    const admin = { id: 'a', role: 'admin' }
+    const lead = { id: 'l', role: 'lead', departmentId: 'd' }
+    assert.equal(inTeam(admin, { id: 's', role: 'staff', active: true }), true)
+    assert.equal(inTeam(admin, { id: 's', role: 'staff', active: false }), false)
+    assert.equal(inTeam(admin, { id: 's', role: 'staff' }), false)
+    assert.equal(inTeam(admin, { id: 'x', role: 'admin', active: true }), false)
+    assert.equal(inTeam(lead, { id: 's', role: 'staff', active: true, departmentId: 'd' }), true)
+    assert.equal(inTeam(lead, { id: 's', role: 'staff', departmentId: 'd' }), false)
+    assert.equal(inTeam(lead, { id: 's', role: 'staff', active: true, departmentId: 'other' }), false)
+    assert.equal(inTeam(lead, { id: 'l', role: 'staff', active: true, departmentId: 'd' }), false)
+    assert.equal(inTeam(lead, { id: 'm', role: 'lead', active: true, departmentId: 'd' }), false)
+    assert.equal(inTeam({ role: 'lead', departmentId: null }, { id: 's', role: 'staff', active: true, departmentId: null }), false)
+    assert.equal(inTeam({ role: 'staff', departmentId: 'd' }, { id: 's', role: 'staff', active: true, departmentId: 'd' }), false)
   })
 })
 
