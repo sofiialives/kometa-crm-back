@@ -37,10 +37,10 @@ const OWNER = { select: { id: true, name: true, role: true, active: true, depart
  * Задачи из CRM, чьё название содержит названия из текстов. Любого статуса
  * и любого владельца: дальше решают те, кому нужно (чья это задача, сделана ли).
  */
-async function tasksNamed(titles) {
+async function tasksNamed(titles, extra = {}) {
   if (!titles.length) return []
   return prisma.task.findMany({
-    where: { AND: [VISIBLE, { OR: titles.map((title) => ({ title: { contains: title, mode: 'insensitive' } })) }] },
+    where: { AND: [VISIBLE, extra, { OR: titles.map((title) => ({ title: { contains: title, mode: 'insensitive' } })) }] },
     take: 300,
     select: { id: true, title: true, status: true, ownerId: true, owner: OWNER },
   })
@@ -66,4 +66,18 @@ export async function foreignTitles(items) {
     }
   }
   return problems
+}
+
+/**
+ * Все ли задачи, названные в тексте человеку, у него уже сделаны. Читаем
+ * заново на момент отправки: черновик лежит до трёх часов, за это время
+ * человек мог закрыть то, о чём мы хотим спросить. Названий нет или хоть
+ * одна задача ещё открыта — нет.
+ */
+export async function allTitlesDone(userId, text) {
+  const titles = quotedTitles(text)
+  if (!titles.length) return false
+  const mine = await tasksNamed(titles, { ownerId: userId })
+  const named = titles.flatMap((title) => mine.filter((t) => sameTitle(title, t.title)))
+  return named.length > 0 && named.every((t) => t.status === 'done')
 }
