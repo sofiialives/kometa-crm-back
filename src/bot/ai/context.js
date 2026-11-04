@@ -259,6 +259,26 @@ export async function personInScope(viewer, personId) {
   return prisma.user.findFirst({ where: { AND: [teamWhere(viewer), { id: String(personId) }] }, select: { ...USER_SELECT, telegram: { select: { chatId: true } } } })
 }
 
+/**
+ * Какие сообщения переписки человека видит смотрящий. Слова самого человека
+ * видят оба. Что бот писал ему сам, Ян видит всё (агент и поручения), а
+ * руководитель только обычные ответы агента и сообщения по своим поручениям:
+ * чужие поручения, например Яна его специалисту, ему не показываем.
+ * Шаблоны и уведомления бота сюда не идут, в них слова других людей.
+ */
+export function dialogWhere(viewer, userId, since) {
+  const out = viewer?.role === 'admin'
+    ? { direction: 'out', source: { in: ['ai', 'round'] } }
+    : {
+      direction: 'out',
+      OR: [
+        { source: 'ai', roundTargetId: null },
+        { source: { in: ['ai', 'round'] }, roundTarget: { round: { ownerId: viewer?.id ?? '__none__' } } },
+      ],
+    }
+  return { userId, createdAt: { gte: since }, OR: [{ direction: { in: ['in', 'reply'] } }, out] }
+}
+
 /** Работы, в которых у человека есть открытые задачи, и сколько их — только его, только в активных работах. */
 async function openWorks(userId, take = 10) {
   const by = await prisma.task.groupBy({
@@ -286,13 +306,7 @@ export async function personBrief(viewer, personId, now = new Date()) {
     prisma.motivationAway.findMany({ where: { userId: user.id, kind: 'break', from: { gte: start } }, orderBy: { from: 'asc' }, select: { from: true, until: true, returnedAt: true, reason: true } }),
     openWorks(user.id),
     prisma.botMessage.findMany({
-      where: {
-        userId: user.id,
-        createdAt: { gte: new Date(now.getTime() - DAY_MS) },
-        // Что писал человек и что бот писал ему сам: агент и поручения.
-        // Шаблоны и уведомления бота сюда не идут, в них слова других людей.
-        OR: [{ direction: { in: ['in', 'reply'] } }, { direction: 'out', source: { in: ['ai', 'round'] } }],
-      },
+      where: dialogWhere(viewer, user.id, new Date(now.getTime() - DAY_MS)),
       orderBy: { createdAt: 'desc' },
       take: 10,
       select: { direction: true, source: true, text: true, createdAt: true },

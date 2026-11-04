@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { speaker } from '../ai/context.js'
+import { dialogWhere, speaker } from '../ai/context.js'
 import { roundStatus } from '../agent/rounds.js'
 import { patch } from './patch.js'
 
@@ -16,6 +16,21 @@ describe('агент владельца видит и то, что бот пис
     assert.equal(speaker({ direction: 'reply' }), 'человек написал')
     assert.equal(speaker({ direction: 'out', source: 'ai' }), 'агент ответил')
     assert.equal(speaker({ direction: 'out', source: 'round' }), 'бот написал по поручению')
+  })
+
+  test('Ян видит все сообщения бота человеку, руководитель только ответы агента и свои поручения', () => {
+    const since = at('2026-11-03T10:00:00Z')
+    const forOwner = dialogWhere({ id: 'owner', role: 'admin' }, 'r', since)
+    assert.deepEqual(forOwner.OR[1], { direction: 'out', source: { in: ['ai', 'round'] } })
+    const forLead = dialogWhere({ id: 'lead', role: 'lead', departmentId: 'd' }, 'r', since)
+    assert.equal(forLead.userId, 'r')
+    assert.deepEqual(forLead.OR[0], { direction: { in: ['in', 'reply'] } })
+    assert.deepEqual(forLead.OR[1].OR, [
+      { source: 'ai', roundTargetId: null },
+      { source: { in: ['ai', 'round'] }, roundTarget: { round: { ownerId: 'lead' } } },
+    ])
+    // Руководитель без id не получает ничего из поручений по случайности.
+    assert.equal(dialogWhere({ role: 'lead' }, 'r', since).OR[1].OR[1].roundTarget.round.ownerId, '__none__')
   })
 
   test('get_round: переписка по порядку, сообщения бота с временем, шаблоны не попадают', async (t) => {
