@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
 import { createDraft, decideDraft, foreignText, reportText, roundStatus, sentNote } from '../agent/rounds.js'
-import { CANDIDATES_MAX, MENTIONS_MAX, OWN_MAX, allTitlesDone, foreignTitles, quotedTitles, sameTitle } from '../agent/roundTasks.js'
+import { MATCHED_MAX, MENTIONS_MAX, OWN_MAX, PAGE_SIZE, PAGES_MAX, allTitlesDone, foreignTitles, quotedTitles, sameTitle } from '../agent/roundTasks.js'
 import { patch } from './patch.js'
 
 const denis = { id: 'denis', name: 'Денис Лебедев', role: 'staff', active: true, departmentId: 'd', department: { name: 'SMM' } }
@@ -38,8 +38,18 @@ describe('названия задач в тексте поручения', () =>
 })
 
 describe('чужая задача в сообщении человеку', () => {
-  /** open — открытые задачи области смотрящего, own — задачи адресатов любого статуса. */
-  const rows = (t, { open = [], own = [] }) => patch(t, prisma.task, 'findMany', async ({ where }) => (where.AND.some((c) => c.owner) ? open : own))
+  /**
+   * open — открытые задачи области смотрящего (читаются страницами, потом
+   * владельцы найденных по id), own — задачи адресатов любого статуса.
+   */
+  const rows = (t, { open = [], own = [] }) => patch(t, prisma.task, 'findMany', async ({ where, take, cursor }) => {
+    if (where.id) return open.filter((x) => where.id.in.includes(x.id))
+    if (where.AND.some((c) => c.owner)) {
+      const from = cursor ? open.findIndex((x) => x.id === cursor.id) + 1 : 0
+      return open.slice(from, from + take)
+    }
+    return own
+  })
 
   test('точное название чужой открытой задачи в тексте, с кавычками или без — это место', async (t) => {
     rows(t, { open: [task()] })
@@ -71,13 +81,13 @@ describe('чужая задача в сообщении человеку', () =>
   test('у адресата есть своя открытая задача с таким названием — всё в порядке', async (t) => {
     const calls = rows(t, { open: [task(), task({ id: 't2', ownerId: 'denis', owner: denis })] })
     assert.deepEqual(await problemsOf([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN), [])
-    assert.equal(calls.length, 1)
+    assert.equal(calls.length, 2)
   })
 
   test('своя задача адресата уже сделана — она есть во втором запросе, ошибки нет', async (t) => {
     const calls = rows(t, { open: [task()], own: [task({ id: 't3', ownerId: 'denis', owner: denis, status: 'done' })] })
     assert.deepEqual(await problemsOf([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN), [])
-    assert.equal(calls.length, 2)
+    assert.equal(calls.length, 3)
   })
 
   test('назвали более длинную свою задачу, в которой чужое название лишь часть — не чужая', async (t) => {
@@ -90,8 +100,8 @@ describe('чужая задача в сообщении человеку', () =>
     const calls = rows(t, { open: [task()] })
     const text = `Денис, как «${POSTS}» и ${Array.from({ length: 50 }, (_, i) => `«Задача ${i}»`).join(' ')}`
     await foreignTitles([{ userId: 'denis', text }, { userId: 'roman', text }], ADMIN)
-    const own = calls[1][0].where
-    assert.equal(calls.length, 2)
+    const own = calls[2][0].where
+    assert.equal(calls.length, 3)
     assert.deepEqual(own.AND[1], { ownerId: { in: ['denis', 'roman'] } })
     assert.doesNotMatch(JSON.stringify(own), /contains|Задача/)
   })
@@ -111,10 +121,30 @@ describe('чужая задача в сообщении человеку', () =>
     assert.ok(where.AND[2].owner)
   })
 
-  test('выборка упёрлась в предел — проверка неполная, и это видно, а не молчит', async (t) => {
-    const many = Array.from({ length: CANDIDATES_MAX + 1 }, (_, i) => task({ id: `x${i}`, title: `Задача номер ${i}` }))
-    rows(t, { open: many })
+  test('большая область не блокирует проверку: читаем страницами, держим только совпавшие', async (t) => {
+    const filler = Array.from({ length: PAGE_SIZE * 3 + 500 }, (_, i) => task({ id: `a${String(i).padStart(5, '0')}`, title: `Другая задача ${i}`, ownerId: 'x', owner: anton }))
+    const calls = rows(t, { open: [...filler, task({ id: 'z-posts' })] })
+    const res = await foreignTitles([{ userId: 'denis', text: `Денис, как «${POSTS}»?` }], ADMIN)
+    assert.equal(res.incomplete, false)
+    assert.equal(res.problems.length, 1)
+    // Три полные страницы и четвёртая неполная, потом владельцы найденных, потом свои задачи.
+    assert.equal(calls.length, 3 + 1 + 1 + 1)
+  })
+
+  test('упёрлись в число страниц — проверка неполная, и это видно', async (t) => {
+    const calls = patch(t, prisma.task, 'findMany', async ({ take }) => Array.from({ length: take }, (_, i) => task({ id: `p${i}`, title: `Другая задача ${i}`, ownerId: 'x' })))
     assert.deepEqual(await foreignTitles([{ userId: 'denis', text: 'Как дела' }], ADMIN), { problems: [], incomplete: true })
+    assert.equal(calls.length, PAGES_MAX)
+  })
+
+  test('совпавших названий больше предела — суженная выборка не поместилась, неполная', async (t) => {
+    const named = Array.from({ length: MATCHED_MAX + 1 }, (_, i) => task({ id: `m${i}`, title: `Большая задача номер ${i}` }))
+    rows(t, { open: named })
+    const text = named.map((x) => x.title).join(', ')
+    assert.deepEqual(await foreignTitles([{ userId: 'denis', text }], ADMIN), { problems: [], incomplete: true })
+  })
+
+  test('свои задачи адресатов не влезли в предел — тоже неполная', async (t) => {
     rows(t, { open: [task()], own: Array.from({ length: OWN_MAX + 1 }, (_, i) => task({ id: `y${i}`, ownerId: 'denis', status: 'done' })) })
     assert.equal((await foreignTitles([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN)).incomplete, true)
   })
@@ -159,7 +189,7 @@ describe('чужая задача в сообщении человеку', () =>
 
   test('message_people: проверка неполная — черновика нет, модель получает ошибку', async (t) => {
     patch(t, prisma.user, 'findFirst', async () => ({ ...denis, telegram: { chatId: '1002' } }))
-    patch(t, prisma.task, 'findMany', async () => Array.from({ length: CANDIDATES_MAX + 1 }, (_, i) => task({ id: `x${i}` })))
+    patch(t, prisma.task, 'findMany', async ({ take }) => Array.from({ length: take }, (_, i) => task({ id: `x${i}`, title: `Другая задача ${i}` })))
     const created = patch(t, prisma.botRound, 'create', async () => ({ id: 'r1' }))
     const res = await createDraft({ id: 'owner', role: 'admin' }, '9001', { topic: 'Как дела', minutes: 60, collect: true, messages: [{ person_id: 'denis', text: 'Денис, привет. Как дела?' }] })
     assert.equal(res.shown, false)

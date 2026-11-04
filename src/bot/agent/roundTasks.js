@@ -59,9 +59,12 @@ export function sameTitle(mention, title) {
   return Boolean(a) && (a === b || (a.length >= 6 && b.includes(a)))
 }
 
-// Сколько открытых задач людей из области смотрящего читаем за раз для проверки,
-// сколько мест с чужими задачами показываем и сколько задач читаем у адресатов.
-export const CANDIDATES_MAX = 3000
+// Открытые задачи области смотрящего читаем страницами по PAGE_SIZE, не больше PAGES_MAX
+// страниц, и держим в памяти только те, чьё название встретилось в текстах (не больше
+// MATCHED_MAX). Сколько мест с чужими задачами показываем и сколько задач читаем у адресатов.
+export const PAGE_SIZE = 1000
+export const PAGES_MAX = 20
+export const MATCHED_MAX = 300
 const PROBLEMS_MAX = 20
 export const OWN_MAX = 2000
 const OWNER = { select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } }
@@ -92,6 +95,41 @@ function ownerScope(viewer, addresseeIds) {
 }
 
 /**
+ * Открытые задачи области смотрящего, чьё название целиком встречается хотя
+ * бы в одном из текстов (saids, с пробелами по краям). Читаем страницами и
+ * держим только совпавшие, так что большая область не мешает проверке.
+ * null: не уложились в число страниц или совпавших слишком много, то есть
+ * уже суженная выборка не поместилась и проверка неполная.
+ */
+async function scanOpen(viewer, ids, saids) {
+  const where = { AND: [VISIBLE, { status: { in: ['today', 'progress'] } }, { owner: ownerScope(viewer, ids) }] }
+  const hits = []
+  let cursor = null
+  for (let page = 0; page < PAGES_MAX; page += 1) {
+    const rows = await prisma.task.findMany({
+      where,
+      orderBy: { id: 'asc' },
+      take: PAGE_SIZE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: { id: true, title: true, ownerId: true },
+    })
+    for (const row of rows) {
+      const key = padded(row.title)
+      if (key.trim().length >= MIN_TITLE && saids.some((said) => said.includes(key))) hits.push(row)
+    }
+    if (hits.length > MATCHED_MAX) return null
+    if (rows.length < PAGE_SIZE) {
+      if (!hits.length) return []
+      const owners = await prisma.task.findMany({ where: { id: { in: hits.map((h) => h.id) } }, select: { id: true, owner: OWNER } })
+      const ownerOf = new Map(owners.map((o) => [o.id, o.owner]))
+      return hits.filter((h) => ownerOf.has(h.id)).map((h) => ({ ...h, owner: ownerOf.get(h.id) }))
+    }
+    cursor = rows.at(-1).id
+  }
+  return null
+}
+
+/**
  * Места, где адресату назвали чужую задачу. Берём открытые задачи людей из
  * области смотрящего и ищем их названия целиком в тексте, с кавычками или
  * без: название совпало точно (до регистра, ё и знаков) и такой задачи нет
@@ -102,13 +140,8 @@ function ownerScope(viewer, addresseeIds) {
  * молча пропускать её нельзя.
  */
 export async function foreignTitles(items, viewer) {
-  const read = await prisma.task.findMany({
-    where: { AND: [VISIBLE, { status: { in: ['today', 'progress'] } }, { owner: ownerScope(viewer, items.map((i) => i.userId)) }] },
-    take: CANDIDATES_MAX + 1,
-    select: { id: true, title: true, ownerId: true, owner: OWNER },
-  })
-  if (read.length > CANDIDATES_MAX) return { problems: [], incomplete: true }
-  const open = read
+  const open = await scanOpen(viewer, items.map((i) => i.userId), items.map((i) => padded(i.text)))
+  if (!open) return { problems: [], incomplete: true }
   // Одинаковые названия у нескольких исполнителей работы — одна запись с несколькими владельцами.
   const groups = new Map()
   for (const t of open) {
