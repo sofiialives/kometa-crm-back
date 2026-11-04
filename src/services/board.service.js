@@ -1,8 +1,8 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
 import {
-  cardVisible, columnOf, DAY_MS, dayStart, expenseRows, fillWorkSpan, monthsOfService, monthStart, resolveRange,
-  resolvePaidAt, serviceInPeriod, serviceVisible, shapeService, toCents, totals, workSpanProblem,
+  buildBoard, daysWithUs, dayStart, expenseRows, fillWorkSpan, monthsOfService, monthStart, resolveRange,
+  resolvePaidAt, serviceVisible, shapeService, toCents, totals, workSpanProblem,
 } from './boardRules.js'
 
 export { resolveRange }
@@ -45,12 +45,6 @@ const SERVICE_SELECT = {
   expenses: { select: EXPENSE_SELECT, orderBy: { createdAt: 'asc' } },
 }
 
-/** Сколько дней клиент с нами. У ушедшего счёт останавливается датой ухода. */
-function daysWithUs(card) {
-  const end = card.leftAt ? new Date(card.leftAt) : new Date()
-  return Math.max(0, Math.floor((end - new Date(card.startedAt)) / DAY_MS))
-}
-
 // ---------------------------------------------------------------------------
 // Доска
 // ---------------------------------------------------------------------------
@@ -89,54 +83,7 @@ export async function getBoard(user, query) {
     orderBy: { client: { name: 'asc' } },
   })
 
-  const active = []
-  const left = []
-  const visibleServices = []
-
-  for (const c of cards) {
-    const visible = c.services.filter((s) => serviceVisible(s, range))
-    if (!cardVisible({
-      status: c.status,
-      startedAt: c.startedAt,
-      leftAt: c.leftAt,
-      serviceCount: c.services.length,
-      visibleCount: visible.length,
-    }, range)) continue
-
-    visibleServices.push(...visible)
-    const card = {
-      id: c.id,
-      client: c.client,
-      contact: c.contact,
-      status: c.status,
-      startedAt: c.startedAt,
-      leftAt: c.leftAt,
-      leftReason: c.leftReason,
-      daysWithUs: daysWithUs(c),
-      // Количество услуг за всё время — так и написано в задании, «не
-      // зависящее от периода».
-      serviceCountTotal: c.services.length,
-      // Сколько услуг дают деньги в периоде, а сколько видно всего: разница
-      // — доделки, их деньги лежат в другом месяце.
-      serviceCountInPeriod: visible.filter((s) => serviceInPeriod(s, range)).length,
-      serviceCountVisible: visible.length,
-      ...totals(visible, range),
-    }
-    const column = columnOf(c, range) === 'left' ? left : active
-    column.push(card)
-  }
-
-  return {
-    // Сводка считается по обеим колонкам сразу: выручка ушедшего клиента за
-    // тот месяц, когда он ещё работал, — это выручка агентства за тот месяц.
-    summary: {
-      ...totals(visibleServices, range),
-      activeCount: active.length,
-      leftCount: left.length,
-    },
-    active,
-    left,
-  }
+  return buildBoard(cards, range)
 }
 
 /**

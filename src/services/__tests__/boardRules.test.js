@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  cardVisible, columnOf, expenseRows, fillWorkSpan, monthsOfService, resolvePaidAt, resolveRange, serviceInPeriod,
+  buildBoard, cardVisible, columnOf, daysWithUs, expenseRows, fillWorkSpan, monthsOfService, resolvePaidAt, resolveRange, serviceInPeriod,
   serviceVisible, shapeService, totals, workSpan, workSpanError, workSpanProblem, dayStart,
 } from '../boardRules.js'
 
@@ -487,5 +487,81 @@ describe('отметка «выплачено» у расходов', () => {
 
   test('нет расходов — пустой список', () => {
     assert.deepEqual(expenseRows(undefined), [])
+  })
+})
+
+describe('доска целиком', () => {
+  const NOW = new Date('2026-11-04T09:00:00.000Z')
+  const expense = (amountCents, paid = false) => ({ amountCents, paid })
+
+  /** Карточка в том виде, в каком её читает сервис из базы. */
+  function card(name, { status = 'active', startedAt = '2026-01-10', leftAt = null, services = [] } = {}) {
+    return {
+      id: `card-${name}`,
+      clientId: `client-${name}`,
+      client: { id: `client-${name}`, name },
+      contact: null,
+      status,
+      startedAt: day(startedAt),
+      leftAt: leftAt && day(leftAt),
+      leftReason: leftAt ? 'причина' : null,
+      services,
+    }
+  }
+
+  const cards = [
+    // Октябрьская услуга с доделками до середины ноября.
+    card('Альфа', { services: [service('2026-10', { revenueCents: 100000, workTo: '2026-11-15', expenses: [expense(20000, true), expense(5000)] })] }),
+    // Пришёл в ноябре.
+    card('Бета', { startedAt: '2026-11-02', services: [service('2026-11', { revenueCents: 40000, expenses: [expense(1000)] })] }),
+    // Ушёл в октябре, услуги были в сентябре.
+    card('Гамма', { status: 'left', startedAt: '2026-05-01', leftAt: '2026-10-20', services: [service('2026-09', { revenueCents: 30000 })] }),
+    // Без услуг, пришёл в ноябре.
+    card('Дельта', { startedAt: '2026-11-03' }),
+  ]
+
+  const names = (list) => list.map((c) => c.client.name)
+
+  test('клиент, пришедший в ноябре, в октябре не висит; ушедший виден в месяце ухода', () => {
+    const board = buildBoard(cards, month('2026-10'), NOW)
+    assert.deepEqual(names(board.active), ['Альфа'])
+    assert.deepEqual(names(board.left), ['Гамма'])
+    assert.equal(board.summary.activeCount, 1)
+    assert.equal(board.summary.leftCount, 1)
+  })
+
+  test('в ноябре доделки видны, но в итоги идут только ноябрьские услуги', () => {
+    const board = buildBoard(cards, month('2026-11'), NOW)
+    assert.deepEqual(names(board.active), ['Альфа', 'Бета', 'Дельта'])
+    assert.deepEqual(names(board.left), [])
+    const alpha = board.active[0]
+    assert.equal(alpha.serviceCountVisible, 1)
+    assert.equal(alpha.serviceCountInPeriod, 0)
+    assert.equal(alpha.serviceCountTotal, 1)
+    assert.equal(alpha.revenueCents, 0)
+    assert.equal(board.summary.revenueCents, 40000)
+    assert.equal(board.summary.expenseCents, 1000)
+    assert.equal(board.summary.unpaidCents, 1000)
+    assert.equal(board.summary.profitCents, 39000)
+  })
+
+  test('октябрь: деньги Альфы и «не выплачено» по ней', () => {
+    const board = buildBoard(cards, month('2026-10'), NOW)
+    assert.equal(board.active[0].revenueCents, 100000)
+    assert.equal(board.active[0].unpaidCents, 5000)
+    assert.equal(board.summary.revenueCents, 100000)
+  })
+
+  test('за всё время все карточки на доске, колонки по статусу, итоги по всему', () => {
+    const board = buildBoard(cards, null, NOW)
+    assert.deepEqual(names(board.active), ['Альфа', 'Бета', 'Дельта'])
+    assert.deepEqual(names(board.left), ['Гамма'])
+    assert.equal(board.summary.revenueCents, 170000)
+  })
+
+  test('дней с нами: у работающего до сегодня, у ушедшего до дня ухода', () => {
+    assert.equal(daysWithUs({ startedAt: day('2026-11-01'), leftAt: null }, NOW), 3)
+    assert.equal(daysWithUs({ startedAt: day('2026-10-01'), leftAt: day('2026-10-11') }, NOW), 10)
+    assert.equal(daysWithUs({ startedAt: day('2026-11-10'), leftAt: null }, NOW), 0)
   })
 })
