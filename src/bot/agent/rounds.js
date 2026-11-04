@@ -46,7 +46,7 @@ const NOT_WRITTEN = ['pending', 'failed', 'skipped']
 const OWN = ['ai', 'round']
 // Сколько реплик одного человека показываем по get_round.
 const TALK_MAX = 12
-const PERSON = { select: { id: true, name: true, role: true, departmentId: true, department: { select: { name: true } } } }
+const PERSON = { select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } }
 // Ссылка: адрес со схемой, www или домен, в том числе кириллический
 // (пример.рф). \\b в JS не видит кириллицу — границы через «не буква».
 const LINK = /(?:https?:\/\/|tg:\/\/|www\.)\S+|(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|link|page)(?![\p{L}\d])\S*|@\w{3,}/giu
@@ -396,14 +396,22 @@ async function gather(round) {
   }
 }
 
+/**
+ * Задачи адресатов на момент отчёта. Только тех, кого тот, кто поручил,
+ * видит и сейчас: человека могли перевести в другой отдел или отключить,
+ * пока шёл опрос. Не вышло прочитать — null, отчёт уйдёт без задач.
+ */
+export async function reportStates(round, answered, now = new Date()) {
+  const visible = answered.filter((t) => inTeam(round.owner, t.user))
+  if (!visible.length) return null
+  return taskStates(visible.map((t) => ({ userId: t.userId, text: t.text })), now).catch((e) => {
+    console.error(`[агент] задачи для отчёта: ${e.name}`)
+    return null
+  })
+}
+
 async function composeReport(round, people, now = new Date()) {
-  // Задачи перечитываем на момент отчёта. Не вышло прочитать — отчёт без них, а не без отчёта.
-  const states = people.answered.length
-    ? await taskStates(people.answered.map((t) => ({ userId: t.userId, text: t.text })), now).catch((e) => {
-      console.error(`[агент] задачи для отчёта: ${e.name}`)
-      return null
-    })
-    : null
+  const states = await reportStates(round, people.answered, now)
   const ai = people.answered.length
     ? await aiReport({
       ownerId: round.ownerId,

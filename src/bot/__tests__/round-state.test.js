@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { reportText } from '../agent/rounds.js'
+import { reportStates, reportText } from '../agent/rounds.js'
 import { countsSummary, OWN_MAX, taskStates } from '../agent/roundTasks.js'
 import { aiReport, tasksText } from '../ai/report.js'
 import { ownerSystem, staffSystem } from '../ai/system.js'
@@ -60,6 +60,21 @@ describe('отчёт показывает задачи на момент отч�
     const states = await taskStates([{ userId: 'a', text: 'Как «Баннер для Румикс»?' }], NOW)
     assert.deepEqual(states.get('a').named, [])
     assert.equal(states.get('a').summary, 'личные открыто 3, в процессе 0, просрочено 3')
+  })
+
+  test('задачи в отчёте только у тех, кого поручивший видит сейчас', async (t) => {
+    patch(t, prisma.task, 'groupBy', async () => [])
+    const asked = patch(t, prisma.task, 'findMany', async () => [])
+    const person = (id, extra = {}) => ({ userId: id, text: 'Как дела', user: { id, role: 'staff', active: true, departmentId: 'd', ...extra } })
+    const answered = [person('mine'), person('moved', { departmentId: 'other' }), person('off', { active: false })]
+    const states = await reportStates({ owner: { id: 'lead', role: 'lead', departmentId: 'd' } }, answered, NOW)
+    assert.deepEqual([...states.keys()], ['mine'])
+    assert.deepEqual(asked.map(([q]) => q.where.AND[1].ownerId.in), [['mine']])
+    // Владелец видит всех активных, но не отключённого.
+    const forOwner = await reportStates({ owner: { id: 'o', role: 'admin' } }, answered, NOW)
+    assert.deepEqual([...forOwner.keys()], ['mine', 'moved'])
+    // Никого не видит — задач в отчёте нет совсем.
+    assert.equal(await reportStates({ owner: { id: 'x', role: 'staff' } }, answered, NOW), null)
   })
 
   test('рядом с ответом: «Задачи сейчас» по названным, а без названий — числа', () => {
