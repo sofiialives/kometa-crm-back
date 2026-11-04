@@ -5,6 +5,8 @@
  * только достаёт данные из базы и отдаёт их сюда.
  */
 
+import { MSK_OFFSET_MS } from './motivation/month.js'
+
 /** Первое число месяца по UTC — к нему привязана каждая услуга. */
 export function monthStart(value) {
   const d = new Date(value)
@@ -25,7 +27,7 @@ export function monthStart(value) {
  * Следствие: данные помесячные, половинок месяца не бывает. «С 15 сентября»
  * сентябрь уже не захватит — его первое число осталось позади.
  */
-export function resolveRange({ mode, month, months, from, to }) {
+export function resolveRange({ mode, month, months, from, to }, now = new Date()) {
   if (mode === 'all') return null
 
   if (mode === 'month') {
@@ -38,10 +40,19 @@ export function resolveRange({ mode, month, months, from, to }) {
   // когда на дворе сентябрь. Считаем от сегодняшнего дня, а не от того,
   // когда ссылку открыли в прошлый раз: иначе «последний год» однажды
   // окажется позапрошлым.
+  //
+  // «Сегодня» — по Москве, как живёт всё агентство: Москва это UTC+3 без
+  // перехода на летнее время. Иначе в ночь на первое число (до трёх часов,
+  // пока по UTC ещё вчера) открывался бы прошлый месяц.
+  //
+  // Московское «сейчас» записываем как будто это UTC: месяц услуги хранится
+  // первым числом в полночь UTC, и верхняя граница должна сравниваться с ним
+  // в тех же единицах. С настоящим «сейчас» ноябрьская услуга первого числа
+  // в час ночи по Москве оказалась бы «в будущем».
   if (mode === 'last') {
-    const now = new Date()
-    const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1))
-    return { gte: start, lte: now }
+    const nowMsk = new Date(now.getTime() + MSK_OFFSET_MS)
+    const start = new Date(Date.UTC(nowMsk.getUTCFullYear(), nowMsk.getUTCMonth() - (months - 1), 1))
+    return { gte: start, lte: nowMsk }
   }
 
   const range = {}
