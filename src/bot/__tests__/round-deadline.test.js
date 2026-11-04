@@ -54,6 +54,13 @@ describe('один отчёт: срок меняем, а не заводим н�
     }
   })
 
+  test('подсказка: не обещать «допишу» и «пришлю позже», сводка по поручению только по просьбе', () => {
+    for (const text of [ownerSystem(), staffSystem(), staffSystem({ lead: true })]) {
+      assert.match(text, /Не обещай «допишу», «пришлю позже»/)
+    }
+    assert.match(ownerSystem(), /get_round, но только когда об этом просят/)
+  })
+
   test('message_people тем же людям, пока поручение идёт — ошибка с подсказкой, черновика нет', async (t) => {
     patch(t, prisma.user, 'findFirst', async () => denis)
     const asked = patch(t, prisma.botRound, 'findMany', async () => [running])
