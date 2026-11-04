@@ -328,11 +328,11 @@ export async function removeService(user, id) {
 /**
  * Галочка «выплачено» у одного расхода. Отдельная ручка, а не правка услуги:
  * ставят её щелчком прямо в списке, и пересылать ради этого всю форму
- * незачем. Дата выплаты считается так же, как при правке услуги (см.
- * resolvePaidAt): поставили — сегодня, сняли — стёрлась, повторный запрос
- * дату не двигает.
+ * незачем. Дату выплаты выбирает владелец (paidAt); не выбрал — сегодня по
+ * Москве. Считается так же, как при правке услуги (см. resolvePaidAt): сняли —
+ * стёрлась, повторный запрос без даты прежнюю не двигает.
  */
-export async function setExpensePaid(user, id, { paid }) {
+export async function setExpensePaid(user, id, { paid, paidAt }) {
   assertAdmin(user)
   const expense = await prisma.boardExpense.findUnique({ where: { id } })
   if (!expense) throw ApiError.notFound('Расход не найден')
@@ -340,7 +340,7 @@ export async function setExpensePaid(user, id, { paid }) {
   try {
     return await prisma.boardExpense.update({
       where: { id },
-      data: { paid, paidAt: resolvePaidAt(expense, paid) },
+      data: { paid, paidAt: resolvePaidAt(expense, paid, paidAt) },
       select: { ...EXPENSE_SELECT, serviceId: true },
     })
   } catch (e) {

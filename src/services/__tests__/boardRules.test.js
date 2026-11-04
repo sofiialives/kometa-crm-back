@@ -403,30 +403,49 @@ describe('месяцы для списка выбора', () => {
 
 describe('отметка «выплачено» у расходов', () => {
   const NOW = new Date('2026-11-04T10:00:00.000Z')
-  const EARLIER = new Date('2026-10-20T09:00:00.000Z')
+  const TODAY = day('2026-11-04') // сегодняшний день по Москве, полночь UTC
+  const EARLIER = day('2026-10-20')
   const CREATED = new Date('2026-10-01T08:00:00.000Z')
   // Расходы услуги, как они лежат в базе до правки.
   const before = [
     { id: 'e1', title: 'Копирайтер', amountCents: 5000, paid: true, paidAt: EARLIER, createdAt: CREATED },
     { id: 'e2', title: 'Дизайнер', amountCents: 3000, paid: false, paidAt: null, createdAt: CREATED },
+    // Выплачен до появления отметки: дата неизвестна.
+    { id: 'e3', title: 'Подписка', amountCents: 1000, paid: true, paidAt: null, createdAt: CREATED },
   ]
 
-  test('поставили галочку — дата выплаты сейчас, сняли — пусто', () => {
-    assert.equal(resolvePaidAt(null, true, NOW), NOW)
-    assert.equal(resolvePaidAt(before[0], false, NOW), null)
-    assert.equal(resolvePaidAt(null, false, NOW), null)
+  test('поставили галочку без даты — сегодняшний день по Москве, сняли — пусто', () => {
+    assert.equal(iso(resolvePaidAt(null, true, null, NOW)), '2026-11-04T00:00:00.000Z')
+    assert.equal(resolvePaidAt(before[0], false, null, NOW), null)
+    assert.equal(resolvePaidAt(null, false, null, NOW), null)
   })
 
-  test('уже выплаченный остаётся с прежней датой', () => {
-    assert.equal(resolvePaidAt(before[0], true, NOW), EARLIER)
+  test('«сегодня» — московское: после 21:00 UTC уже следующее число', () => {
+    assert.equal(iso(resolvePaidAt(null, true, null, new Date('2026-11-04T20:59:00.000Z'))), '2026-11-04T00:00:00.000Z')
+    assert.equal(iso(resolvePaidAt(null, true, null, new Date('2026-11-04T21:00:00.000Z'))), '2026-11-05T00:00:00.000Z')
   })
 
-  test('невыплаченный, которому ставят галочку, получает сегодняшнюю дату', () => {
-    assert.equal(resolvePaidAt(before[1], true, NOW), NOW)
+  test('день, который выбрал владелец, приводится к дню и побеждает прежний', () => {
+    assert.equal(iso(resolvePaidAt(null, true, new Date('2026-09-15T17:45:00.000Z'), NOW)), '2026-09-15T00:00:00.000Z')
+    assert.equal(iso(resolvePaidAt(before[0], true, day('2026-10-25'), NOW)), '2026-10-25T00:00:00.000Z')
+    assert.equal(iso(resolvePaidAt(before[1], true, day('2026-10-25'), NOW)), '2026-10-25T00:00:00.000Z')
   })
 
-  test('выплаченный без даты (так быть не должно) получает дату сейчас', () => {
-    assert.equal(resolvePaidAt({ paid: true, paidAt: null }, true, NOW), NOW)
+  test('снимают галочку — выбранная дата не нужна, дата стирается', () => {
+    assert.equal(resolvePaidAt(before[0], false, day('2026-10-25'), NOW), null)
+  })
+
+  test('уже выплаченный без выбранного дня остаётся с прежней', () => {
+    assert.equal(resolvePaidAt(before[0], true, null, NOW), EARLIER)
+  })
+
+  test('выплаченный до появления отметки остаётся без даты: её не выдумываем', () => {
+    assert.equal(resolvePaidAt(before[2], true, null, NOW), null)
+    assert.equal(iso(resolvePaidAt(before[2], true, day('2026-10-01'), NOW)), '2026-10-01T00:00:00.000Z')
+  })
+
+  test('невыплаченный, которому ставят галочку, получает сегодняшний день', () => {
+    assert.equal(iso(resolvePaidAt(before[1], true, null, NOW)), '2026-11-04T00:00:00.000Z')
   })
 
   test('правка услуги не теряет отметку: тот же id, прежняя дата выплаты', () => {
@@ -439,9 +458,18 @@ describe('отметка «выплачено» у расходов', () => {
     assert.equal(row.amountCents, 6000)
   })
 
+  test('правка услуги: владелец выбрал новую дату выплаты', () => {
+    const [row] = expenseRows([{ id: 'e1', title: 'Копирайтер', amount: 50, paid: true, paidAt: day('2026-11-02') }], before, NOW)
+    assert.equal(iso(row.paidAt), '2026-11-02T00:00:00.000Z')
+  })
+
   test('если форма про галочку не знает, отметка остаётся как была', () => {
-    const rows = expenseRows([{ id: 'e1', title: 'Копирайтер', amount: 50 }, { id: 'e2', title: 'Дизайнер', amount: 30 }], before, NOW)
-    assert.deepEqual(rows.map((r) => [r.paid, r.paidAt]), [[true, EARLIER], [false, null]])
+    const rows = expenseRows([
+      { id: 'e1', title: 'Копирайтер', amount: 50 },
+      { id: 'e2', title: 'Дизайнер', amount: 30 },
+      { id: 'e3', title: 'Подписка', amount: 10 },
+    ], before, NOW)
+    assert.deepEqual(rows.map((r) => [r.paid, r.paidAt]), [[true, EARLIER], [false, null], [true, null]])
   })
 
   test('галочку снимают — дата стирается', () => {
@@ -450,21 +478,21 @@ describe('отметка «выплачено» у расходов', () => {
     assert.equal(row.paidAt, null)
   })
 
-  test('галочку ставят у прежнего расхода — дата выплаты сейчас', () => {
+  test('галочку ставят у прежнего расхода — сегодняшний день', () => {
     const [row] = expenseRows([{ id: 'e2', title: 'Дизайнер', amount: 30, paid: true }], before, NOW)
     assert.equal(row.paid, true)
-    assert.equal(row.paidAt, NOW)
+    assert.equal(iso(row.paidAt), '2026-11-04T00:00:00.000Z')
   })
 
   test('новая строка без id начинается невыплаченной, с галочкой — выплаченной сегодня', () => {
-    const rows = expenseRows([{ title: 'Подписка', amount: 10 }, { id: null, title: 'Сервис', amount: 5, paid: true }], before, NOW)
-    assert.deepEqual(rows.map((r) => [r.id, r.paid, r.paidAt]), [[undefined, false, null], [undefined, true, NOW]])
+    const rows = expenseRows([{ title: 'Подписка 2', amount: 10 }, { id: null, title: 'Сервис', amount: 5, paid: true }], before, NOW)
+    assert.deepEqual(rows.map((r) => [r.id, r.paid, r.paidAt && iso(r.paidAt)]), [[undefined, false, null], [undefined, true, '2026-11-04T00:00:00.000Z']])
   })
 
   test('чужой id не переносится и не берёт чужую отметку', () => {
     const [row] = expenseRows([{ id: 'other-service-expense', title: 'Кто-то', amount: 1, paid: true }], before, NOW)
     assert.equal(row.id, undefined)
-    assert.equal(row.paidAt, NOW)
+    assert.equal(iso(row.paidAt), '2026-11-04T00:00:00.000Z')
   })
 
   test('один id дважды: второй раз это уже новая строка', () => {
@@ -480,9 +508,15 @@ describe('отметка «выплачено» у расходов', () => {
     assert.equal(rows[0].id, 'e2')
   })
 
-  test('при создании услуги id не используется, галочка даёт сегодняшнюю дату', () => {
-    const rows = expenseRows([{ id: 'e1', title: 'Копирайтер', amount: 12.34, paid: true }], [], NOW)
-    assert.deepEqual(rows, [{ title: 'Копирайтер', amountCents: 1234, paid: true, paidAt: NOW }])
+  test('при создании услуги id не используется, галочка даёт сегодняшний день, выбранная дата — её', () => {
+    const rows = expenseRows([
+      { id: 'e1', title: 'Копирайтер', amount: 12.34, paid: true },
+      { title: 'Дизайнер', amount: 1, paid: true, paidAt: day('2026-10-02') },
+    ], [], NOW)
+    assert.deepEqual(rows, [
+      { title: 'Копирайтер', amountCents: 1234, paid: true, paidAt: TODAY },
+      { title: 'Дизайнер', amountCents: 100, paid: true, paidAt: day('2026-10-02') },
+    ])
   })
 
   test('нет расходов — пустой список', () => {

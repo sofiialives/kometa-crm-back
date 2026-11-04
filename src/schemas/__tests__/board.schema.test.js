@@ -111,6 +111,27 @@ describe('расходы услуги', () => {
     assert.equal(expenseOf({ id: 'не id!' }).success, false)
   })
 
+  test('дата выплаты принимается вместе с paid: true, null и пустая строка — как «не выбрана»', () => {
+    const r = expenseOf({ paid: true, paidAt: '2026-11-02' })
+    assert.equal(r.success, true)
+    assert.equal(r.data.body.expenses[0].paidAt.toISOString(), '2026-11-02T00:00:00.000Z')
+    assert.equal(expenseOf({ paid: true, paidAt: null }).success, true)
+    assert.equal(expenseOf({ paid: false, paidAt: null }).success, true)
+    assert.equal(expenseOf({ paid: true, paidAt: '' }).success, true)
+  })
+
+  test('дата выплаты без paid: true — отказ с пояснением', () => {
+    for (const extra of [{ paidAt: '2026-11-02' }, { paid: false, paidAt: '2026-11-02' }]) {
+      const r = expenseOf(extra)
+      assert.equal(r.success, false)
+      assert.equal(r.error.issues[0].message, 'Дата выплаты указывается только вместе с paid: true')
+    }
+  })
+
+  test('дата выплаты — не дата: отказ', () => {
+    assert.equal(expenseOf({ paid: true, paidAt: 'вчера' }).success, false)
+  })
+
   test('те же поля принимаются при создании услуги', () => {
     assert.equal(add({ expenses: [{ title: 'Подписка', amount: 10, paid: false }] }).success, true)
   })
@@ -122,6 +143,18 @@ describe('галочка «выплачено» у расхода', () => {
   test('true и false принимаются', () => {
     assert.equal(mark({ paid: true }).success, true)
     assert.equal(mark({ paid: false }).success, true)
+  })
+
+  test('дату выплаты можно выбрать или оставить пустой', () => {
+    const r = mark({ paid: true, paidAt: '2026-11-02' })
+    assert.equal(r.success, true)
+    assert.equal(r.data.body.paidAt.toISOString(), '2026-11-02T00:00:00.000Z')
+    assert.equal(mark({ paid: true, paidAt: null }).success, true)
+    assert.equal(mark({ paid: false, paidAt: null }).success, true)
+  })
+
+  test('дата при снятой галочке — отказ', () => {
+    assert.equal(mark({ paid: false, paidAt: '2026-11-02' }).success, false)
   })
 
   test('строка, число и пустое тело — отказ', () => {

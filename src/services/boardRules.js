@@ -368,16 +368,26 @@ export function monthsOfService(service) {
 // никогда не даёт 0.30000000000000004.
 export const toCents = (dollars) => Math.round(Number(dollars) * 100)
 
+/** Сегодняшний день по Москве: полночь UTC этого числа, как у остальных дней доски. */
+export function moscowToday(now = new Date()) {
+  return dayStart(new Date(now.getTime() + MSK_OFFSET_MS))
+}
+
 /**
- * Дата выплаты расхода после того, как отметку поставили или сняли.
+ * Дата выплаты расхода после того, как отметку поставили, сняли или
+ * переправили. sentAt — день, который выбрал владелец (или пусто).
  *
- * Снята — даты нет. Стоит и раньше стояла — остаётся прежняя: повторный
- * запрос или правка услуги не должны менять день, когда деньги ушли. Поставили
- * только что — сейчас.
+ * Снята — даты нет. Выбрана — она и берётся, приведённая к дню. Не выбрана,
+ * а расход уже был выплачен — остаётся прежняя: повторный запрос или правка
+ * услуги не должны менять день, когда деньги ушли. Прежняя может быть пустой
+ * (расходы, выплаченные до появления отметки): даты, которой никто не знает,
+ * не выдумываем. Выплачен только что без выбранного дня — сегодня по Москве.
  */
-export function resolvePaidAt(previous, paid, now = new Date()) {
+export function resolvePaidAt(previous, paid, sentAt = null, now = new Date()) {
   if (!paid) return null
-  return previous?.paid && previous.paidAt ? previous.paidAt : now
+  if (sentAt) return dayStart(sentAt)
+  if (previous?.paid) return previous.paidAt ?? null
+  return moscowToday(now)
 }
 
 /**
@@ -388,6 +398,7 @@ export function resolvePaidAt(previous, paid, now = new Date()) {
  * прежним расходом услуги по id: тогда id и дата создания остаются, а дата
  * выплаты считается по resolvePaidAt. Если в строке нет paid, отметка
  * остаётся как была: фронт, не знающий про галочку, не должен её сбрасывать.
+ * День выплаты можно прислать в paidAt (только вместе с paid: true).
  *
  * Чужой id (не из расходов этой услуги) и повторный id пропускаем: записать
  * его второй раз значило бы упасть на уникальном ключе.
@@ -404,7 +415,7 @@ export function expenseRows(expenses, previous = [], now = new Date()) {
       title: e.title.trim(),
       amountCents: toCents(e.amount),
       paid,
-      paidAt: resolvePaidAt(prev, paid, now),
+      paidAt: resolvePaidAt(prev, paid, e.paidAt, now),
     }
   })
 }

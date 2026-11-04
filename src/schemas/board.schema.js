@@ -9,9 +9,15 @@ const optional = (schema) => z.preprocess((v) => (v === '' ? undefined : v), sch
 // случайно вставленной строки на двадцать цифр.
 const money = z.coerce.number().finite().min(0).max(1_000_000_000)
 
-// День начала или конца работ. null сбрасывает срок на весь месяц услуги —
-// как и отсутствие значения при создании, поэтому принимаем его везде.
-const workDay = optional(z.coerce.date().nullable())
+// Необязательный день: начало или конец работ, день выплаты расхода. null
+// значит «не задано» (у срока работ — весь месяц услуги), как и отсутствие
+// значения, поэтому принимаем его везде.
+const optionalDay = optional(z.coerce.date().nullable())
+
+// Дата выплаты имеет смысл только у выплаченного расхода: «сняли галочку, но
+// дата осталась» — противоречие, лучше отказать, чем молча стереть.
+const paidAtNeedsPaid = (e) => !e.paidAt || e.paid === true
+const paidAtIssue = { message: 'Дата выплаты указывается только вместе с paid: true', path: ['paidAt'] }
 
 // Границы срока работ между собой. Проверка относительно месяца услуги, когда
 // указана только одна граница, живёт в сервисе: здесь месяца может не быть
@@ -21,14 +27,17 @@ const workSpanIssue = (b) => ({ message: workSpanError(dayStart(b.workFrom), day
 
 // id и paid нужны при правке услуги: расходы пересоздаются целиком, и по id
 // сервер находит прежний расход, чтобы не потерять отметку «выплачено». У новой
-// строки id нет (или null). Без paid отметка остаётся как была.
+// строки id нет (или null). Без paid отметка остаётся как была. paidAt — день
+// выплаты, который выбрал владелец; не прислали — у выплаченного прежнего
+// остаётся прежний, у нового ставится сегодняшний.
 const expenses = z
   .array(z.object({
     id: optional(objectId.nullable()),
     title: z.string().trim().min(1, 'У расхода должно быть название').max(200),
     amount: money,
     paid: z.boolean().optional(),
-  }))
+    paidAt: optionalDay,
+  }).refine(paidAtNeedsPaid, paidAtIssue))
   .max(30)
 
 /**
@@ -73,8 +82,8 @@ export const addClientSchema = z.object({
           title: z.string().trim().min(1, 'Укажите название услуги').max(200),
           month: z.coerce.date(),
           paidAt: optional(z.coerce.date()),
-          workFrom: workDay,
-          workTo: workDay,
+          workFrom: optionalDay,
+          workTo: optionalDay,
           revenue: money,
           expenses: expenses.optional(),
         }).refine(workSpanCheck, workSpanIssue))
@@ -107,10 +116,16 @@ export const leaveSchema = z.object({
 })
 
 // Галочка «выплачено» у одного расхода. Только булево значение: строка
-// "false" в JavaScript истинна, и такую ошибку лучше отбить на входе.
+// "false" в JavaScript истинна, и такую ошибку лучше отбить на входе. paidAt —
+// день выплаты, его выбирает владелец; без него ставится сегодняшний.
 export const expensePaidSchema = z.object({
   params: z.object({ id: objectId }),
-  body: z.object({ paid: z.boolean({ required_error: 'Укажите paid', invalid_type_error: 'paid должно быть true или false' }) }),
+  body: z
+    .object({
+      paid: z.boolean({ required_error: 'Укажите paid', invalid_type_error: 'paid должно быть true или false' }),
+      paidAt: optionalDay,
+    })
+    .refine(paidAtNeedsPaid, paidAtIssue),
 })
 
 export const addServiceSchema = z.object({
@@ -123,8 +138,8 @@ export const addServiceSchema = z.object({
       // появления поля, правятся по частям и свою дату получат отдельно.
       paidAt: optional(z.coerce.date()),
       // Срок работ, оба необязательные: пусто — весь месяц услуги.
-      workFrom: workDay,
-      workTo: workDay,
+      workFrom: optionalDay,
+      workTo: optionalDay,
       revenue: money,
       expenses: expenses.optional(),
     })
@@ -140,8 +155,8 @@ export const editServiceSchema = z.object({
       paidAt: optional(z.coerce.date()),
       // null сбрасывает границу: работа снова считается с начала или до
       // конца месяца услуги.
-      workFrom: workDay,
-      workTo: workDay,
+      workFrom: optionalDay,
+      workTo: optionalDay,
       revenue: money.optional(),
       expenses: expenses.optional(),
     })
