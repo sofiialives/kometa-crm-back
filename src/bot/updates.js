@@ -29,9 +29,11 @@ const STRANGER_REPLY_MS = 24 * 60 * 60 * 1000
 const STRANGERS_MAX = 5000
 const strangers = new Map()
 
-export function shouldAnswerStranger(chatId, now = Date.now()) {
+// Голый /start — исключение: человек сам открыл бота и пытается
+// подключиться, без подсказки он решит, что бот сломан.
+export function shouldAnswerStranger(chatId, now = Date.now(), { start = false } = {}) {
   const last = strangers.get(String(chatId))
-  if (last && now - last < STRANGER_REPLY_MS) return false
+  if (!start && last && now - last < STRANGER_REPLY_MS) return false
   if (strangers.size >= STRANGERS_MAX) strangers.clear()
   strangers.set(String(chatId), now)
   return true
@@ -68,7 +70,7 @@ async function handleMessage(msg, files = filesOf(msg)) {
     // Уже подключённый человек — дальше разговор ведёт агент.
     const user = await userByChat(chatId)
     if (user) return onText(user, chatId, text, new Date(), { media, files })
-    if (shouldAnswerStranger(chatId)) await sendMessage(chatId, HELP)
+    if (shouldAnswerStranger(chatId, Date.now(), { start: text === '/start' })) await sendMessage(chatId, HELP)
     return
   }
 
