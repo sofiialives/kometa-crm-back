@@ -277,7 +277,8 @@ export function daysWithUs(card, now = new Date()) {
 
 /**
  * Доска из карточек, прочитанных из базы вместе с услугами и их расходами:
- * сводка сверху и две колонки. Что видно и в какой колонке — решают правила
+ * сводка сверху и две колонки. В карточки для периода попадают не все, а
+ * сводка знает всех (см. onBoardClientIds). Что видно и в какой колонке — решают правила
  * выше, здесь они только собираются в ответ.
  */
 export function buildBoard(cards, range, now = new Date()) {
@@ -325,6 +326,11 @@ export function buildBoard(cards, range, now = new Date()) {
       ...totals(visibleServices, range),
       activeCount: active.length,
       leftCount: left.length,
+      // Все клиенты на доске, а не только видимые в периоде: форма «Новый
+      // клиент» по этому списку отказывает тем, кто уже заведён, а клиент
+      // без услуг в этом месяце на экране не виден, но на доске есть. Это id
+      // справочника клиентов (client.id), как и в карточках.
+      onBoardClientIds: cards.map((c) => c.clientId),
     },
     active,
     left,

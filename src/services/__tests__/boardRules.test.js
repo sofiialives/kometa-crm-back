@@ -559,6 +559,25 @@ describe('доска целиком', () => {
     assert.equal(board.summary.revenueCents, 170000)
   })
 
+  test('список клиентов доски полный, даже когда карточка в этом месяце скрыта', () => {
+    // В октябре не видны Бета и Дельта (пришли в ноябре), но на доске они есть.
+    const board = buildBoard(cards, month('2026-10'), NOW)
+    assert.deepEqual(names([...board.active, ...board.left]), ['Альфа', 'Гамма'])
+    assert.deepEqual(board.summary.onBoardClientIds, ['client-Альфа', 'client-Бета', 'client-Гамма', 'client-Дельта'])
+    // Те же идентификаторы, по которым фронт сравнивает client.id карточек.
+    for (const c of [...board.active, ...board.left]) assert.ok(board.summary.onBoardClientIds.includes(c.client.id))
+  })
+
+  test('за всё время и в другом месяце список тот же', () => {
+    const all = buildBoard(cards, null, NOW).summary.onBoardClientIds
+    assert.deepEqual(buildBoard(cards, month('2027-05'), NOW).summary.onBoardClientIds, all)
+    assert.equal(all.length, 4)
+  })
+
+  test('на пустой доске список пустой', () => {
+    assert.deepEqual(buildBoard([], month('2026-10'), NOW).summary.onBoardClientIds, [])
+  })
+
   test('дней с нами: у работающего до сегодня, у ушедшего до дня ухода', () => {
     assert.equal(daysWithUs({ startedAt: day('2026-11-01'), leftAt: null }, NOW), 3)
     assert.equal(daysWithUs({ startedAt: day('2026-10-01'), leftAt: day('2026-10-11') }, NOW), 10)
