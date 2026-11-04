@@ -1,4 +1,5 @@
 import { prisma } from '../../config/prisma.js'
+import { teamWhere } from '../ai/context.js'
 import { VISIBLE } from './taskScope.js'
 
 /**
@@ -47,13 +48,24 @@ async function tasksNamed(titles, extra = {}) {
 }
 
 /**
+ * Чьи задачи вообще можно искать, когда поручение пишет viewer: адресаты,
+ * его люди по teamWhere и он сам. Чужие задачи за пределами этого круга для
+ * проверки не существуют, иначе ответ «это задача другого человека»
+ * раскрыл бы, что такая задача есть у кого-то в чужом отделе.
+ */
+function ownerScope(viewer, addresseeIds) {
+  return { OR: [teamWhere(viewer), { id: viewer.id }, { id: { in: addresseeIds } }] }
+}
+
+/**
  * Места, где адресату назвали чужую задачу: название в ёлочках совпало с
  * открытой задачей другого человека и не совпало ни с одной задачей самого
- * адресата. items — [{ userId, text }]. Возвращает [{ userId, title, owners }].
+ * адресата. items — [{ userId, text }], viewer — кто пишет поручение.
+ * Возвращает [{ userId, title, owners }].
  */
-export async function foreignTitles(items) {
+export async function foreignTitles(items, viewer) {
   const mentions = new Map(items.map((i) => [i.userId, quotedTitles(i.text)]))
-  const tasks = await tasksNamed([...new Set([...mentions.values()].flat())])
+  const tasks = await tasksNamed([...new Set([...mentions.values()].flat())], { owner: ownerScope(viewer, items.map((i) => i.userId)) })
   const problems = []
   for (const { userId } of items) {
     for (const title of mentions.get(userId)) {

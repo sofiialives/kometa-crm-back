@@ -129,7 +129,7 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
 
   const labels = labelsFor(people.map((p) => p.person))
   // Чужая задача в тексте человека — модель могла перепутать людей. Черновик не создаём.
-  const foreign = await foreignTitles(people.map((p) => ({ userId: p.person.id, text: p.text })))
+  const foreign = await foreignTitles(people.map((p) => ({ userId: p.person.id, text: p.text })), owner)
   if (foreign.length) return { shown: false, text: foreignText(foreign, labels, owner) }
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
   const subject = cut(plain(String(topic ?? ''), 500) || 'Узнать, как дела', 500)
