@@ -319,6 +319,32 @@ describe('какие карточки есть в периоде', () => {
     const card = { startedAt: day('2026-11-05'), leftAt: null, serviceCount: 2, visibleCount: 0 }
     assert.equal(cardVisible(card, null), true)
   })
+
+  test('ушедший виден в месяце ухода, даже если услуг и доделок в нём нет', () => {
+    // Услуги были только в сентябре, ушёл в октябре.
+    const card = { status: 'left', startedAt: day('2026-08-03'), leftAt: day('2026-10-20'), serviceCount: 1, visibleCount: 0 }
+    assert.equal(cardVisible(card, month('2026-10')), true)
+    assert.equal(columnOf(card, month('2026-10')), 'left')
+  })
+
+  test('ушедший не виден в месяцах после ухода и до него, если услуг в них нет', () => {
+    const card = { status: 'left', startedAt: day('2026-08-03'), leftAt: day('2026-10-20'), serviceCount: 1, visibleCount: 0 }
+    assert.equal(cardVisible(card, month('2026-11')), false)
+    assert.equal(cardVisible(card, month('2026-07')), false)
+  })
+
+  test('уход считается и в скользящем окне, и в произвольном периоде', () => {
+    const card = { status: 'left', startedAt: day('2026-01-03'), leftAt: day('2026-10-20'), serviceCount: 2, visibleCount: 0 }
+    assert.equal(cardVisible(card, resolveRange({ mode: 'last', months: 2 }, new Date('2026-11-04T09:00:00.000Z'))), true)
+    assert.equal(cardVisible(card, resolveRange({ mode: 'period', from: day('2026-10-15'), to: day('2026-10-31') })), true)
+    assert.equal(cardVisible(card, resolveRange({ mode: 'period', from: day('2026-10-21'), to: day('2026-10-31') })), false)
+  })
+
+  test('месяц начала работы карточку с услугами не добавляет', () => {
+    // Пришёл в ноябре, услуги только на декабрь, не уходил.
+    const card = { status: 'active', startedAt: day('2026-11-05'), leftAt: null, serviceCount: 1, visibleCount: 0 }
+    assert.equal(cardVisible(card, month('2026-11')), false)
+  })
 })
 
 describe('колонки по выбранному периоду', () => {

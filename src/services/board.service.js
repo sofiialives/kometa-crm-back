@@ -60,9 +60,9 @@ function daysWithUs(card) {
  *
  * Всё считается по выбранному периоду. Услуга в нём видна, если её месяц в
  * периоде или в эти дни шла работа по ней (доделки). Карточка клиента есть
- * в периоде, если есть видимая услуга; клиент вообще без услуг виден по
- * своим датам, а клиент, пришедший в ноябре, в октябре не висит (см.
- * cardVisible).
+ * в периоде, если есть видимая услуга или он в нём ушёл; клиент вообще без
+ * услуг виден по своим датам, а клиент, пришедший в ноябре, в октябре не
+ * висит (см. cardVisible).
  *
  * Колонка тоже зависит от периода: в «Ушедших» клиент, который ушёл в нём
  * или раньше, а если ушёл позже, то в том периоде он ещё «В работе» (см.
@@ -96,7 +96,11 @@ export async function getBoard(user, query) {
   for (const c of cards) {
     const visible = c.services.filter((s) => serviceVisible(s, range))
     if (!cardVisible({
-      startedAt: c.startedAt, leftAt: c.leftAt, serviceCount: c.services.length, visibleCount: visible.length,
+      status: c.status,
+      startedAt: c.startedAt,
+      leftAt: c.leftAt,
+      serviceCount: c.services.length,
+      visibleCount: visible.length,
     }, range)) continue
 
     visibleServices.push(...visible)

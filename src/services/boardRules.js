@@ -231,15 +231,21 @@ export function shapeService(service, range) {
  *
  * Если у клиента есть видимая услуга — есть. Если услуги у него заведены, но
  * ни одна в период не попала — нет: клиент, пришедший в ноябре, не должен
- * висеть в октябре с «услуг не было».
+ * висеть в октябре с «услуг не было». Месяц начала работы карточку сам по
+ * себе не добавляет.
+ *
+ * Единственное исключение — уход: клиент, ушедший в этом периоде, виден в
+ * нём в «Ушедших», даже если услуг и доделок в нём нет. Иначе уход
+ * потерялся бы из счётчика ушедших за месяц.
  *
  * Клиент вообще без услуг виден по своим датам: с месяца начала работы и
  * дальше, пока не ушёл (месяц ухода ещё включён). Карточку только что
  * заведённого клиента без единой услуги иначе нигде не найти.
  */
-export function cardVisible({ startedAt, leftAt, serviceCount, visibleCount }, range) {
+export function cardVisible({ status, startedAt, leftAt, serviceCount, visibleCount }, range) {
   if (!range) return true
   if (visibleCount > 0) return true
+  if (status === 'left' && leftAt && inRange(leftAt, range)) return true
   if (serviceCount > 0) return false
   const end = leftAt ? nextMonthStart(leftAt).getTime() : Infinity
   return overlapsRange(range, monthStart(startedAt).getTime(), end)
