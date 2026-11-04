@@ -127,14 +127,20 @@ export function workSpanProblem({ month, workFrom, workTo }) {
   return workFrom && workTo ? problem : `${problem} (вторая граница не задана, взят край месяца услуги)`
 }
 
+/** Момент раньше начала периода. */
+function beforeRange(value, range) {
+  return Boolean(range.gte) && new Date(value).getTime() < range.gte.getTime()
+}
+
+/** Момент позже конца периода. */
+function afterRange(value, range) {
+  const t = new Date(value).getTime()
+  return (Boolean(range.lt) && t >= range.lt.getTime()) || (Boolean(range.lte) && t > range.lte.getTime())
+}
+
 /** Попадает ли момент в период. Период null — без границ, попадает всё. */
 export function inRange(value, range) {
-  if (!range) return true
-  const t = new Date(value).getTime()
-  if (range.gte && t < range.gte.getTime()) return false
-  if (range.lt && t >= range.lt.getTime()) return false
-  if (range.lte && t > range.lte.getTime()) return false
-  return true
+  return !range || (!beforeRange(value, range) && !afterRange(value, range))
 }
 
 /**
@@ -250,9 +256,7 @@ export function cardVisible({ startedAt, leftAt, serviceCount, visibleCount }, r
 export function columnOf({ status, leftAt }, range) {
   if (status !== 'left') return 'active'
   if (!range || !leftAt) return 'left'
-  if (inRange(leftAt, range)) return 'left'
-  const before = range.gte && new Date(leftAt).getTime() < range.gte.getTime()
-  return before ? 'left' : 'active'
+  return afterRange(leftAt, range) ? 'active' : 'left'
 }
 
 // ---------------------------------------------------------------------------
