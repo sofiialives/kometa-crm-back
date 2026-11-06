@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { tickBreaks } from './away.js'
 import { tickCheckin } from './checkin.js'
 import { tickFeed } from './feed.js'
-import { morningNoTasks, tickNotStarted, tickTaskStarts } from './tasks.js'
+import { eveningOpenTasks, morningNoTasks, tickNotStarted, tickTaskStarts } from './tasks.js'
 import { tickReminders } from './remind.js'
 import { tickRounds } from './rounds.js'
 
@@ -39,6 +39,11 @@ export async function runAgentOnce(now = new Date()) {
 export async function runMorning(now = new Date()) {
   const sent = await morningNoTasks(now)
   console.log(`[агент] утро: без задач на сегодня — ${sent}`)
+}
+
+export async function runEvening(now = new Date()) {
+  const sent = await eveningOpenTasks(now)
+  console.log(`[агент] вечер: напомнил о задачах — ${sent}`)
 }
 
 /**

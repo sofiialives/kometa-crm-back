@@ -9,6 +9,7 @@ import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
 import { crmButton, firstName, hasNotice, logEvent, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
 import * as state from './state.js'
+import { dueTodayWhere, VISIBLE } from './taskScope.js'
 
 /**
  * Задачи: утром — тем, у кого на сегодня пусто; за 5 минут до начала —
@@ -39,6 +40,47 @@ export async function morningNoTasks(now = new Date()) {
     if (await activeAway(person.id, now)) continue
     const res = await sendOnce(`morning:${day}:${person.id}`, () => tell(person.id,
       `${escapeHtml(firstName(person.name))}, на сегодня у тебя в CRM нет задач.\nПроставь, пожалуйста, задачи на день.`,
+      { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) }))
+    if (res.ok) sent += 1
+  }
+  return sent
+}
+
+const EVENING_TITLES = 5
+
+/**
+ * Текст вечернего сообщения: названия до пяти, остальные «и ещё N». Без
+ * точек, двоеточий и маркеров, как всё в боте.
+ */
+export function eveningText(name, titles, total) {
+  const lines = [`${escapeHtml(firstName(name))}, через час звонок`, 'Осталось закрыть', ...titles.map((t) => `«${escapeHtml(short(t, 80))}»`)]
+  if (total > titles.length) lines.push(`и ещё ${total - titles.length}`)
+  return lines.join('\n')
+}
+
+/**
+ * 18:00 по будням, за час до звонка: только тем, у кого остались незакрытые
+ * задачи со сроком сегодня, личные и из Иерархии. Остальным не пишем, чтобы
+ * сообщение не было одинаковым для всех. Без ИИ.
+ */
+export async function eveningOpenTasks(now = new Date()) {
+  const day = mskDayKey(now)
+  if (!isWorkday(day)) return 0
+  const open = { AND: [VISIBLE, dueTodayWhere(now)] }
+  const people = await prisma.user.findMany({
+    where: { role: { in: PARTICIPANT_ROLES }, active: true, telegram: { chatId: { not: null } }, tasks: { some: open } },
+    select: { id: true, name: true },
+  })
+  let sent = 0
+  for (const person of people) {
+    if ((await activeAway(person.id, now)) || (await hasEndedDay(person.id, now))) continue
+    const where = { AND: [VISIBLE, { ownerId: person.id }, dueTodayWhere(now)] }
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany({ where, orderBy: { deadline: 'asc' }, take: EVENING_TITLES, select: { title: true } }),
+      prisma.task.count({ where }),
+    ])
+    if (!total) continue
+    const res = await sendOnce(`evening:${day}:${person.id}`, () => tell(person.id, eveningText(person.name, tasks.map((t) => t.title), total),
       { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) }))
     if (res.ok) sent += 1
   }
