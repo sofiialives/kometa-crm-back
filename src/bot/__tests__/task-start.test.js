@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
 import { lateForTask, reportTaskLate, startGroups, startLead, startText, taskButtons, tickTaskStarts } from '../agent/tasks.js'
-import { peek } from '../agent/state.js'
+import { clear, peek } from '../agent/state.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
 
@@ -62,6 +62,38 @@ describe('«Не успеваю» на несколько задач', () => {
     assert.equal((toOwner.text.match(/«Задача/g) ?? []).length, 5)
     assert.match(toOwner.text, /\nи ещё 7\n/)
     assert.match(toOwner.text, /<b>Не успевает начать задачи<\/b>\nАнтон, дизайн\n/)
+  })
+})
+
+describe('«Не успеваю» для уже начатой задачи', () => {
+  const user = { id: 'u1', name: 'Антон' }
+
+  test('задача в процессе: «уже в процессе», вопроса и ожидания нет', async (t) => {
+    const h = botHarness(t)
+    clear('u1')
+    patch(t, prisma.task, 'findUnique', async () => ({ id: 'a', title: 'Задача a', ownerId: 'u1', status: 'progress', startAt: T('12:00') }))
+    assert.equal(await lateForTask(user, 'a'), '«Задача a» уже в процессе')
+    assert.equal(h.sent.length, 0)
+    assert.equal(peek('u1'), null)
+  })
+
+  test('к моменту ответа задачи уже взяли: событий и отчёта Яну нет; остались не взятые — только они', async (t) => {
+    const h = botHarness(t)
+    const events = []
+    patch(t, prisma.botEvent, 'create', async ({ data }) => { events.push(data); return data })
+    patch(t, prisma.user, 'findMany', async () => [{ id: 'owner' }])
+    patch(t, prisma.user, 'findUnique', async () => ({ id: 'u1', name: 'Антон', role: 'staff', department: null }))
+    patch(t, prisma.task, 'findMany', async (q) => {
+      assert.equal(q.where.status, 'today')
+      return q.where.id.in.includes('b') ? [{ id: 'b', title: 'Задача b', startAt: T('12:00') }] : []
+    })
+    await reportTaskLate(user, 'a', 'Застрял', new Date(), ['a'])
+    assert.equal(events.length, 0)
+    assert.ok(!h.sent.some((m) => m.chatId === 'chat-owner'))
+    await reportTaskLate(user, 'a', 'Застрял', new Date(), ['a', 'b'])
+    assert.equal(events.length, 1)
+    assert.match(h.sent.find((m) => m.chatId === 'chat-owner').text, /«Задача b»/)
+    assert.doesNotMatch(h.sent.find((m) => m.chatId === 'chat-owner').text, /Задача a/)
   })
 })
 

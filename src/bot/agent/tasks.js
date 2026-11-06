@@ -371,6 +371,8 @@ export async function lateForTask(user, taskId) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true, startAt: true } })
   if (!task || task.ownerId !== user.id) return 'Задача не найдена'
   if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта`
+  // Взял в работу, пока читал сообщение: «не успеваю» тут не про что.
+  if (task.status === 'progress') return `«${escapeHtml(short(task.title, 120))}» уже в процессе`
   const minuteStart = task.startAt ? new Date(startMinute(task.startAt) * 60000) : null
   const same = minuteStart
     ? await prisma.task.findMany({
@@ -389,8 +391,13 @@ export async function lateForTask(user, taskId) {
 /** Ответ на «что случилось?» — Яну. taskIds — задачи этого времени начала, событие пишем на каждую. */
 export async function reportTaskLate(user, taskId, text, now = new Date(), taskIds = [taskId]) {
   const ids = [...new Set(taskIds)].slice(0, LATE_MAX)
-  const found = await prisma.task.findMany({ where: { id: { in: ids }, ownerId: user.id }, take: LATE_MAX, select: { id: true, title: true, startAt: true } })
-  const list = found.length ? found : [{ id: taskId, title: null, startAt: null }]
+  // Пока человек писал причину, часть задач могли взять в работу или закрыть:
+  // их не извиняем и Яну про них не пишем.
+  const list = await prisma.task.findMany({ where: { id: { in: ids }, ownerId: user.id, status: 'today' }, take: LATE_MAX, select: { id: true, title: true, startAt: true } })
+  if (!list.length) {
+    await tell(user.id, 'Эти задачи уже в работе, Яну передавать нечего')
+    return
+  }
   for (const task of list) {
     await logEvent(user.id, 'task_late', { at: now, text, data: { taskId: task.id, taskTitle: task.title ?? null, startAt: task.startAt?.toISOString() ?? null } })
   }
