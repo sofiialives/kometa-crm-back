@@ -78,3 +78,16 @@ describe('напоминание не теряется, если проход п
     assert.match(startText({ startAt: T('12:05'), tasks: [task('a', '12:05')] }, T('12:00')), /^Через 5 минут/)
   })
 })
+
+describe('тихие часы по времени начала', () => {
+  test('задача на 9:00 получает напоминание в 8:55, задача на 21:00 в 20:55 не получает', async (t) => {
+    const h = botHarness(t)
+    patch(t, prisma.motivationAway, 'findFirst', async () => null)
+    patch(t, prisma.task, 'findMany', async () => [task('a', '09:00')])
+    await tickTaskStarts(T('08:55'))
+    assert.equal(h.sent.length, 1)
+    patch(t, prisma.task, 'findMany', async () => [task('b', '21:00', 'u2')])
+    await tickTaskStarts(T('20:55'))
+    assert.equal(h.sent.length, 1)
+  })
+})

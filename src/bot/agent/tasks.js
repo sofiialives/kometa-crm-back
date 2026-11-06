@@ -114,7 +114,6 @@ export function startText(group, now = null) {
 
 /** Раз в минуту: задачи, которые начинаются через 5 минут, одним сообщением на человека и время. */
 export async function tickTaskStarts(now = new Date()) {
-  if (isQuietHour(now)) return
   // Окно не в одну минуту, а все оставшиеся до начала 5 минут: если проход
   // пропустили (прошлый ещё шёл), напоминание придёт на следующем, а не потеряется.
   // Повтор исключает sendOnce.
@@ -125,6 +124,9 @@ export async function tickTaskStarts(now = new Date()) {
     orderBy: { startAt: 'asc' },
   })
   for (const group of startGroups(tasks)) {
+    // Тихие часы 21–9 считаем по времени начала: задача на 9:00 получает
+    // напоминание в 8:55, а задача на 21:00 не получает его в 20:55.
+    if (isQuietHour(group.startAt)) continue
     if ((await activeAway(group.ownerId, now)) || (await hasEndedDay(group.ownerId, now))) continue
     await sendOnce(`task-start:${group.ownerId}:${group.startAt.getTime()}`, () => tell(group.ownerId, startText(group, now),
       { buttons: taskButtons(group.tasks) }))
