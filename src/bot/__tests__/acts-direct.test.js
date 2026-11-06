@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { createDraft, directNote, isNamedIn } from '../agent/rounds.js'
+import { createDraft, directNote, directSummary, isNamedIn } from '../agent/rounds.js'
 import { teamTools } from '../ai/tools.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
@@ -24,9 +24,15 @@ const msg = (id, text) => ({ person_id: id, text })
 const input = (ids, extra = {}) => ({ topic: 'Передать', minutes: 60, collect: true, messages: ids.map((id) => msg(id, `${PEOPLE[id].name.split(' ')[0]}, привет, пришли макет`)), ...extra })
 
 /** Всё, что трогает createDraft, в памяти. Возвращает вызовы. */
-function setup(t, { used = 0, running = [], viewerWhere = null, namesakes = 0 } = {}) {
+function setup(t, { used = 0, running = [], viewerWhere = null, others = [] } = {}) {
   const h = botHarness(t)
-  const namesakeAsked = patch(t, prisma.user, 'count', async () => namesakes)
+  // Кто ещё в области просящего: условия count честно применяются к others.
+  const namesakeAsked = patch(t, prisma.user, 'count', async ({ where }) => {
+    const [scope, notId, ...parts] = where.AND
+    return others.filter((u) => u.id !== notId.id.not
+      && (!scope.departmentId || u.departmentId === scope.departmentId)
+      && parts.every((c) => u.name.toLowerCase().includes(c.name.contains.toLowerCase()))).length
+  })
   const asked = patch(t, prisma.user, 'findFirst', async ({ where }) => {
     const id = where.AND[1].id
     viewerWhere?.(where)
@@ -91,7 +97,7 @@ describe('написать людям без черновика', () => {
     assert.equal(s.sent.length, 2)
     assert.equal(s.sent[0].chatId, 'chat-nik')
     assert.equal(s.sent[1].chatId, '9001')
-    assert.equal(s.sent[1].text, 'Написал\nНиколай, дизайн\nОтчёт пришлю к 18:00')
+    assert.equal(s.sent[1].text, 'Написал\n<b>Николай, дизайн</b>\nНиколай, привет, пришли макет\nОтчёт пришлю к 18:00')
     assert.equal(s.sent[1].buttons, undefined)
     assert.equal(s.logged.find((m) => m.chatId === 'chat-nik').source, 'round')
   })
@@ -99,7 +105,7 @@ describe('написать людям без черновика', () => {
   test('без отчёта в подтверждении нет «отчёт пришлю»', async (t) => {
     const s = setup(t)
     await createDraft(OWNER, '9001', input(['rom'], { collect: false }), NOW, { texts: ['передай Роману'] })
-    assert.equal(s.sent[1].text, 'Написал\nРоман, дизайн')
+    assert.equal(s.sent[1].text, 'Написал\n<b>Роман, дизайн</b>\nРоман, привет, пришли макет')
   })
 
   test('до трёх человек, имена из текущего и предыдущего сообщения', async (t) => {
@@ -144,7 +150,7 @@ describe('написать людям без черновика', () => {
     t.after(() => { globalThis.fetch = fetchOk })
     const res = await createDraft(OWNER, '9001', input(['nik', 'rom']), NOW, { texts: ['Николаю и Роману'] })
     assert.equal(res.direct, true)
-    assert.equal(s.sent.at(-1).text, 'Написал\nРоман, дизайн\nНе дошло\nНиколай, дизайн\nОтчёт пришлю к 18:00')
+    assert.equal(s.sent.at(-1).text, 'Написал\n<b>Роман, дизайн</b>\nРоман, привет, пришли макет\nНе дошло\nНиколай, дизайн\nОтчёт пришлю к 18:00')
   })
 
   test('нет телеграма у одного из названных: он не уйдёт, остальным пишем', async (t) => {
@@ -152,7 +158,7 @@ describe('написать людям без черновика', () => {
     PEOPLE.nik.telegram = null
     t.after(() => { PEOPLE.nik.telegram = { chatId: 'c-nik' } })
     await createDraft(OWNER, '9001', input(['nik', 'rom']), NOW, { texts: ['Николаю и Роману'] })
-    assert.match(s.sent.at(-1).text, /Написал\nРоман, дизайн\nНе уйдёт\nНиколай, дизайн, телеграм не подключён/)
+    assert.match(s.sent.at(-1).text, /Написал\n<b>Роман, дизайн<\/b>\nРоман, привет, пришли макет\nНе уйдёт\nНиколай, дизайн, телеграм не подключён/)
   })
 })
 
@@ -181,19 +187,76 @@ describe('когда вместо этого черновик', () => {
     assert.equal(draftData(s).direct, false)
   })
 
+  const TWINS = [{ id: 'nik2', name: 'Николай Волков', departmentId: 'd' }]
   test('назван только по имени, а в команде есть тёзка', async (t) => {
-    const s = setup(t, { namesakes: 1 })
+    const s = setup(t, { others: TWINS })
     const res = await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Николаю'] })
-    assert.match(res.text, /тёзки/)
+    assert.match(res.text, /тёзки или однофамильцы/)
     assert.equal(s.created[0][0].data.direct, false)
-    assert.equal(s.namesakeAsked[0][0].where.name.startsWith, 'Николай')
+    assert.deepEqual(s.namesakeAsked[0][0].where.AND[0], { role: { in: ['staff', 'lead'] }, active: true })
+    assert.deepEqual(s.namesakeAsked[0][0].where.AND[1], { id: { not: 'nik' } })
   })
 
-  test('тёзка есть, но назвали фамилию — пишет сам', async (t) => {
-    const s = setup(t, { namesakes: 1 })
+  test('однофамилец: назвали только фамилию', async (t) => {
+    const s = setup(t, { others: [{ id: 'o2', name: 'Пётр Орлов', departmentId: 'd' }] })
     const res = await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Орлову'] })
+    assert.match(res.text, /тёзки или однофамильцы/)
+    assert.equal(s.created[0][0].data.direct, false)
+  })
+
+  test('назвали имя и фамилию, тёзка не мешает: пишет сам', async (t) => {
+    setup(t, { others: TWINS })
+    const res = await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Николаю Орлову'] })
     assert.equal(res.direct, true)
-    assert.equal(s.namesakeAsked.length, 0)
+  })
+
+  test('у руководителя тёзка из чужого отдела не мешает, из своего мешает', async (t) => {
+    const s = setup(t, { others: [{ id: 'nik3', name: 'Николай Белов', departmentId: 'other' }] })
+    const ok = await createDraft(LEAD, '9002', input(['nik']), NOW, { texts: ['напиши Николаю'] })
+    assert.equal(ok.direct, true)
+    assert.equal(s.namesakeAsked[0][0].where.AND[0].departmentId, 'd')
+    const s2 = setup(t, { others: TWINS })
+    const bad = await createDraft(LEAD, '9002', input(['nik']), NOW, { texts: ['напиши Николаю'] })
+    assert.match(bad.text, /тёзки/)
+    assert.equal(s2.created.length, 1)
+  })
+
+  test('ссылки находит тот же noLinks, что чистит ответы агента, включая .click и .shop', async (t) => {
+    for (const link of ['evil.click', 'x.shop/a', 'https://a.b/c', '@someone']) {
+      const { res } = await check(t, { messages: [msg('nik', `Николай, глянь ${link} и пришли`)] })
+      assert.match(res.text, /в текстах есть ссылки/, link)
+    }
+  })
+
+  test('просьба о данных или деньгах', async (t) => {
+    for (const word of ['скинь пароль от сайта', 'нужен логин', 'пришли код из смс', 'дай доступ к диску', 'номер карты', 'реквизиты клиента', 'переведи 500', 'оплати счёт', 'паспорт', 'твой телефон', 'на почту скинь']) {
+      const { res } = await check(t, { messages: [msg('nik', `Николай, ${word}`)] })
+      assert.match(res.text, /просьба о данных или деньгах/, word)
+    }
+    // Обычные слова с похожим корнем не мешают.
+    for (const word of ['почти готово?', 'пришли картинку баннера']) {
+      const { res } = await check(t, { messages: [msg('nik', `Николай, ${word}`)] })
+      assert.equal(res.direct, true, word)
+    }
+  })
+
+  test('названия задач проверены не все: черновик', async (t) => {
+    const s = setup(t)
+    patch(t, prisma.task, 'findMany', async () => Array.from({ length: 5001 }, (_, i) => ({ id: `x${i}`, title: `Задача ${i}`, status: 'today', ownerId: 'rom', owner: PEOPLE.rom })))
+    patch(t, prisma.user, 'findMany', async () => [PEOPLE.rom])
+    const res = await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Николаю'] })
+    assert.match(res.text, /проверены не все названия задач/)
+    assert.equal(s.created[0][0].data.direct, false)
+  })
+
+  test('прямая отправка не отменяет висящий черновик, а черновик заменяет прежний', async (t) => {
+    const s = setup(t)
+    const upd = patch(t, prisma.botRound, 'updateMany', async () => ({ count: 1 }))
+    await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Николаю'] })
+    assert.equal(upd.length, 0)
+    await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['ответь ему'] })
+    assert.deepEqual(upd[0][0].where, { ownerId: 'owner', status: 'draft' })
+    assert.equal(s.created.length, 2)
   })
 
   test('«ответь ему» без имени', async (t) => {
@@ -259,36 +322,35 @@ describe('руководитель', () => {
   })
 })
 
-describe('инструмент message_people: предыдущее сообщение', () => {
-  test('берётся последнее чужое от текущего сообщение просящего не старше 10 минут', async (t) => {
+describe('инструмент message_people: имена только из текущего сообщения', () => {
+  test('прошлое сообщение назвало двоих, сейчас «ответь ему»: черновик, прошлое не читается', async (t) => {
     const s = setup(t)
-    const prev = patch(t, prisma.botMessage, 'findFirst', async () => ({ text: 'Роману тоже' }))
-    const ctx = { user: OWNER, chatId: '9001', now: NOW, text: 'и Николаю', logged: { id: 'm-now' } }
-    const tool = teamTools(ctx).find((x) => x.name === 'message_people')
-    const text = await tool.run(input(['nik', 'rom']))
-    const where = prev[0][0].where
-    assert.equal(where.userId, 'owner')
-    assert.deepEqual(where.direction, { in: ['in', 'reply'] })
-    assert.equal(where.createdAt.gte.toISOString(), '2026-11-04T13:50:00.000Z')
-    assert.deepEqual(where.id, { not: 'm-now' })
-    assert.match(text, /Написал сам/)
-    assert.equal(ctx.quiet, true)
-    assert.equal(s.created[0][0].data.direct, true)
-  })
-
-  test('предыдущего нет или сбой чтения: только текущее сообщение', async (t) => {
-    setup(t)
-    patch(t, prisma.botMessage, 'findFirst', async () => { throw new Error('db') })
-    const ctx = { user: OWNER, chatId: '9001', now: NOW, text: 'и Николаю', logged: null }
+    const prev = patch(t, prisma.botMessage, 'findFirst', async () => ({ text: 'Роману и Николаю' }))
+    const ctx = { user: OWNER, chatId: '9001', now: NOW, text: 'ответь ему', logged: { id: 'm-now' } }
     const tool = teamTools(ctx).find((x) => x.name === 'message_people')
     assert.match(await tool.run(input(['nik', 'rom'])), /потому что не все названы/)
+    assert.equal(prev.length, 0)
+    assert.equal(s.created[0][0].data.direct, false)
+  })
+
+  test('назвал в этом сообщении: пишет сам', async (t) => {
+    const s = setup(t)
+    const ctx = { user: OWNER, chatId: '9001', now: NOW, text: 'напиши Николаю и Роману', logged: null }
+    const tool = teamTools(ctx).find((x) => x.name === 'message_people')
+    assert.match(await tool.run(input(['nik', 'rom'])), /Написал сам/)
+    assert.equal(ctx.quiet, true)
+    assert.equal(s.created[0][0].data.direct, true)
   })
 })
 
 describe('подтверждение просящему', () => {
-  test('шаблон в стиле бота и пустые случаи', () => {
-    assert.equal(directNote({ sent: ['Николай, дизайн'], failed: [], skipped: [], collect: false }), 'Написал\nНиколай, дизайн')
+  test('кому и что именно ушло, текст экранирован; пустые случаи', () => {
+    assert.equal(directNote({ sent: [{ label: 'Николай, дизайн', text: 'Николай, как <b>макет</b>' }], failed: [], skipped: [], collect: false }), 'Написал\n<b>Николай, дизайн</b>\nНиколай, как &lt;b&gt;макет&lt;/b&gt;')
     assert.equal(directNote({ sent: [], failed: [], skipped: ['Роман, дизайн'], collect: true, deadlineAt: NOW }), 'Не писал, задачи уже сделаны\nРоман, дизайн')
     assert.equal(directNote({ sent: [], failed: [], skipped: [], collect: true, deadlineAt: NOW }), 'Никому не написал')
+  })
+  test('итог для модели', () => {
+    assert.equal(directSummary({ sent: 2 }), 'Дошло 2')
+    assert.equal(directSummary({ sent: 1, failed: 1, skipped: 2, notSent: 3 }), 'Дошло 1, не дошло 1, не писал 2, задачи уже сделаны, не уйдёт 3')
   })
 })

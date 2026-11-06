@@ -3,7 +3,7 @@ import { escapeHtml, sendAlbum, sendFileById } from '../telegram.js'
 import { isQuietHour, mskDayKey, mskDayStart } from '../plan.js'
 import { aiReport } from '../ai/report.js'
 import { noLinks, plainStyle } from '../ai/style.js'
-import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END } from '../ai/context.js'
+import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END, teamWhere } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
 import { hm } from './format.js'
@@ -57,10 +57,9 @@ export function clampMinutes(minutes) {
 }
 
 // Прямая отправка без черновика: не больше трёх человек, не больше 20
-// человеко-сообщений в день на просящего, имя названо не раньше 10 минут назад.
+// человеко-сообщений в день на просящего, имя названо в самой просьбе.
 export const DIRECT_PEOPLE_MAX = 3
 export const DIRECT_PER_DAY = 20
-export const DIRECT_NAME_MS = 10 * 60 * 1000
 
 // Падежи: от имени отбрасываем последнюю гласную, «й» или «ь» («Никола» для
 // «Николаю»), основа не короче трёх букв, а после неё допустимо только
@@ -92,18 +91,30 @@ export function isNamedIn(person, texts) {
 }
 
 /**
- * Назван только по имени, а в команде есть тёзка: «напиши Александру» — модель
- * могла выбрать не того. Тогда черновик, где видно, кому уйдёт.
+ * Тёзки и однофамильцы: среди тех, кому просящий может писать, есть ещё кто-то
+ * с теми же названными частями имени («напиши Александру» — модель могла
+ * выбрать не того). Тогда черновик, где видно, кому уйдёт. Ищем только в
+ * пределах видимости просящего, не по всей базе.
  */
-async function hasNamesake(people, texts) {
+async function hasNamesake(owner, people, texts) {
   for (const p of people) {
     const found = namedTokens(p.person, texts)
-    const [first, ...rest] = nameTokens(p.person)
-    if (!first || rest.some((t) => found.includes(t))) continue
-    const same = await prisma.user.count({ where: { active: true, id: { not: p.person.id }, name: { startsWith: first, mode: 'insensitive' } } })
+    if (!found.length) continue
+    const same = await prisma.user.count({
+      where: { AND: [teamWhere(owner), { id: { not: p.person.id } }, ...found.map((token) => ({ name: { contains: token, mode: 'insensitive' } }))] },
+    })
     if (same) return true
   }
   return false
+}
+
+// Просьбы о данных и деньгах уходят людям только через черновик. «карт» без
+// «картинка», «почт» без «почти».
+const SENSITIVE = /парол|логин|код из|коды|доступ|карт(?!ин)|реквизит|перевед|перевод|оплат|деньг|паспорт|телефон|почт(?!и(?![\p{L}]))/iu
+
+/** Короткий итог прямой отправки для модели. */
+export function directSummary({ sent, failed = 0, skipped = 0, notSent = 0 }) {
+  return `Дошло ${sent}${failed ? `, не дошло ${failed}` : ''}${skipped ? `, не писал ${skipped}, задачи уже сделаны` : ''}${notSent ? `, не уйдёт ${notSent}` : ''}`
 }
 
 /** Сколько человеко-сообщений без черновика просящий отправил сегодня. */
@@ -117,27 +128,37 @@ function directToday(ownerId, now) {
  * Можно ли писать без черновика. null — можно, иначе одна фраза: почему
  * показан черновик. Проверка чужих задач и перекрытие поручений уже были.
  */
-async function draftReason({ owner, people, texts, links, now }) {
+async function draftReason({ owner, people, texts, unchecked, now }) {
   if (!['admin', 'lead'].includes(owner.role)) return 'просит не владелец и не руководитель'
   if (people.length > DIRECT_PEOPLE_MAX) return `людей больше ${DIRECT_PEOPLE_MAX}`
   if (!people.every((p) => isNamedIn(p.person, texts))) return 'не все названы по имени в просьбе'
-  if (await hasNamesake(people, texts)) return 'в команде есть тёзки, а фамилию не назвали'
+  if (await hasNamesake(owner, people, texts)) return 'в команде есть тёзки или однофамильцы'
   if (isQuietHour(now)) return 'сейчас ночь, тихие часы'
-  if (links.length) return 'в текстах есть ссылки'
+  if (people.some((p) => noLinks(p.text) !== p.text)) return 'в текстах есть ссылки'
+  if (people.some((p) => SENSITIVE.test(p.text))) return 'в сообщении просьба о данных или деньгах'
+  if (unchecked) return 'проверены не все названия задач'
   if ((await directToday(owner.id, now)) + people.length > DIRECT_PER_DAY) return `дневной лимит ${DIRECT_PER_DAY} сообщений без черновика исчерпан`
   return null
 }
 
-/** Что написать просящему, когда сообщения ушли без черновика. */
+/**
+ * Что написать просящему, когда сообщения ушли без черновика: кому и что
+ * именно. sent — [{ label, text }], остальные списки — подписи.
+ */
 export function directNote({ sent, failed, skipped, notSent = [], collect, deadlineAt }) {
   const lines = []
-  if (sent.length) lines.push('Написал', ...sent)
-  if (failed.length) lines.push('Не дошло', ...failed)
-  if (skipped.length) lines.push('Не писал, задачи уже сделаны', ...skipped)
-  if (notSent.length) lines.push('Не уйдёт', ...notSent)
-  if (!sent.length && !failed.length && !skipped.length) lines.push('Никому не написал')
+  if (sent.length) {
+    lines.push('Написал')
+    for (const p of sent) lines.push(`<b>${escapeHtml(p.label)}</b>`, escapeHtml(p.text))
+  }
+  const plainLines = []
+  if (failed.length) plainLines.push('Не дошло', ...failed)
+  if (skipped.length) plainLines.push('Не писал, задачи уже сделаны', ...skipped)
+  if (notSent.length) plainLines.push('Не уйдёт', ...notSent)
+  if (!sent.length && !failed.length && !skipped.length) plainLines.push('Никому не написал')
+  lines.push(...plainLines.map((l) => escapeHtml(l)))
   if (collect && sent.length) lines.push(`Отчёт пришлю к ${hm(deadlineAt)}`)
-  return lines.map((l) => escapeHtml(l)).join('\n')
+  return lines.join('\n')
 }
 
 /** Ссылки и упоминания в текстах — Ян должен их видеть до отправки. */
@@ -272,10 +293,11 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
   const subject = cut(plain(String(topic ?? ''), 500) || 'Узнать, как дела', 500)
   const links = linksIn(people.map((p) => p.text))
-  const reason = await draftReason({ owner, people, texts, links, now })
+  const reason = await draftReason({ owner, people, texts, unchecked: foreign.incomplete, now })
   const direct = reason === null
   // Прежний черновик этого человека больше не нужен: новый его заменяет.
-  await prisma.botRound.updateMany({ where: { ownerId: owner.id, status: 'draft' }, data: { status: 'cancelled', closedAt: now } })
+  // Прямая отправка чужой черновик не трогает.
+  if (!direct) await prisma.botRound.updateMany({ where: { ownerId: owner.id, status: 'draft' }, data: { status: 'cancelled', closedAt: now } })
   const round = await prisma.botRound.create({
     data: {
       ownerId: owner.id,
@@ -290,9 +312,9 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
 
   if (direct) {
     const out = await deliverRound(owner, round, labels)
-    const note = directNote({ sent: out.sentLabels, failed: out.failedLabels, skipped: out.skipped, notSent: skipped, collect: round.collect, deadlineAt })
+    const note = directNote({ sent: out.sentPeople, failed: out.failedLabels, skipped: out.skipped, notSent: skipped, collect: round.collect, deadlineAt })
     const shown = await tellChat(chatId, note, { userId: owner.id })
-    const summary = `Дошло ${out.sent}${out.failedLabels.length ? `, не дошло ${out.failedLabels.length}` : ''}${out.skipped.length ? `, не писал ${out.skipped.length}, задачи уже сделаны` : ''}${skipped.length ? `, не уйдёт ${skipped.length}` : ''}`
+    const summary = directSummary({ sent: out.sent, failed: out.failedLabels.length, skipped: out.skipped.length, notSent: skipped.length })
     return {
       shown: Boolean(shown.ok),
       direct: true,
@@ -352,14 +374,14 @@ export async function decideDraft(user, roundId, go, now = new Date()) {
  * Общая часть для кнопки «Отправить» и прямой отправки: поручение уже в
  * статусе sent. Каждому адресату права проверяются заново, задачи из текста
  * перечитываются: все сделаны — человеку не пишем. labels — подписи, если
- * уже известны. Возвращает { sent, failed, skipped, sentLabels, failedLabels }:
+ * уже известны. Возвращает { sent, failed, skipped, sentPeople, failedLabels }:
  * skipped это подписи тех, кому не писали.
  */
 async function deliverRound(user, round, labels = new Map()) {
   const targets = await prisma.botRoundTarget.findMany({ where: { roundId: round.id } })
   let sent = 0
   const skipped = []
-  const sentLabels = []
+  const sentPeople = []
   const failedLabels = []
   for (const t of targets) {
     const allowed = await personInScope(user, t.userId)
@@ -379,7 +401,7 @@ async function deliverRound(user, round, labels = new Map()) {
     await prisma.botRoundTarget.update({ where: { id: t.id }, data: res.ok ? { status: 'sent', sentAt: new Date() } : { status: 'failed' } })
     if (res.ok) {
       sent += 1
-      sentLabels.push(label)
+      sentPeople.push({ label, text: t.text })
     } else {
       failedLabels.push(label)
     }
@@ -387,7 +409,7 @@ async function deliverRound(user, round, labels = new Map()) {
   const failed = targets.length - sent - skipped.length
   // Все пропущены — ждать некого и отчёта не будет.
   if (skipped.length === targets.length) await prisma.botRound.update({ where: { id: round.id }, data: { status: 'closed', closedAt: new Date() } })
-  return { sent, failed, skipped, sentLabels, failedLabels }
+  return { sent, failed, skipped, sentPeople, failedLabels }
 }
 
 /** Что дописать под черновиком после кнопки «Отправить». */

@@ -1,9 +1,8 @@
 import { comeBack, runningLate, startBreak } from '../agent/away.js'
 import { askReminderTime, createReminder } from '../agent/remind.js'
 import { tellChat } from '../agent/notify.js'
-import { askReportNow, createDraft, DIRECT_NAME_MS, finishAnswer, roundStatus, setRoundDeadline } from '../agent/rounds.js'
+import { askReportNow, createDraft, finishAnswer, roundStatus, setRoundDeadline } from '../agent/rounds.js'
 import { proposeTask } from '../agent/offers.js'
-import { prisma } from '../../config/prisma.js'
 import { escapeHtml, uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
 import { personBrief, teamBrief, worksBrief } from './context.js'
@@ -174,31 +173,6 @@ export function styleTools(ctx) {
 }
 
 /**
- * Слова просящего, по которым видно, кого он назвал: это сообщение и
- * предыдущее, если оно не старше 10 минут.
- */
-async function requestTexts(ctx) {
-  const texts = [ctx.text]
-  try {
-    const prev = await prisma.botMessage.findFirst({
-      where: {
-        userId: ctx.user.id,
-        direction: { in: ['in', 'reply'] },
-        createdAt: { gte: new Date(ctx.now.getTime() - DIRECT_NAME_MS), lte: ctx.now },
-        ...(ctx.logged?.id ? { id: { not: ctx.logged.id } } : {}),
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { text: true },
-    })
-    if (prev?.text) texts.push(prev.text)
-  } catch (e) {
-    // Не смогли прочитать — считаем только текущее сообщение; хуже, чем черновик, не будет.
-    console.error(`[агент] предыдущее сообщение: ${e.name}`)
-  }
-  return texts.filter(Boolean)
-}
-
-/**
  * Инструменты того, кто ведёт людей: Яна — по всей команде, руководителя —
  * по специалистам своего отдела. ctx: { user, chatId, now }. ctx.quiet —
  * бот уже показал результат сам (черновик, файл, отчёт), короткая
@@ -228,7 +202,7 @@ export function teamTools(ctx, { team = false } = {}) {
     },
     {
       name: 'message_people',
-      description: 'Написать людям: опросить, узнать, как дела, попросить скрин, передать сообщение. Каждому своё сообщение. Если просят написать конкретным людям по имени, их не больше трёх, сейчас не ночь и в текстах нет ссылок, бот отправит сразу и сам скажет просящему, кому написал. Иначе покажет черновик с кнопкой «Отправить». В ответе инструмента написано, что случилось.',
+      description: 'Написать людям: опросить, узнать, как дела, попросить скрин, передать сообщение. Каждому своё сообщение. Если в самом сообщении просящего названы по имени конкретные люди, их не больше трёх, сейчас не ночь и в текстах нет ссылок, бот отправит сразу и сам скажет просящему, кому написал. Иначе покажет черновик с кнопкой «Отправить». В ответе инструмента написано, что случилось.',
       input_schema: object({
         topic: { type: 'string', description: 'Что нужно узнать или передать, одной строкой, для отчёта.' },
         minutes: nullable('integer', 'Сколько минут собирать ответы, от 10 до 480. null, если не сказали, тогда 60.'),
@@ -240,7 +214,7 @@ export function teamTools(ctx, { team = false } = {}) {
         },
       }),
       run: async (input) => {
-        const res = await createDraft(user, chatId, input, now, { texts: await requestTexts(ctx) })
+        const res = await createDraft(user, chatId, input, now, { texts: [ctx.text].filter(Boolean) })
         ctx.quiet ||= res.shown
         return res.text
       },
