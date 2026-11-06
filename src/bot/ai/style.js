@@ -15,7 +15,7 @@
  * noLinks(plainStyle(text)).
  */
 // Слова, после которых точка в конце строки — часть сокращения.
-const ABBREVIATIONS = 'др|р|руб|коп|г|гг|тыс|млн|млрд|пр|см'
+const ABBREVIATIONS = 'др|р|руб|коп|г|гг|тыс|млн|млрд|пр|см|рис|стр|ул|д|кв'
 const NUMBERED = /^[ \t]*\d{1,2}[.)][ \t]+/
 
 /**
@@ -89,6 +89,7 @@ export function plainStyle(text) {
 // не узнать. Лишние пробелы потом схлопываем.
 function noLinksOnce(text) {
   return text
+    .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, ' почта ')
     .replace(/(?:https?|hxxps?|tg):\/\/\S+/gi, ' ссылка ')
     .replace(/\b(?:t\.me|telegram\.me|www\.)\S*/gi, ' ссылка ')
     .replace(/(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|be|fm|ws|im|gl|ee|ink|link|page|click|top|club|store|shop)(?![\p{L}\d])\S*/giu, ' ссылка ')
