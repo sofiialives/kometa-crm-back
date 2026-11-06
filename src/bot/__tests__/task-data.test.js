@@ -187,7 +187,7 @@ describe('работы в Иерархии: у каждого его задач�
     patch(t, prisma.task, 'findMany', async () => [])
     patch(t, prisma.user, 'findMany', async () => [])
     const lead = await worksBrief({ id: 'lead', role: 'lead', departmentId: 'd' }, null, NOW)
-    assert.match(lead, /ведут \(Дизайн\) Роман, и ещё 2 из других отделов;/)
+    assert.match(lead, /ведут \(Дизайн\) Роман, и ещё 2 не из твоей команды;/)
     assert.doesNotMatch(lead, /Игорь|Ян/)
     const admin = await worksBrief({ role: 'admin' }, null, NOW)
     assert.match(admin, /Игорь/)
