@@ -12,6 +12,6 @@ describe('рассылка по расписанию попадает в жур�
     patch(t, prisma.motivationAway, 'findMany', async () => [{ userId: 'u2' }])
     await broadcast('Доброе утро\nРасставь задачи на сегодня до 10:00')
     assert.equal(h.sent.length, 1)
-    assert.deepEqual(h.logged.map((m) => [m.userId, m.chatId, m.direction, m.text]), [['u1', '1', 'out', 'Доброе утро\nРасставь задачи на сегодня до 10:00']])
+    assert.deepEqual(h.logged.map((m) => [m.userId, m.chatId, m.direction, m.source, m.text]), [['u1', '1', 'out', 'notice', 'Доброе утро\nРасставь задачи на сегодня до 10:00']])
   })
 })

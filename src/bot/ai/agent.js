@@ -186,7 +186,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
       kind: target ? 'round' : kind,
       system: [owner ? ownerSystem({ notes: shared }) : staffSystem({ lead, notes: shared }), dynamic],
       tools: toolsFor(ctx, { owner, lead, target }),
-      messages: toMessages(rows, currentTurn({ brief: cut(brief, MAX_INPUT_CHARS) + (target ? FRESH_NOTE : ''), text, notes: media.notes, media: media.blocks }), { strict: team }),
+      messages: toMessages(rows, currentTurn({ brief: cut(brief, MAX_INPUT_CHARS) + (target ? FRESH_NOTE : ''), text, notes: media.notes, media: media.blocks })),
       maxTokens: team ? MAX_OUTPUT_TOKENS_TEAM : MAX_OUTPUT_TOKENS,
       maxSteps: team ? 8 : 4,
       effort: owner ? 'medium' : 'low',

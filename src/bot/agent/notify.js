@@ -72,11 +72,12 @@ export async function tell(userId, text, opts = {}) {
 }
 
 /**
- * source — кто написал: ai — агент, round — сообщение по поручению; так
- * агент отличает свои ответы от шаблонов. roundTargetId — из разговора по
- * поручению.
+ * source — кто написал: ai — агент, round — сообщение по поручению; всё
+ * остальное шаблон бота (notice): в нём бывает чужой текст, поэтому агент
+ * читает его как данные, а не как свои слова. roundTargetId — из разговора
+ * по поручению.
  */
-export async function tellChat(chatId, text, { userId = null, buttons, source = null, roundTargetId = null } = {}) {
+export async function tellChat(chatId, text, { userId = null, buttons, source = 'notice', roundTargetId = null } = {}) {
   const res = await sendMessage(chatId, text, { buttons })
   if (res.ok) await logMessage({ userId, chatId, direction: 'out', text, source, roundTargetId })
   return res

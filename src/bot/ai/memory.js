@@ -18,17 +18,19 @@ export function fileWord(kind) {
 }
 
 // Что бот писал сам — ответ агента или сообщение по поручению, которое
-// утвердил Ян. Остальное от бота — уведомления, в них слова сотрудников.
+// утвердил Ян. Остальное от бота — уведомления (source notice), в них чужой
+// текст: названия звонков и задач, заметки, слова сотрудников.
 const OWN_WORDS = new Set(['ai', 'round'])
 
 /**
- * Строка истории в реплику разговора: { role, text }. strict — для Яна и
- * руководителя: уведомления о людях (отлучки, заявки, отчёты) несут слова
- * сотрудников, их нельзя выдавать модели за её собственные реплики —
- * идут пометкой «уведомление бота», одной строкой.
+ * Строка истории в реплику разговора: { role, text }. Уведомления бота
+ * (рассылки, напоминания, приглашения, отлучки, заявки, отчёты) несут чужой
+ * текст, и выдавать его модели за её собственные реплики нельзя: у любого
+ * разговора они идут пометкой «уведомление бота» в роли пользователя,
+ * одной строкой и через plain().
  */
-export function turnOf(m, { strict = false } = {}) {
-  if (m.direction === 'out' && strict && !OWN_WORDS.has(m.source)) {
+export function turnOf(m) {
+  if (m.direction === 'out' && !OWN_WORDS.has(m.source)) {
     return { role: 'user', text: `[${hm(m.createdAt)}] уведомление бота, данные: ${plain(m.text, 300)}` }
   }
   const text = cut(String(m.text ?? ''), m.direction === 'out' ? 700 : 500)
@@ -45,10 +47,10 @@ export function turnOf(m, { strict = false } = {}) {
  * не знал бы, на что ему отвечают. current — содержимое нового сообщения
  * (блоки): оно последнее.
  */
-export function toMessages(rows, current, { strict = false } = {}) {
+export function toMessages(rows, current) {
   const turns = []
   for (const m of rows) {
-    const t = turnOf(m, { strict })
+    const t = turnOf(m)
     const last = turns.at(-1)
     if (last?.role === t.role) last.text += `\n${t.text}`
     else turns.push({ ...t })
