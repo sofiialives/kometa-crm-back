@@ -97,7 +97,7 @@ async function onWaiting(user, waiting, text, logged, now) {
     return true
   }
   if (waiting.type === 'task_late') {
-    await reportTaskLate(user, waiting.payload.taskId, text, now)
+    await reportTaskLate(user, waiting.payload.taskId, text, now, waiting.payload.taskIds)
     return true
   }
   if (waiting.type === 'break_time') {
@@ -240,10 +240,19 @@ function pressedText(cb) {
   return cb.data
 }
 
-/** Убрать кнопки у сообщения и дописать, что выбрали. */
-function closeButtons(cb, note) {
+/**
+ * Убрать кнопки у сообщения и дописать, что выбрали. keep — оставить
+ * остальные кнопки «Беру», пока в сообщении есть невзятые задачи.
+ */
+function closeButtons(cb, note, { keep = false } = {}) {
   const original = escapeHtml(cb.message?.text || '')
-  return editMessage(cb.message.chat.id, cb.message.message_id, note ? `${original}\n\n<i>${note}</i>` : original)
+  const rows = keep
+    ? (cb.message?.reply_markup?.inline_keyboard ?? []).map((r) => r.filter((b) => b.callback_data !== cb.data)).filter((r) => r.length)
+    : []
+  const left = rows.some((r) => r.some((b) => String(b.callback_data).startsWith('tk:go:')))
+    ? rows.map((r) => r.map((b) => ({ text: b.text, data: b.callback_data })))
+    : undefined
+  return editMessage(cb.message.chat.id, cb.message.message_id, note ? `${original}\n\n<i>${note}</i>` : original, { buttons: left })
 }
 
 /** Нажатие кнопки под сообщением бота. */
@@ -335,7 +344,7 @@ export async function onCallback(cb, user, now = new Date()) {
   }
   if (kind === 'tk') {
     const text = action === 'go' ? await takeTask(user, id) : await lateForTask(user, id)
-    return closeButtons(cb, text)
+    return closeButtons(cb, text, { keep: action === 'go' })
   }
   if (kind === 'ci') {
     const task = await prisma.task.findUnique({ where: { id: action }, select: { title: true, ownerId: true } })

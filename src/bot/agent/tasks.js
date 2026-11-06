@@ -87,20 +87,42 @@ export async function eveningOpenTasks(now = new Date()) {
   return sent
 }
 
-/** Раз в минуту: задачи, которые начинаются через 5 минут. */
+/** Задачи по человеку и времени начала: на 12:00 их может быть несколько, сообщение одно. */
+export function startGroups(tasks) {
+  const groups = new Map()
+  for (const task of tasks) {
+    const key = `${task.ownerId}:${task.startAt.getTime()}`
+    if (!groups.has(key)) groups.set(key, { ownerId: task.ownerId, startAt: task.startAt, tasks: [] })
+    groups.get(key).tasks.push(task)
+  }
+  return [...groups.values()]
+}
+
+/** Текст за 5 минут до начала: одна задача или все задачи этого времени. */
+export function startText(group) {
+  const titles = group.tasks.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
+  const time = `<b>${hm(group.startAt)}</b>`
+  if (titles.length === 1) return `Через 5 минут, в ${time}, начинается ${titles[0]}\nКак начнёшь, жми кнопку или перетащи её в «В процессе»`
+  const shown = titles.slice(0, MAX_BUTTON_TASKS)
+  const more = titles.length > shown.length ? [`и ещё ${titles.length - shown.length}`] : []
+  return [`Через 5 минут, в ${time}, начинаются задачи`, ...shown, ...more, 'Как начнёшь, жми кнопку или перетащи в «В процессе»'].join('\n')
+}
+
+/** Раз в минуту: задачи, которые начинаются через 5 минут, одним сообщением на человека и время. */
 export async function tickTaskStarts(now = new Date()) {
+  if (isQuietHour(now)) return
   const from = new Date(now.getTime() + (TASK_START_BEFORE_MIN - 1) * 60000)
   const to = new Date(now.getTime() + TASK_START_BEFORE_MIN * 60000)
   const tasks = await prisma.task.findMany({
     where: { status: 'today', startAt: { gt: from, lte: to }, owner: { active: true, role: { in: PARTICIPANT_ROLES } } },
     select: { id: true, title: true, startAt: true, ownerId: true },
+    orderBy: { startAt: 'asc' },
   })
-  for (const task of tasks) {
-    if (!dueInMinutes(task.startAt, now, TASK_START_BEFORE_MIN)) continue
-    if ((await activeAway(task.ownerId, now)) || (await hasEndedDay(task.ownerId, now))) continue
-    await sendOnce(`task-start:${task.id}:${task.startAt.getTime()}`, () => tell(task.ownerId,
-      `Через 5 минут, в <b>${hm(task.startAt)}</b>, начинается задача\n«${escapeHtml(short(task.title, 120))}»\n\nКак начнёшь, нажми кнопку или перетащи её в «В процессе».`,
-      { buttons: [taskButtons(task, false)] }))
+  for (const group of startGroups(tasks)) {
+    if (!dueInMinutes(group.startAt, now, TASK_START_BEFORE_MIN)) continue
+    if ((await activeAway(group.ownerId, now)) || (await hasEndedDay(group.ownerId, now))) continue
+    await sendOnce(`task-start:${group.ownerId}:${group.startAt.getTime()}`, () => tell(group.ownerId, startText(group),
+      { buttons: taskButtons(group.tasks) }))
   }
 }
 
@@ -115,9 +137,13 @@ const NOT_STARTED_WINDOW_MIN = 30
 const LATE_GRACE_MS = 15 * 60000
 const LATE_NO_TIME_MS = 3 * 60 * 60000
 
-const taskButtons = (task, many) => [
-  { text: many ? `Беру ${short(task.title, 24)}` : 'Беру в работу', data: `tk:go:${task.id}` },
-  { text: 'Не успеваю', data: `tk:late:${task.id}` },
+// Сколько задач с отдельной кнопкой «Беру» в одном сообщении.
+const MAX_BUTTON_TASKS = 5
+
+/** По кнопке «Беру» на каждую задачу (до пяти) и одна «Не успеваю» на всё время начала. */
+export const taskButtons = (tasks) => [
+  ...tasks.slice(0, MAX_BUTTON_TASKS).map((t) => [{ text: tasks.length > 1 ? `Беру ${short(t.title, 24)}` : 'Беру в работу', data: `tk:go:${t.id}` }]),
+  [{ text: 'Не успеваю', data: `tk:late:${tasks[0].id}` }],
 ]
 
 /** Человек сам предупредил о задержке, и срок ещё не вышел. */
@@ -210,7 +236,7 @@ export async function tickNotStarted(now = new Date()) {
       many
         ? `Эти задачи должны были начаться в <b>${hm(group.startAt)}</b>\n\n${bullets}\n\nКак дела?`
         : `Задача ${titles[0]} должна была начаться в <b>${hm(group.startAt)}</b>. Как дела?`,
-      { buttons: list.slice(0, 5).map((t) => taskButtons(t, many)) })
+      { buttons: taskButtons(list) })
   }
 }
 
@@ -233,20 +259,33 @@ export async function takeTask(user, taskId) {
   }
 }
 
-/** Кнопка «Не успеваю»: спрашиваем, что случилось, и ждём строку. */
+/**
+ * Кнопка «Не успеваю»: спрашиваем, что случилось, и ждём строку. Она одна
+ * на всё время начала, поэтому «не успеваю» относится ко всем ещё не
+ * начатым задачам этого времени.
+ */
 export async function lateForTask(user, taskId) {
-  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true } })
+  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true, startAt: true } })
   if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
   if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта.`
-  state.expect(user.id, 'task_late', { taskId })
-  await tell(user.id, 'Что случилось и во сколько начнёшь?\nНапиши одной строкой, я передам Яну.')
-  return `Не успеваю начать «${escapeHtml(short(task.title, 120))}»`
+  const same = task.startAt
+    ? await prisma.task.findMany({ where: { ownerId: user.id, status: 'today', startAt: task.startAt }, select: { id: true } })
+    : []
+  const taskIds = [...new Set([task.id, ...same.map((t) => t.id)])]
+  state.expect(user.id, 'task_late', { taskId, taskIds })
+  await tell(user.id, 'Что случилось и во сколько начнёшь?\nНапиши одной строкой, я передам Яну')
+  return taskIds.length > 1 ? 'Не успеваю начать' : `Не успеваю начать «${escapeHtml(short(task.title, 120))}»`
 }
 
-/** Ответ на «что случилось?» — Яну. */
-export async function reportTaskLate(user, taskId, text, now = new Date()) {
-  const task = await prisma.task.findUnique({ where: { id: taskId }, select: { title: true, startAt: true } })
-  await logEvent(user.id, 'task_late', { at: now, text, data: { taskId, taskTitle: task?.title ?? null, startAt: task?.startAt?.toISOString() ?? null } })
-  await tell(user.id, 'Понял, передал Яну.')
-  await tellOwners(`<b>Не успевает начать задачу</b>\n${nameOf(user)}\n«${escapeHtml(short(task?.title || 'задача', 120))}»${task?.startAt ? `\nПо плану в ${hm(task.startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
+/** Ответ на «что случилось?» — Яну. taskIds — все задачи этого времени начала. */
+export async function reportTaskLate(user, taskId, text, now = new Date(), taskIds = [taskId]) {
+  const tasks = await prisma.task.findMany({ where: { id: { in: taskIds }, ownerId: user.id }, select: { id: true, title: true, startAt: true } })
+  const list = tasks.length ? tasks : [{ id: taskId, title: null, startAt: null }]
+  for (const task of list) {
+    await logEvent(user.id, 'task_late', { at: now, text, data: { taskId: task.id, taskTitle: task.title ?? null, startAt: task.startAt?.toISOString() ?? null } })
+  }
+  await tell(user.id, 'Понял, передал Яну')
+  const titles = list.map((t) => `«${escapeHtml(short(t.title || 'задача', 120))}»`)
+  const startAt = list.find((t) => t.startAt)?.startAt
+  await tellOwners(`<b>${list.length > 1 ? 'Не успевает начать задачи' : 'Не успевает начать задачу'}</b>\n${nameOf(user)}\n${titles.join('\n')}${startAt ? `\nПо плану в ${hm(startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
 }
