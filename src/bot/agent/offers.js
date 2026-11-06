@@ -124,7 +124,8 @@ export async function proposeTask(user, chatId, input, now = new Date()) {
 
   const title = plain(String(input.title ?? ''), TITLE_MAX).trim()
   if (!title) return { shown: false, text: 'Нет названия задачи. Спроси, что именно поставить.' }
-  const description = cut(noLinks(plainStyle(String(input.description ?? ''))), DESCRIPTION_MAX).trim() || null
+  // plain: без невидимых символов и переводов строк, как у названия: описание пишет модель.
+  const description = cut(noLinks(plainStyle(plain(String(input.description ?? ''), DESCRIPTION_MAX))), DESCRIPTION_MAX).trim() || null
 
   let deadline = defaultDeadline(now)
   if (input.deadline) {

@@ -225,11 +225,11 @@ export function teamTools(ctx, { team = false } = {}) {
       input_schema: object({
         person_id: { type: 'string' },
         title: { type: 'string', description: 'Название задачи, до 200 знаков.' },
-        description: nullable('string', 'Подробности или null.'),
+        description: { type: 'string', description: 'Подробности или пустая строка.' },
         deadline: nullable('string', 'Срок, ISO по Москве, например 2026-11-07T12:00, или null.'),
-        start_at: nullable('string', 'Время начала, ISO по Москве, обычно null.'),
+        start_at: { type: 'string', description: 'Время начала, ISO по Москве, обычно пустая строка.' },
         work_id: nullable('string', 'id работы из get_works или null для личной задачи.'),
-        note: nullable('string', 'Короткое сообщение исполнителю от агента или null.'),
+        note: { type: 'string', description: 'Короткое сообщение исполнителю от агента или пустая строка.' },
       }),
       run: async (input) => {
         const res = await proposeTask(user, chatId, input, now)
