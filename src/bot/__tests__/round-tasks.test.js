@@ -371,3 +371,20 @@ describe('свежие задачи при отправке', () => {
     assert.match(note, /^Отправил 1\./)
   })
 })
+
+describe('неполная проверка видна Яну', () => {
+  test('упоминаний в кавычках больше предела — проверка неполная, а не «всё чисто»', async (t) => {
+    patch(t, prisma.user, 'findMany', async () => [])
+    patch(t, prisma.task, 'findMany', async () => [])
+    const text = Array.from({ length: MENTIONS_MAX + 5 }, (_, i) => `«Задача ${i}»`).join(' ')
+    assert.equal((await foreignTitles([{ userId: 'denis', text }], ADMIN)).incomplete, true)
+    assert.equal((await foreignTitles([{ userId: 'denis', text: 'Как «Баннер»?' }], ADMIN)).incomplete, false)
+  })
+
+  test('в сообщении с кнопками пометка, что названия проверены не все', async () => {
+    const { confirmText } = await import('../agent/rounds.js')
+    const base = { topic: 'Как дела', collect: true, deadlineAt: new Date('2026-11-06T14:30:00Z'), count: 2, links: [] }
+    assert.match(confirmText({ ...base, unchecked: true }), /проверил не все названия/)
+    assert.doesNotMatch(confirmText(base), /проверил не все/)
+  })
+})

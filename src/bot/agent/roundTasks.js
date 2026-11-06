@@ -127,9 +127,13 @@ export async function foreignTitles(items, viewer) {
     select: { id: true, title: true, ownerId: true },
   })
   // Упёрлись в предел: проверяем свежие задачи, но честно говорим, что не все.
-  const truncated = read.length >= SCAN_MAX
+  const scanCut = read.length >= SCAN_MAX
   // Упоминания в кавычках от 6 букв — возможные сокращения; без повторов, не больше MENTIONS_MAX.
-  const quoted = items.map((i) => quotedTitles(i.text).titles.map(squash))
+  const lists = items.map((i) => quotedTitles(i.text))
+  // Упоминаний в кавычках больше предела: короткие названия за ним не проверены.
+  const cutQuotes = lists.some((l) => l.truncated)
+  const quoted = lists.map((l) => l.titles.map(squash))
+  const truncated = scanCut || cutQuotes
   const all = quoted.map((q) => q.filter((m) => m.length >= MIN_ABBREVIATION))
   const needles = [...new Set(all.flat())].slice(0, MENTIONS_MAX)
   const prepared = items.map((item, i) => ({ userId: item.userId, said: padded(item.text), inQuotes: new Set(quoted[i]), mentions: all[i].filter((m) => needles.includes(m)) }))

@@ -72,12 +72,14 @@ export function draftText({ people, skipped }) {
 }
 
 /** Короткое сообщение с кнопками: что, кому, до скольки и какие ссылки. */
-export function confirmText({ topic, collect, deadlineAt, count, links }) {
+export function confirmText({ topic, collect, deadlineAt, count, links, unchecked = false }) {
   const lines = [
     `<b>Тема</b> ${escapeHtml(cut(topic, 300))}`,
     collect ? `Кому ${count}, ответы соберу до ${hm(deadlineAt)} и пришлю отчёт.` : `Кому ${count}, просто напишу, отчёт не нужен.`,
   ]
   if (links.length) lines.push(`В сообщениях есть ссылки, проверь их\n${links.slice(0, 10).map((l) => `• ${escapeHtml(cut(l, 80))}`).join('\n')}`)
+  // Проверка чужих задач прошла не по всем: решает человек, глядя на тексты.
+  if (unchecked) lines.push('Задач очень много, проверил не все названия\nПосмотри, что каждому написаны его задачи')
   lines.push('Отправить сообщения выше?')
   return lines.join('\n')
 }
@@ -179,7 +181,7 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   if (foreign.problems.length) return { shown: false, text: foreignText(foreign.problems, labels, owner) }
   // Проверка вспомогательная: задач стало слишком много — проверили свежие,
   // остальное видно Яну в черновике. Блокировать поручения из-за этого нельзя.
-  if (foreign.incomplete) console.warn(`[агент] поручение: названия задач проверены не все, их больше ${SCAN_MAX}`)
+  if (foreign.incomplete) console.warn(`[агент] поручение: названия задач проверены не все, их больше ${SCAN_MAX} или упоминаний слишком много`)
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
   const subject = cut(plain(String(topic ?? ''), 500) || 'Узнать, как дела', 500)
   // Прежний черновик этого человека больше не нужен: новый его заменяет.
@@ -197,7 +199,7 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   // Кнопки — отдельным коротким сообщением: длинный черновик телеграм режет
   // на части, и кнопки не должны потеряться вместе с частью.
   const asked = shown.ok && await tellChat(chatId, confirmText({
-    topic: subject, collect: round.collect, deadlineAt, count: people.length, links: linksIn(people.map((p) => p.text)),
+    topic: subject, collect: round.collect, deadlineAt, count: people.length, links: linksIn(people.map((p) => p.text)), unchecked: foreign.incomplete,
   }), { userId: owner.id, buttons: BUTTONS(round.id) })
   if (!asked?.ok) {
     await prisma.botRound.update({ where: { id: round.id }, data: { status: 'cancelled', closedAt: now } })
