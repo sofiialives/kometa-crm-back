@@ -155,3 +155,28 @@ describe('вопрос человеку не теряется при сбое', 
     assert.equal(h.sent.filter((m) => m.chatId === 'chat-u1').length, 1, 'вопрос ушёл — больше не повторяем')
   })
 })
+
+describe('отчёт Яну ушёл с таймаутом', () => {
+  test('ключ занят, второго отчёта нет, события о неначатых задачах записаны сразу', async (t) => {
+    const { h } = setup(t)
+    const events = patch(t, prisma.botEvent, 'create', async () => ({}))
+    const ok = globalThis.fetch
+    let timeout = true
+    globalThis.fetch = async (url, init) => {
+      if (timeout && String(url).endsWith('sendMessage') && JSON.parse(init.body).chat_id === 'chat-owner') throw Object.assign(new Error('timeout'), { name: 'TimeoutError' })
+      return ok(url, init)
+    }
+    t.after(() => { globalThis.fetch = ok })
+
+    await tickNotStarted(NOW)
+    assert.ok(h.notices.has('task-nostart:u1:' + T('12:00').getTime()), 'отчёт мог дойти, ключ не отпускаем')
+    assert.ok(events.length >= 2, 'события на обе задачи записаны, иначе баллы пропадут')
+    const after = events.length
+
+    timeout = false
+    await tickNotStarted(new Date(NOW.getTime() + 60000))
+    assert.equal(h.sent.filter((m) => m.chatId === 'chat-owner').length, 0, 'второй отчёт не уходит')
+    assert.equal(events.length, after)
+  })
+})
+

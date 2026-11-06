@@ -107,7 +107,7 @@ const minutesWord = (n) => (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 1
 
 /** Заголовок: «Через 5 минут» только когда осталось пять, иначе по-честному; совсем скоро — «Сейчас». */
 export function startLead(startAt, now) {
-  const left = now ? Math.round((new Date(startAt).getTime() - now.getTime()) / 60000) : TASK_START_BEFORE_MIN
+  const left = now ? Math.min(TASK_START_BEFORE_MIN, Math.round((new Date(startAt).getTime() - now.getTime()) / 60000)) : TASK_START_BEFORE_MIN
   if (left < 2) return 'Сейчас'
   return `Через ${left} ${minutesWord(left)}`
 }
@@ -284,7 +284,9 @@ export async function tickNotStarted(now = new Date()) {
       const res = await sendOnce(key, () => tellOwners(`<b>${many ? 'Задачи не начаты вовремя' : 'Задача не начата вовремя'}</b>\n${escapeHtml(labelOf(group.owner))}\n${titles.join('\n')}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
       if (res.skipped) continue
       // Временный сбой — ключ освобождён, повторим на следующем проходе целиком.
-      if (!res.ok && res.retry) continue
+      // Таймаут (unsure): отчёт мог дойти, ключ занят, второго не будет —
+      // события и баллы пишем сейчас, иначе они пропадут.
+      if (!res.ok && res.retry && !res.unsure) continue
       for (const t of list) {
         await logEvent(userId, 'task_not_started', { at: now, data: { taskId: t.id, taskTitle: t.title, startAt: t.startAt.toISOString(), told: res.ok } })
         // Баллы по событию «Задача не начата вовремя», если оно есть в профиле:
@@ -398,7 +400,7 @@ export async function reportTaskLate(user, taskId, text, now = new Date(), taskI
   // их не извиняем и Яну про них не пишем.
   const list = await prisma.task.findMany({ where: { id: { in: ids }, ownerId: user.id, status: 'today' }, take: LATE_MAX, select: { id: true, title: true, startAt: true } })
   if (!list.length) {
-    await tell(user.id, 'Эти задачи уже в работе, Яну передавать нечего')
+    await tell(user.id, 'Эти задачи уже взяты, закрыты или удалены, Яну передавать нечего')
     return
   }
   for (const task of list) {

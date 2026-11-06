@@ -177,7 +177,7 @@ describe('заголовок напоминания', () => {
     assert.equal(lead(3), 'Через 3 минуты')
     assert.equal(lead(2), 'Через 2 минуты')
     assert.equal(lead(1), 'Сейчас')
-    assert.equal(lead(6), 'Через 6 минут')
+    assert.equal(lead(6), 'Через 5 минут', 'окно до конца минуты не даёт «Через 6 минут»')
     assert.match(startText({ startAt: T('12:00'), tasks: [task('a', '12:00')] }, new Date(T('12:00').getTime() - 30000)), /^Сейчас, в <b>12:00<\/b>, начинается/)
   })
 })
