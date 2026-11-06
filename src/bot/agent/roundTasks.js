@@ -68,6 +68,10 @@ const PROBLEMS_MAX = 20
 export const OWN_MAX = 2000
 // Сколько дней сделанная задача адресата ещё может оправдать упоминание.
 export const OWN_DONE_DAYS = 14
+// Сделанные задачи старше этого для «всё уже сделано» и для отчёта не нужны:
+// иначе у человека с длинной историей выборка упрётся в предел.
+export const RECENT_DONE_DAYS = 30
+const daysAgo = (days, now = new Date()) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
 const OWNER = { select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } }
 
 /**
@@ -81,10 +85,13 @@ async function ownTasks(ids, { since = null } = {}) {
     where: { AND: [VISIBLE, { ownerId: { in: ids } }, since ? { OR: [{ status: { not: 'done' } }, { doneAt: { gte: since } }] } : {}] },
     orderBy: { updatedAt: 'desc' },
     take: OWN_MAX + 1,
-    select: { id: true, title: true, status: true, deadline: true, origin: true, ownerId: true },
+    select: { id: true, title: true, status: true, deadline: true, origin: true, ownerId: true, work: { select: { title: true, client: { select: { name: true } } } } },
   })
   return { tasks: rows.slice(0, OWN_MAX), full: rows.length <= OWN_MAX }
 }
+
+/** Названия работ и клиентов задач человека: в кавычках они встречаются рядом с задачами, но это не задачи. */
+const contextNames = (tasks) => tasks.flatMap((t) => [t.work?.title, t.work?.client?.name]).filter(Boolean)
 
 /**
  * Чьи задачи вообще можно искать, когда поручение пишет viewer: адресаты,
@@ -164,17 +171,26 @@ export async function foreignTitles(items, viewer) {
  * какое-то не нашлось среди его задач или хоть одна задача ещё открыта,
  * сообщение уходит как обычно.
  */
-export async function allTitlesDone(userId, text) {
+export async function allTitlesDone(userId, text, now = new Date()) {
   const { titles, truncated } = quotedTitles(text)
   if (!titles.length || truncated) return false
-  const { tasks, full } = await ownTasks([userId])
+  const { tasks, full } = await ownTasks([userId], { since: daysAgo(RECENT_DONE_DAYS, now) })
   // Упёрлись в предел выборки — не уверены, что видим все задачи, пишем как есть.
   if (!full) return false
-  const mine = tasks
-  return titles.every((title) => {
-    const found = mine.filter((t) => sameTitle(title, t.title))
-    return found.length > 0 && found.every((t) => t.status === 'done')
-  })
+  // «Цепляющая главная» в кавычках рядом с задачей — это работа, а не задача:
+  // такие упоминания пропускаем, но только если они не совпали ни с одной задачей.
+  const context = new Set(contextNames(tasks).map(squash))
+  let checked = 0
+  for (const title of titles) {
+    const found = tasks.filter((t) => sameTitle(title, t.title))
+    if (!found.length) {
+      if (context.has(squash(title))) continue
+      return false
+    }
+    if (!found.every((t) => t.status === 'done')) return false
+    checked += 1
+  }
+  return checked > 0
 }
 
 /** Числа открытых задач словами: личные и по Иерархии раздельно. */
@@ -201,7 +217,7 @@ export function countsSummary(counts) {
 export async function taskStates(targets, now = new Date()) {
   const counts = await taskCounts(targets.map((t) => t.userId), now)
   const entries = await Promise.all(targets.map(async ({ userId, text }) => {
-    const { tasks, full } = await ownTasks([userId])
+    const { tasks, full } = await ownTasks([userId], { since: daysAgo(RECENT_DONE_DAYS, now) })
     const mentions = quotedTitles(text).titles.map(squash)
     const mine = full ? tasks.filter((t) => t.ownerId === userId && mentions.includes(squash(t.title))) : []
     return [userId, {

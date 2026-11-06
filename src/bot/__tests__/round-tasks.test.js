@@ -256,6 +256,22 @@ describe('свежие задачи при отправке', () => {
     assert.equal(await allTitlesDone('denis', titles.map((x) => `«${x}»`).join(' ')), false)
   })
 
+  test('название работы или клиента в кавычках рядом с задачей не мешает понять, что всё сделано', async (t) => {
+    const work = { title: 'Цепляющая главная', client: { name: 'ХочуПлачу' } }
+    patch(t, prisma.task, 'findMany', async () => [task({ ownerId: 'denis', owner: denis, status: 'done', work })])
+    assert.equal(await allTitlesDone('denis', `Как «${POSTS}», ХочуПлачу, «Цепляющая главная»?`), true)
+    assert.equal(await allTitlesDone('denis', `Как «${POSTS}» для «ХочуПлачу»?`), true)
+    // Только работа без задачи — проверять нечего, пишем.
+    assert.equal(await allTitlesDone('denis', 'Как «Цепляющая главная»?'), false)
+  })
+
+  test('сделанные давно задачи не читаем, отсечка по дате в запросе', async (t) => {
+    const calls = patch(t, prisma.task, 'findMany', async () => [])
+    await allTitlesDone('denis', `Как «${POSTS}»?`, new Date('2026-11-06T10:00:00Z'))
+    const since = calls[0][0].where.AND.flatMap((c) => c.OR ?? []).find((o) => o.doneAt)?.doneAt.gte
+    assert.equal(since.toISOString(), '2026-10-07T10:00:00.000Z')
+  })
+
   test('в отчёте отдельно сказано, кому не писали и почему', () => {
     const at = new Date('2026-11-04T10:00:00Z')
     const text = reportText({
