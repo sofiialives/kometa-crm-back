@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { escapeHtml, sendAlbum, sendFileById } from '../telegram.js'
-import { isQuietHour } from '../plan.js'
+import { isQuietHour, mskDayKey, mskDayStart } from '../plan.js'
 import { aiReport } from '../ai/report.js'
 import { noLinks, plainStyle } from '../ai/style.js'
 import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END } from '../ai/context.js'
@@ -54,6 +54,68 @@ const LINK = /(?:https?:\/\/|tg:\/\/|www\.)\S+|(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[
 export function clampMinutes(minutes) {
   const m = Number.isInteger(minutes) ? minutes : ROUND_DEFAULT_MIN
   return Math.min(ROUND_MAX_MIN, Math.max(ROUND_MIN_MIN, m))
+}
+
+// Прямая отправка без черновика: не больше трёх человек, не больше 20
+// человеко-сообщений в день на просящего, имя названо не раньше 10 минут назад.
+export const DIRECT_PEOPLE_MAX = 3
+export const DIRECT_PER_DAY = 20
+export const DIRECT_NAME_MS = 10 * 60 * 1000
+
+// Падежи: от имени отбрасываем последнюю гласную, «й» или «ь» («Никола» для
+// «Николаю»), основа не короче трёх букв, а после неё допустимо только
+// падежное окончание. Так «Роману» и «Романом» находятся, «ромашки» нет.
+const CASE_END = /^(?:[аяуюеиыойь]|ом|ем|ой|ей|ою|ею|ии|ию|ью|ым|им|ам|ям|ах|ях|ами|ями)?$/
+const wordsOf = (text) => String(text ?? '').toLowerCase().replace(/ё/g, 'е').match(/[\p{L}]+/gu) ?? []
+
+function nameBase(token) {
+  const t = token.toLowerCase().replace(/ё/g, 'е')
+  const base = /[аяуюеиыоэйь]$/.test(t) ? t.slice(0, -1) : t
+  if (base.length >= 3) return base
+  return t.length >= 3 ? t : null
+}
+
+/** Назван ли человек в тексте просьбы: его имя или фамилия, в любом падеже. */
+export function isNamedIn(person, texts) {
+  const tokens = String(person?.name ?? '').split(/\s+/).flatMap((w) => w.match(/[\p{L}]+/gu) ?? [])
+  const words = texts.flatMap(wordsOf)
+  return tokens.some((token) => {
+    const base = nameBase(token)
+    return base && words.some((w) => w.startsWith(base) && CASE_END.test(w.slice(base.length)))
+  })
+}
+
+/** Сколько человеко-сообщений без черновика просящий отправил сегодня. */
+function directToday(ownerId, now) {
+  return prisma.botRoundTarget.count({
+    where: { round: { ownerId, direct: true, createdAt: { gte: mskDayStart(mskDayKey(now)) } } },
+  })
+}
+
+/**
+ * Можно ли писать без черновика. null — можно, иначе одна фраза: почему
+ * показан черновик. Проверка чужих задач и перекрытие поручений уже были.
+ */
+async function draftReason({ owner, people, texts, links, now }) {
+  if (!['admin', 'lead'].includes(owner.role)) return 'просит не владелец и не руководитель'
+  if (people.length > DIRECT_PEOPLE_MAX) return `людей больше ${DIRECT_PEOPLE_MAX}`
+  if (!people.every((p) => isNamedIn(p.person, texts))) return 'не все названы по имени в просьбе'
+  if (isQuietHour(now)) return 'сейчас ночь, тихие часы'
+  if (links.length) return 'в текстах есть ссылки'
+  if ((await directToday(owner.id, now)) + people.length > DIRECT_PER_DAY) return `дневной лимит ${DIRECT_PER_DAY} сообщений без черновика исчерпан`
+  return null
+}
+
+/** Что написать просящему, когда сообщения ушли без черновика. */
+export function directNote({ sent, failed, skipped, notSent = [], collect, deadlineAt }) {
+  const lines = []
+  if (sent.length) lines.push('Написал', ...sent)
+  if (failed.length) lines.push('Не дошло', ...failed)
+  if (skipped.length) lines.push('Не писал, задачи уже сделаны', ...skipped)
+  if (notSent.length) lines.push('Не уйдёт', ...notSent)
+  if (!sent.length && !failed.length && !skipped.length) lines.push('Никому не написал')
+  if (collect && sent.length) lines.push(`Отчёт пришлю к ${hm(deadlineAt)}`)
+  return lines.map((l) => escapeHtml(l)).join('\n')
 }
 
 /** Ссылки и упоминания в текстах — Ян должен их видеть до отправки. */
@@ -137,10 +199,13 @@ export function foreignText(problems, labels, viewer) {
 }
 
 /**
- * Черновик поручения от агента. messages — [{ person_id, text }].
- * Возвращает { shown, text }: показан ли черновик и текст для модели.
+ * Поручение от агента. messages — [{ person_id, text }]. texts — слова
+ * просящего (это сообщение и предыдущее): назвал всех по имени и условия
+ * выполнены, сообщения уходят сразу, иначе показан черновик.
+ * Возвращает { shown, text, direct }: показано ли сообщение просящему
+ * (черновик или «Написал») и текст для модели.
  */
-export async function createDraft(owner, chatId, { topic, minutes, collect = true, messages = [], new_round: newRound = false }, now = new Date()) {
+export async function createDraft(owner, chatId, { topic, minutes, collect = true, messages = [], new_round: newRound = false }, now = new Date(), { texts = [] } = {}) {
   const seen = new Set()
   const people = []
   const skipped = []
@@ -184,6 +249,9 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   if (foreign.incomplete) console.warn(`[агент] поручение: названия задач проверены не все, их больше ${SCAN_MAX} или упоминаний слишком много`)
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
   const subject = cut(plain(String(topic ?? ''), 500) || 'Узнать, как дела', 500)
+  const links = linksIn(people.map((p) => p.text))
+  const reason = await draftReason({ owner, people, texts, links, now })
+  const direct = reason === null
   // Прежний черновик этого человека больше не нужен: новый его заменяет.
   await prisma.botRound.updateMany({ where: { ownerId: owner.id, status: 'draft' }, data: { status: 'cancelled', closedAt: now } })
   const round = await prisma.botRound.create({
@@ -192,20 +260,35 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
       topic: subject,
       collect: Boolean(collect),
       deadlineAt,
+      direct,
+      ...(direct ? { status: 'sent', sentAt: now } : {}),
       targets: { create: people.map((p) => ({ userId: p.person.id, text: p.text })) },
     },
   })
+
+  if (direct) {
+    const out = await deliverRound(owner, round, labels)
+    const note = directNote({ sent: out.sentLabels, failed: out.failedLabels, skipped: out.skipped, notSent: skipped, collect: round.collect, deadlineAt })
+    const shown = await tellChat(chatId, note, { userId: owner.id })
+    const summary = `Дошло ${out.sent}${out.failedLabels.length ? `, не дошло ${out.failedLabels.length}` : ''}${out.skipped.length ? `, не писал ${out.skipped.length}, задачи уже сделаны` : ''}${skipped.length ? `, не уйдёт ${skipped.length}` : ''}`
+    return {
+      shown: Boolean(shown.ok),
+      direct: true,
+      text: `Написал сам, без черновика, человек просил прямо. ${summary}. ${shown.ok ? 'Просящему бот уже ответил, ничего больше не пиши.' : 'Подтверждение просящему не дошло, скажи ему коротко, кому написал.'}`,
+    }
+  }
+
   const shown = await tellChat(chatId, draftText({ people: people.map((p) => ({ label: labels.get(p.person.id), text: p.text })), skipped }), { userId: owner.id })
   // Кнопки — отдельным коротким сообщением: длинный черновик телеграм режет
   // на части, и кнопки не должны потеряться вместе с частью.
   const asked = shown.ok && await tellChat(chatId, confirmText({
-    topic: subject, collect: round.collect, deadlineAt, count: people.length, links: linksIn(people.map((p) => p.text)), unchecked: foreign.incomplete,
+    topic: subject, collect: round.collect, deadlineAt, count: people.length, links, unchecked: foreign.incomplete,
   }), { userId: owner.id, buttons: BUTTONS(round.id) })
   if (!asked?.ok) {
     await prisma.botRound.update({ where: { id: round.id }, data: { status: 'cancelled', closedAt: now } })
     return { shown: false, text: 'Черновик не отправился, сбой телеграма. Скажи, чтобы попробовали ещё раз.' }
   }
-  return { shown: true, text: `Черновик на ${people.length} чел. показан с кнопкой «Отправить»${skipped.length ? `, не уйдёт ${skipped.length}` : ''}. Ничего больше не пиши.` }
+  return { shown: true, text: `Показан черновик на ${people.length} чел. с кнопкой «Отправить», сразу не отправлено, потому что ${reason}${skipped.length ? `. Не уйдёт ${skipped.length}` : ''}. Ничего больше не пиши.` }
 }
 
 /** Отправить человеку: временный сбой телеграма — ещё раз через пару секунд. */
@@ -239,11 +322,26 @@ export async function decideDraft(user, roundId, go, now = new Date()) {
   const claimed = await prisma.botRound.updateMany({ where: { id: round.id, status: 'draft' }, data: { status: 'sent', sentAt: now, deadlineAt } })
   if (!claimed.count) return 'Уже отправлено'
 
+  const out = await deliverRound(user, round)
+  return sentNote({ sent: out.sent, failed: out.failed, skipped: out.skipped, collect: round.collect, deadlineAt })
+}
+
+/**
+ * Общая часть для кнопки «Отправить» и прямой отправки: поручение уже в
+ * статусе sent. Каждому адресату права проверяются заново, задачи из текста
+ * перечитываются: все сделаны — человеку не пишем. labels — подписи, если
+ * уже известны. Возвращает { sent, failed, skipped, sentLabels, failedLabels }:
+ * skipped это подписи тех, кому не писали.
+ */
+async function deliverRound(user, round, labels = new Map()) {
   const targets = await prisma.botRoundTarget.findMany({ where: { roundId: round.id } })
   let sent = 0
   const skipped = []
+  const sentLabels = []
+  const failedLabels = []
   for (const t of targets) {
     const allowed = await personInScope(user, t.userId)
+    const label = allowed ? labelOf(allowed) : labels.get(t.userId) ?? 'другой человек'
     // Черновик лежал до трёх часов: человек мог уже сделать всё, о чём мы
     // собрались спросить. Тогда ему не пишем. Не смогли прочитать задачи — пишем как есть.
     const done = allowed && await allTitlesDone(t.userId, t.text).catch((e) => {
@@ -257,12 +355,17 @@ export async function decideDraft(user, roundId, go, now = new Date()) {
     }
     const res = allowed ? await deliver(t.userId, escapeHtml(t.text), { source: 'round', roundTargetId: t.id }) : { ok: false }
     await prisma.botRoundTarget.update({ where: { id: t.id }, data: res.ok ? { status: 'sent', sentAt: new Date() } : { status: 'failed' } })
-    if (res.ok) sent += 1
+    if (res.ok) {
+      sent += 1
+      sentLabels.push(label)
+    } else {
+      failedLabels.push(label)
+    }
   }
   const failed = targets.length - sent - skipped.length
   // Все пропущены — ждать некого и отчёта не будет.
   if (skipped.length === targets.length) await prisma.botRound.update({ where: { id: round.id }, data: { status: 'closed', closedAt: new Date() } })
-  return sentNote({ sent, failed, skipped, collect: round.collect, deadlineAt })
+  return { sent, failed, skipped, sentLabels, failedLabels }
 }
 
 /** Что дописать под черновиком после кнопки «Отправить». */
