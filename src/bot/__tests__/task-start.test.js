@@ -68,13 +68,29 @@ describe('«Не успеваю» на несколько задач', () => {
 describe('«Не успеваю» для уже начатой задачи', () => {
   const user = { id: 'u1', name: 'Антон' }
 
-  test('задача в процессе: «уже в процессе», вопроса и ожидания нет', async (t) => {
+  test('задача в процессе и других на эту минуту нет: «уже в процессе», вопроса и ожидания нет', async (t) => {
     const h = botHarness(t)
     clear('u1')
     patch(t, prisma.task, 'findUnique', async () => ({ id: 'a', title: 'Задача a', ownerId: 'u1', status: 'progress', startAt: T('12:00') }))
+    patch(t, prisma.task, 'findMany', async () => [])
     assert.equal(await lateForTask(user, 'a'), '«Задача a» уже в процессе')
     assert.equal(h.sent.length, 0)
     assert.equal(peek('u1'), null)
+  })
+
+  test('первую задачу взял, вторая на ту же минуту не начата: «Не успеваю» про вторую', async (t) => {
+    const h = botHarness(t)
+    clear('u1')
+    patch(t, prisma.task, 'findUnique', async () => ({ id: 'a', title: 'Задача a', ownerId: 'u1', status: 'progress', startAt: T('12:00') }))
+    patch(t, prisma.task, 'findMany', async (q) => {
+      assert.equal(q.where.status, 'today')
+      return [{ id: 'b' }]
+    })
+    assert.equal(await lateForTask(user, 'a'), 'Не успеваю начать', 'название взятой задачи не показываем')
+    assert.match(h.sent.at(-1).text, /Что случилось/)
+    assert.deepEqual(peek('u1').payload.taskIds, ['b'])
+    assert.equal(peek('u1').payload.taskId, 'b')
+    clear('u1')
   })
 
   test('к моменту ответа задачи уже взяли: событий и отчёта Яну нет; остались не взятые — только они', async (t) => {

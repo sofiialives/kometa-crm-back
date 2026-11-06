@@ -371,8 +371,6 @@ export async function lateForTask(user, taskId) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true, startAt: true } })
   if (!task || task.ownerId !== user.id) return 'Задача не найдена'
   if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта`
-  // Взял в работу, пока читал сообщение: «не успеваю» тут не про что.
-  if (task.status === 'progress') return `«${escapeHtml(short(task.title, 120))}» уже в процессе`
   const minuteStart = task.startAt ? new Date(startMinute(task.startAt) * 60000) : null
   const same = minuteStart
     ? await prisma.task.findMany({
@@ -382,10 +380,15 @@ export async function lateForTask(user, taskId) {
       select: { id: true },
     })
     : []
-  const taskIds = [...new Set([task.id, ...same.map((t) => t.id)])].slice(0, LATE_MAX)
-  state.expect(user.id, 'task_late', { taskId, taskIds })
+  // Кнопка «Не успеваю» одна на всю минуту и хранит первую задачу. Её уже
+  // взяли в работу: «не успеваю» про остальные задачи этой минуты, а если
+  // остальных не осталось, говорить не про что.
+  const own = task.status === 'today' ? [task.id] : []
+  const taskIds = [...new Set([...own, ...same.map((t) => t.id)])].slice(0, LATE_MAX)
+  if (!taskIds.length) return `«${escapeHtml(short(task.title, 120))}» уже в процессе`
+  state.expect(user.id, 'task_late', { taskId: taskIds[0], taskIds })
   await tell(user.id, 'Что случилось и во сколько начнёшь?\nНапиши одной строкой, я передам Яну')
-  return taskIds.length > 1 ? 'Не успеваю начать' : `Не успеваю начать «${escapeHtml(short(task.title, 120))}»`
+  return taskIds.length === 1 && taskIds[0] === task.id ? `Не успеваю начать «${escapeHtml(short(task.title, 120))}»` : 'Не успеваю начать'
 }
 
 /** Ответ на «что случилось?» — Яну. taskIds — задачи этого времени начала, событие пишем на каждую. */
