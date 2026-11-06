@@ -62,8 +62,11 @@ export function randomCheckinTime(dayKey, random = Math.random) {
 const QUIET_FROM_H = 21
 const QUIET_TO_H = 9
 
+/** Час по Москве, 0-23. */
+export const mskHour = (date = new Date()) => (new Date(date).getUTCHours() + 3) % 24
+
 export function isQuietHour(now = new Date()) {
-  const h = (new Date(now).getUTCHours() + 3) % 24
+  const h = mskHour(now)
   return h >= QUIET_FROM_H || h < QUIET_TO_H
 }
 

@@ -14,7 +14,7 @@ const NOW = new Date('2026-11-04T14:00:00Z')
 const ADMIN = { id: 'owner', name: 'Ян', role: 'admin', active: true, departmentId: null, department: null }
 const LEAD = { id: 'lead', name: 'Мария Попова', role: 'lead', active: true, departmentId: 'd', department: { name: 'Дизайн' } }
 const IVAN = { id: 'ivan', name: 'Иван Петров', role: 'staff', active: true, departmentId: 'd', department: { name: 'Дизайн' }, telegram: { chatId: 'c-ivan' } }
-const WORK = { id: 'w1', title: 'Лендинг', status: 'active', client: { name: 'Румикс' } }
+const WORK = { id: 'w1', title: 'Лендинг', status: 'active', departmentId: 'd', client: { name: 'Румикс' } }
 const iso = (d) => new Date(d).toISOString()
 
 const base = (extra = {}) => ({ person_id: 'ivan', title: 'Сделать баннер', description: null, deadline: '2026-11-05T12:00', start_at: null, work_id: null, note: null, ...extra })
@@ -25,7 +25,8 @@ function memory(t, { users = { owner: ADMIN, lead: LEAD, ivan: IVAN }, work = WO
   const store = new Map(offers.map((o) => [o.id, o]))
   patch(t, prisma.user, 'findFirst', async () => scope)
   patch(t, prisma.user, 'findUnique', async ({ where }) => users[where.id] ?? null)
-  patch(t, prisma.work, 'findUnique', async () => work)
+  // Работа находится, только если подходит под условия запроса.
+  const workAsked = patch(t, prisma.work, 'findFirst', async ({ where }) => (work && work.id === where.id && (!where.status || work.status === where.status) && (!where.departmentId || work.departmentId === where.departmentId) ? work : null))
   const counts = []
   patch(t, prisma.botTaskOffer, 'count', async ({ where }) => { counts.push(where); return where.status === 'draft' ? hanging : today })
   patch(t, prisma.botTaskOffer, 'create', async ({ data }) => {
@@ -41,7 +42,7 @@ function memory(t, { users = { owner: ADMIN, lead: LEAD, ivan: IVAN }, work = WO
     return { count: 1 }
   })
   patch(t, prisma.botTaskOffer, 'update', async ({ where, data }) => Object.assign(store.get(where.id), data))
-  return { ...h, store, counts }
+  return { ...h, store, counts, workAsked }
 }
 
 const offerRow = (extra = {}) => ({ id: 'o1', requesterId: 'owner', assigneeId: 'ivan', title: 'Сделать баннер', description: null, deadline: new Date('2026-11-04T16:00:00Z'), startAt: null, workId: null, note: null, status: 'draft', taskId: null, createdAt: NOW, ...extra })
@@ -62,6 +63,7 @@ describe('срок по умолчанию и разбор времени', () =
     assert.equal(iso(parseMsk('2026-11-05T12:00')), '2026-11-05T09:00:00.000Z')
     assert.equal(iso(parseMsk('2026-11-05 12:00:30')), '2026-11-05T09:00:00.000Z')
     assert.equal(iso(parseMsk('2026-11-05T12:00:00Z')), '2026-11-05T12:00:00.000Z')
+    assert.equal(iso(parseMsk('2026-11-05T12:00:00z')), '2026-11-05T12:00:00.000Z')
     assert.equal(iso(parseMsk('2026-11-05T12:00:00+0500')), '2026-11-05T07:00:00.000Z')
     assert.equal(iso(parseMsk('2026-11-05')), '2026-11-05T16:00:00.000Z')
     assert.equal(parseMsk('завтра'), undefined)
@@ -90,7 +92,7 @@ describe('карточка: assign_task', () => {
     assert.equal(iso(row.deadline), '2026-11-05T09:00:00.000Z')
     assert.equal(m.sent.length, 1)
     assert.equal(m.sent[0].chatId, '9001')
-    assert.equal(m.sent[0].text, '<b>Поставить задачу</b>\n<b>Иван, дизайн</b>\n«Сделать баннер»\nСрок завтра до 12:00\nЛичная задача на день\nОписание Размер 1080\nНапишу ему Иван, посмотри бриф\nПоставить?')
+    assert.equal(m.sent[0].text, '<b>Поставить задачу</b>\n<b>Иван, дизайн</b>\n«Сделать баннер»\nСрок завтра до 12:00\nЛичная задача на день\nОписание Размер 1080\nСообщение исполнителю Иван, посмотри бриф\nПоставить?')
     assert.deepEqual(m.sent[0].buttons[0].map((b) => b.callback_data), ['ta:go:o1', 'ta:no:o1'])
     assert.deepEqual(m.sent[0].buttons[0].map((b) => b.text), ['Поставить', 'Отмена'])
   })
@@ -136,9 +138,9 @@ describe('карточка: assign_task', () => {
 
   test('работа: нет такой или не активна', async (t) => {
     memory(t, { work: null })
-    assert.match((await proposeTask(ADMIN, '9001', base({ work_id: 'nope' }), NOW)).text, /Такой работы нет/)
+    assert.match((await proposeTask(ADMIN, '9001', base({ work_id: 'nope' }), NOW)).text, /Такой работы у тебя нет/)
     memory(t, { work: { ...WORK, status: 'closed' } })
-    assert.match((await proposeTask(ADMIN, '9001', base({ work_id: 'w1' }), NOW)).text, /не активна/)
+    assert.match((await proposeTask(ADMIN, '9001', base({ work_id: 'w1' }), NOW)).text, /Такой работы у тебя нет/)
   })
 
   test('пустое название и слишком длинное', async (t) => {
@@ -146,6 +148,21 @@ describe('карточка: assign_task', () => {
     assert.match((await proposeTask(ADMIN, '9001', base({ title: '  ' }), NOW)).text, /Нет названия/)
     await proposeTask(ADMIN, '9001', base({ title: 'я'.repeat(300) }), NOW)
     assert.equal(m.store.get('o1').title.length, 200)
+  })
+
+  test('описание до 300 знаков без ссылок, на карточке целиком, время начала тоже', async (t) => {
+    const m = memory(t)
+    await proposeTask(ADMIN, '9001', base({ description: `Бриф evil.click/x ${'я'.repeat(400)}`, start_at: '2026-11-05T10:00' }), NOW)
+    const row = m.store.get('o1')
+    assert.ok(row.description.length <= 300)
+    assert.doesNotMatch(row.description, /evil/)
+    assert.equal(iso(row.startAt), '2026-11-05T07:00:00.000Z')
+    assert.ok(m.sent[0].text.includes(row.description))
+    assert.match(m.sent[0].text, /Срок завтра до 12:00\nНачало завтра в 10:00/)
+  })
+
+  test('название исполнителю без ссылок', () => {
+    assert.doesNotMatch(assigneeText({ requester: ADMIN, title: 'Глянь evil.click', deadline: NOW, now: NOW }), /evil/)
   })
 
   test('слова агента исполнителю в стиле бота и без ссылок', async (t) => {
@@ -212,6 +229,7 @@ describe('кнопка «Поставить»', () => {
     assert.equal(calls[0].workId, null)
     assert.equal(m.store.get('o1').status, 'created')
     assert.equal(m.store.get('o1').taskId, 't1')
+    assert.equal(m.store.get('o1').decidedAt, NOW)
     // Исполнителю: сегодня и личная, поэтому есть «Беру в работу».
     assert.equal(m.sent.length, 1)
     assert.equal(m.sent[0].chatId, 'chat-ivan')
@@ -234,7 +252,7 @@ describe('кнопка «Поставить»', () => {
     const create = async () => { n += 1; await new Promise((r) => setTimeout(r, 5)); return [{ id: 't1' }] }
     const [a, b] = await Promise.all([decideOffer(ADMIN, 'o1', true, NOW, { create }), decideOffer(ADMIN, 'o1', true, NOW, { create })])
     assert.equal(n, 1)
-    assert.deepEqual([a, b].sort(), ['Поставил\nИван, дизайн', 'Уже обработано'].sort())
+    assert.deepEqual([a, b].sort(), ['Задача ещё ставится, подожди', 'Поставил\nИван, дизайн'].sort())
     assert.equal(await decideOffer(ADMIN, 'o1', true, NOW, { create }), 'Уже поставлено')
     assert.equal(n, 1)
     assert.equal(m.sent.length, 1)
@@ -280,7 +298,7 @@ describe('кнопка «Поставить»', () => {
     const m = memory(t, { users: { lead: LEAD, ivan: { ...IVAN, departmentId: 'other' } }, offers: [offerRow({ requesterId: 'lead' })] })
     const note = await decideOffer(LEAD, 'o1', true, NOW)
     assert.equal(note, 'Не поставил\nМожно назначать задачи только сотрудникам своего отдела')
-    assert.equal(m.store.get('o1').status, 'cancelled')
+    assert.equal(m.store.get('o1').status, 'failed')
     assert.equal(m.sent.length, 0)
   })
 
@@ -297,7 +315,7 @@ describe('кнопка «Поставить»', () => {
     const m = memory(t, { offers: [offerRow()] })
     const create = async () => { throw ApiError.badRequest('Личных задач на сегодня уже 7 из 7, больше поставить нельзя. Объедините мелкие в одну и опишите подробнее') }
     assert.equal(await decideOffer(ADMIN, 'o1', true, NOW, { create }), 'Не поставил\nЛичных задач на сегодня уже 7 из 7, больше поставить нельзя. Объедините мелкие в одну и опишите подробнее')
-    assert.equal(m.store.get('o1').status, 'cancelled')
+    assert.equal(m.store.get('o1').status, 'failed')
     assert.equal(m.sent.length, 0)
   })
 
@@ -311,9 +329,41 @@ describe('кнопка «Поставить»', () => {
   test('работа закрылась, пока висела карточка', async (t) => {
     const m = memory(t, { work: { ...WORK, status: 'closed' }, offers: [offerRow({ workId: 'w1' })] })
     let n = 0
-    assert.equal(await decideOffer(ADMIN, 'o1', true, NOW, { create: async () => { n += 1; return [{ id: 't' }] } }), 'Не поставил\nРабота уже не активна')
+    assert.equal(await decideOffer(ADMIN, 'o1', true, NOW, { create: async () => { n += 1; return [{ id: 't' }] } }), 'Не поставил\nТакой работы у тебя нет или она уже не активна')
+    assert.equal(n, 0)
+    assert.equal(m.store.get('o1').status, 'failed')
+  })
+
+  test('работа чужого отдела: руководителю ни при карточке, ни при нажатии', async (t) => {
+    const m = memory(t, { work: { ...WORK, departmentId: 'other' }, offers: [offerRow({ requesterId: 'lead', workId: 'w1' })] })
+    assert.match((await proposeTask(LEAD, '9002', base({ work_id: 'w1' }), NOW)).text, /Такой работы у тебя нет/)
+    assert.deepEqual(m.workAsked[0][0].where, { id: 'w1', status: 'active', departmentId: 'd' })
+    assert.equal(await decideOffer(LEAD, 'o1', true, NOW, { create: created() }), 'Не поставил\nТакой работы у тебя нет или она уже не активна')
+    // Владелец видит работы всех отделов.
+    memory(t, { work: { ...WORK, departmentId: 'other' } })
+    assert.equal((await proposeTask(ADMIN, '9001', base({ work_id: 'w1' }), NOW)).shown, true)
+  })
+
+  test('срок прошёл, пока карточка висела', async (t) => {
+    const m = memory(t, { offers: [offerRow()] })
+    let n = 0
+    const later = new Date('2026-11-04T16:00:01Z')
+    assert.equal(await decideOffer(ADMIN, 'o1', true, later, { create: async () => { n += 1; return [{ id: 't' }] } }), 'Срок уже прошёл, попроси ещё раз')
     assert.equal(n, 0)
     assert.equal(m.store.get('o1').status, 'cancelled')
+  })
+
+  test('отмена и карточка, которую уже решили, говорят честно', async (t) => {
+    const m = memory(t, { offers: [offerRow({ status: 'creating', decidedAt: NOW })] })
+    assert.equal(await decideOffer(ADMIN, 'o1', true, new Date(NOW.getTime() + 30000)), 'Задача ещё ставится, подожди')
+    assert.equal(await decideOffer(ADMIN, 'o1', true, new Date(NOW.getTime() + 3 * 60000)), 'Не уверен, что задача поставилась, проверь в CRM')
+    assert.equal(await decideOffer(ADMIN, 'o1', false, NOW), 'Задача ещё ставится, подожди')
+    m.store.get('o1').status = 'failed'
+    assert.equal(await decideOffer(ADMIN, 'o1', true, NOW), 'Не получилось, попроси ещё раз')
+    // Между чтением и отменой карточку успели поставить: отмена не врёт.
+    const race = memory(t, { offers: [offerRow()] })
+    patch(t, prisma.botTaskOffer, 'updateMany', async () => { Object.assign(race.store.get('o1'), { status: 'created' }); return { count: 0 } })
+    assert.equal(await decideOffer(ADMIN, 'o1', false, NOW), 'Уже поставлено')
   })
 
   test('нет телеграма у исполнителя: задача создана, просящему так и сказано', async (t) => {

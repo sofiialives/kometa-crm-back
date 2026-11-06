@@ -1,7 +1,7 @@
 import { prisma } from '../../config/prisma.js'
 import { createTask } from '../../services/task.service.js'
 import { escapeHtml } from '../telegram.js'
-import { mskDayKey, mskDayStart } from '../plan.js'
+import { mskDayKey, mskDayStart, mskHour } from '../plan.js'
 import { noLinks, plainStyle } from '../ai/style.js'
 import { labelOf, personInScope } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
@@ -23,7 +23,9 @@ export const OFFER_TTL_MS = 3 * HOUR
 export const OFFERS_PER_DAY = 30
 export const OFFERS_HANGING_MAX = 3
 export const TITLE_MAX = 200
-const DESCRIPTION_MAX = 2000
+const DESCRIPTION_MAX = 300
+// Захваченная кнопкой карточка, которая так и не закончилась, — подозрительна.
+const CREATING_STUCK_MS = 2 * 60 * 1000
 const NOTE_MAX = 500
 // Срок по умолчанию: сегодня до 19:00, а после 18:00 завтра до 19:00.
 const DEFAULT_DUE_H = 19
@@ -31,8 +33,15 @@ const LATE_FROM_H = 18
 const MAX_AHEAD_MS = 366 * 24 * HOUR
 const WHO = { select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } }
 
+/** Работа, доступная просящему: активная, а у руководителя только своего отдела. */
+function workFor(user, workId) {
+  return prisma.work.findFirst({
+    where: { id: String(workId), status: 'active', ...(user.role === 'lead' ? { departmentId: user.departmentId ?? '__none__' } : {}) },
+    select: { id: true, title: true, status: true, client: { select: { name: true } } },
+  })
+}
+
 const BUTTONS = (id) => [[{ text: 'Поставить', data: `ta:go:${id}` }, { text: 'Отмена', data: `ta:no:${id}` }]]
-const mskHour = (date) => (new Date(date).getUTCHours() + 3) % 24
 
 /** Срок, если не назвали: сегодня до 19:00 по Москве, с 18:00 завтра до 19:00. */
 export function defaultDeadline(now = new Date()) {
@@ -48,7 +57,7 @@ export function defaultDeadline(now = new Date()) {
 export function parseMsk(value) {
   const m = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?)?\s*(Z|[+-]\d{2}:?\d{2})?$/i.exec(String(value ?? '').trim())
   if (!m) return undefined
-  const date = new Date(`${m[1]}T${m[2] ?? `${DEFAULT_DUE_H}:00`}:00${m[3] ?? '+03:00'}`.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+  const date = new Date(`${m[1]}T${m[2] ?? `${DEFAULT_DUE_H}:00`}:00${m[3]?.toUpperCase() ?? '+03:00'}`.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
   return Number.isNaN(date.getTime()) ? undefined : date
 }
 
@@ -61,10 +70,18 @@ export function dueText(deadline, now = new Date(), { on = false } = {}) {
   return `${dateShort(deadline)} до ${hm(deadline)}`
 }
 
+/** Время начала словами: «сегодня в 14:00», «завтра в 10:00» или дата. */
+export function startText(startAt, now = new Date()) {
+  const key = mskDayKey(startAt)
+  if (key === mskDayKey(now)) return `сегодня в ${hm(startAt)}`
+  if (key === mskDayKey(new Date(now.getTime() + 24 * HOUR))) return `завтра в ${hm(startAt)}`
+  return `${dateShort(startAt)} в ${hm(startAt)}`
+}
+
 const workLine = (work) => (work ? `По работе, клиент ${plain(work.client?.name, 60)}, ${plain(work.title, 80)}` : 'Личная задача на день')
 
 /** Карточка для просящего. */
-export function offerText({ assignee, title, description, deadline, work, note, now = new Date() }) {
+export function offerText({ assignee, title, description, deadline, startAt = null, work, note, now = new Date() }) {
   const lines = [
     '<b>Поставить задачу</b>',
     `<b>${escapeHtml(labelOf(assignee))}</b>`,
@@ -72,8 +89,9 @@ export function offerText({ assignee, title, description, deadline, work, note, 
     `Срок ${escapeHtml(dueText(deadline, now))}`,
     escapeHtml(workLine(work)),
   ]
-  if (description) lines.push(`Описание ${escapeHtml(cut(plain(description, 300), 200))}`)
-  if (note) lines.push(`Напишу ему ${escapeHtml(note)}`)
+  if (startAt) lines.splice(4, 0, `Начало ${escapeHtml(startText(startAt, now))}`)
+  if (description) lines.push(`Описание ${escapeHtml(description)}`)
+  if (note) lines.push(`Сообщение исполнителю ${escapeHtml(note)}`)
   lines.push('Поставить?')
   return lines.join('\n')
 }
@@ -81,7 +99,7 @@ export function offerText({ assignee, title, description, deadline, work, note, 
 /** Сообщение исполнителю. */
 export function assigneeText({ requester, title, deadline, work, note, now = new Date() }) {
   const from = requester.role === 'admin' ? 'Яна' : `руководителя ${labelOf(requester)}`
-  const lines = [`Новая задача от ${from}`, `«${title}»`, `Срок ${dueText(deadline, now, { on: true })}`]
+  const lines = [`Новая задача от ${from}`, `«${noLinks(title)}»`, `Срок ${dueText(deadline, now, { on: true })}`]
   if (work) lines.push(`Клиент ${plain(work.client?.name, 60)}, работа ${plain(work.title, 80)}`)
   if (note) lines.push(note)
   return lines.map((l) => escapeHtml(l)).join('\n')
@@ -106,7 +124,7 @@ export async function proposeTask(user, chatId, input, now = new Date()) {
 
   const title = plain(String(input.title ?? ''), TITLE_MAX).trim()
   if (!title) return { shown: false, text: 'Нет названия задачи. Спроси, что именно поставить.' }
-  const description = String(input.description ?? '').trim().slice(0, DESCRIPTION_MAX) || null
+  const description = cut(noLinks(plainStyle(String(input.description ?? ''))), DESCRIPTION_MAX).trim() || null
 
   let deadline = defaultDeadline(now)
   if (input.deadline) {
@@ -126,9 +144,8 @@ export async function proposeTask(user, chatId, input, now = new Date()) {
   let work = null
   const workId = String(input.work_id ?? '').trim()
   if (workId) {
-    work = await prisma.work.findUnique({ where: { id: workId }, select: { id: true, title: true, status: true, client: { select: { name: true } } } })
-    if (!work) return { shown: false, text: 'Такой работы нет. id берётся из get_works. Ничего не создавал.' }
-    if (work.status !== 'active') return { shown: false, text: 'Эта работа не активна, задачу по ней не поставить. Скажи об этом коротко.' }
+    work = await workFor(user, workId)
+    if (!work) return { shown: false, text: 'Такой работы у тебя нет. id берётся из get_works. Ничего не создавал.' }
     if (user.role === 'admin' && assignee.id === user.id) return { shown: false, text: 'Задачу по работе нельзя поставить себе, нужен сотрудник.' }
   }
 
@@ -144,7 +161,7 @@ export async function proposeTask(user, chatId, input, now = new Date()) {
   const offer = await prisma.botTaskOffer.create({
     data: { requesterId: user.id, assigneeId: assignee.id, title, description, deadline, startAt, workId: work?.id ?? null, note },
   })
-  const shown = await tellChat(chatId, offerText({ assignee, title, description, deadline, work, note, now }), { userId: user.id, buttons: BUTTONS(offer.id) })
+  const shown = await tellChat(chatId, offerText({ assignee, title, description, deadline, startAt, work, note, now }), { userId: user.id, buttons: BUTTONS(offer.id) })
   if (!shown.ok) {
     await prisma.botTaskOffer.update({ where: { id: offer.id }, data: { status: 'cancelled', decidedAt: now } })
     return { shown: false, text: 'Карточка не отправилась, сбой телеграма. Скажи, чтобы попробовали ещё раз.' }
@@ -160,34 +177,31 @@ export async function proposeTask(user, chatId, input, now = new Date()) {
 export async function decideOffer(user, offerId, go, now = new Date(), { create = createTask } = {}) {
   const offer = await prisma.botTaskOffer.findUnique({ where: { id: String(offerId ?? '') } })
   if (!offer || offer.requesterId !== user.id) return 'Это не твоя карточка'
-  if (offer.status !== 'draft') return offer.status === 'created' ? 'Уже поставлено' : 'Уже отменено'
-  const cancel = (decidedAt = now) => prisma.botTaskOffer.updateMany({ where: { id: offer.id, status: 'draft' }, data: { status: 'cancelled', decidedAt } })
-  if (now - offer.createdAt > OFFER_TTL_MS) {
-    await cancel()
-    return 'Карточка устарела, попроси ещё раз'
+  if (offer.status !== 'draft') return statusText(offer, now)
+  // Закрыть карточку как отменённую. Не удалось, значит её уже решили иначе: говорим как есть.
+  const settle = async (message) => {
+    const done = await prisma.botTaskOffer.updateMany({ where: { id: offer.id, status: 'draft' }, data: { status: 'cancelled', decidedAt: now } })
+    if (done.count) return message
+    return statusText(await prisma.botTaskOffer.findUnique({ where: { id: offer.id } }), now)
   }
-  if (!go) {
-    await cancel()
-    return 'Отменено, задачу не ставил'
-  }
+  if (now - offer.createdAt > OFFER_TTL_MS) return settle('Карточка устарела, попроси ещё раз')
+  if (!go) return settle('Отменено, задачу не ставил')
+  if (offer.deadline.getTime() <= now.getTime()) return settle('Срок уже прошёл, попроси ещё раз')
 
   const requester = await prisma.user.findUnique({ where: { id: user.id }, ...WHO })
-  if (!requester?.active || !['admin', 'lead'].includes(requester.role)) {
-    await cancel()
-    return 'Не поставил, у тебя больше нет прав ставить задачи'
-  }
+  if (!requester?.active || !['admin', 'lead'].includes(requester.role)) return settle('Не поставил, у тебя больше нет прав ставить задачи')
   // Двойное нажатие не создаст две задачи: из черновика выводит только один.
-  const claimed = await prisma.botTaskOffer.updateMany({ where: { id: offer.id, status: 'draft' }, data: { status: 'created', decidedAt: now } })
-  if (!claimed.count) return 'Уже обработано'
+  const claimed = await prisma.botTaskOffer.updateMany({ where: { id: offer.id, status: 'draft' }, data: { status: 'creating', decidedAt: now } })
+  if (!claimed.count) return statusText(await prisma.botTaskOffer.findUnique({ where: { id: offer.id } }), now)
   const fail = async (reason) => {
-    await prisma.botTaskOffer.updateMany({ where: { id: offer.id }, data: { status: 'cancelled' } })
+    await prisma.botTaskOffer.updateMany({ where: { id: offer.id }, data: { status: 'failed' } })
     return `Не поставил\n${escapeHtml(reason)}`
   }
 
   let work = null
   if (offer.workId) {
-    work = await prisma.work.findUnique({ where: { id: offer.workId }, select: { id: true, title: true, status: true, client: { select: { name: true } } } })
-    if (!work || work.status !== 'active') return fail('Работа уже не активна')
+    work = await workFor(requester, offer.workId)
+    if (!work) return fail('Такой работы у тебя нет или она уже не активна')
   }
   let task
   try {
@@ -205,7 +219,7 @@ export async function decideOffer(user, offerId, go, now = new Date(), { create 
     if (!e?.status) console.error(`[агент] задача по просьбе: ${e?.name}`)
     return fail(reasonOf(e))
   }
-  await prisma.botTaskOffer.update({ where: { id: offer.id }, data: { taskId: task.id } }).catch((e) => console.error(`[агент] связь карточки с задачей: ${e.name}`))
+  await prisma.botTaskOffer.updateMany({ where: { id: offer.id }, data: { status: 'created', taskId: task.id } }).catch((e) => console.error(`[агент] связь карточки с задачей: ${e.name}`))
 
   const assignee = await prisma.user.findUnique({ where: { id: offer.assigneeId }, ...WHO })
   const label = escapeHtml(assignee ? labelOf(assignee) : 'Исполнитель')
@@ -216,4 +230,15 @@ export async function decideOffer(user, offerId, go, now = new Date(), { create 
   const buttons = sameDay && !offer.workId ? [[{ text: 'Беру в работу', data: `tk:go:${task.id}` }]] : undefined
   const sent = await tell(offer.assigneeId, text, { buttons })
   return sent.ok ? `Поставил\n${label}` : `Поставил\n${label}\nСообщение не дошло, задача в CRM`
+}
+
+/** Честный ответ на нажатие по уже решённой карточке. */
+function statusText(offer, now) {
+  switch (offer?.status) {
+    case 'created': return 'Уже поставлено'
+    case 'cancelled': return 'Уже отменено'
+    case 'failed': return 'Не получилось, попроси ещё раз'
+    case 'creating': return now - offer.decidedAt > CREATING_STUCK_MS ? 'Не уверен, что задача поставилась, проверь в CRM' : 'Задача ещё ставится, подожди'
+    default: return 'Уже обработано'
+  }
 }
