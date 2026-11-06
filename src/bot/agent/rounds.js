@@ -399,8 +399,8 @@ export function reportText({ round, answered, silent, failed, skipped = [], ai, 
 }
 
 /**
- * Фото и видео — альбомами до 10, остальное по одному, с подписью «(Отдел)
- * Имя». У кружка подписи не бывает — перед ним имя отдельной строкой.
+ * Фото и видео — альбомами до 10, остальное по одному, с подписью «Имя,
+ * отдел». У кружка подписи не бывает — перед ним имя отдельной строкой.
  */
 async function sendFiles(chatId, ownerId, label, messages) {
   const all = messages.filter((m) => IN.includes(m.direction) && m.fileId)
@@ -433,7 +433,7 @@ async function sendFiles(chatId, ownerId, label, messages) {
   if (notes.length) await tellChat(chatId, `${caption}\n${notes.join('\n')}`, { userId: ownerId, source: 'report' })
 }
 
-/** Кто ответил, кто молчит, у кого не дошло — с подписями «(Отдел) Имя». */
+/** Кто ответил, кто молчит, у кого не дошло — с подписями «Имя, отдел». */
 async function gather(round) {
   const targets = await targetsWithMessages(round.id)
   const labels = labelsFor(targets.map((t) => t.user))

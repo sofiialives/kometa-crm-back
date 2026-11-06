@@ -67,7 +67,7 @@ describe('один отчёт: срок меняем, а не заводим н�
     const created = patch(t, prisma.botRound, 'create', async () => ({ id: 'r-new' }))
     const res = await createDraft(owner, '9001', draft, NOW)
     assert.equal(res.shown, false)
-    assert.match(res.text, /Тем же людям \(\(SMM\) Денис\) уже идёт поручение «Как дела по задачам», id r-old, сбор до 18:00/)
+    assert.match(res.text, /Тем же людям \(Денис, SMM\) уже идёт поручение «Как дела по задачам», id r-old, сбор до 18:00/)
     assert.match(res.text, /set_round_deadline/)
     assert.match(res.text, /new_round true/)
     assert.equal(created.length, 0)

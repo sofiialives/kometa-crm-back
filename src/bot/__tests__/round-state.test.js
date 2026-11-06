@@ -83,18 +83,18 @@ describe('отчёт показывает задачи на момент отч�
     const person = (userId, label) => ({ userId, label, summary: 'Делает', messages: [{ direction: 'in', text: 'Делаю', createdAt: NOW }] })
     const text = reportText({
       ...base,
-      answered: [person('a', '(Дизайн) Роман'), person('b', '(Дизайн) Николай')],
+      answered: [person('a', 'Роман, дизайн'), person('b', 'Николай, дизайн')],
       states: new Map([
         ['a', { named: [{ title: 'Баннер <1>', state: 'сделана' }], summary: 'x' }],
         ['b', { named: [], summary: 'личные открыто 2, в процессе 1, просрочено 1' }],
       ]),
     })
-    assert.match(text, /<b>\(Дизайн\) Роман<\/b>[\s\S]*Задачи сейчас\n• Баннер &lt;1&gt;, сделана/)
-    assert.match(text, /<b>\(Дизайн\) Николай<\/b>[\s\S]*Задачи сейчас, личные открыто 2, в процессе 1, просрочено 1/)
+    assert.match(text, /<b>Роман, дизайн<\/b>[\s\S]*Задачи сейчас\n• Баннер &lt;1&gt;, сделана/)
+    assert.match(text, /<b>Николай, дизайн<\/b>[\s\S]*Задачи сейчас, личные открыто 2, в процессе 1, просрочено 1/)
   })
 
   test('без данных о задачах отчёт прежний', () => {
-    const text = reportText({ round: { topic: 'т', sentAt: NOW }, answered: [{ userId: 'a', label: '(Дизайн) Роман', summary: 'Делает', messages: [] }], silent: [], failed: [], ai: null })
+    const text = reportText({ round: { topic: 'т', sentAt: NOW }, answered: [{ userId: 'a', label: 'Роман, дизайн', summary: 'Делает', messages: [] }], silent: [], failed: [], ai: null })
     assert.doesNotMatch(text, /Задачи сейчас/)
   })
 
@@ -108,7 +108,7 @@ describe('отчёт показывает задачи на момент отч�
       },
     }
     const tasks = { named: [{ title: 'Баннер', state: 'сделана' }], summary: 'открытых задач нет' }
-    await aiReport({ ownerId: 'o', topic: 'Как дела', people: [{ id: 'a', label: '(Дизайн) Роман', summary: null, messages: [{ direction: 'in', text: 'Делаю', createdAt: NOW }], tasks }] }, deps)
+    await aiReport({ ownerId: 'o', topic: 'Как дела', people: [{ id: 'a', label: 'Роман, дизайн', summary: null, messages: [{ direction: 'in', text: 'Делаю', createdAt: NOW }], tasks }] }, deps)
     const user = seen[0].messages[0].content[0].text
     assert.ok(user.includes(`${TASKS_BEGIN}\n- «Баннер», сделана\nВсе открытые, открытых задач нет\n${TASKS_END}\n\nПереписка`))
     assert.match(seen[0].system[0].text, /верь CRM/)

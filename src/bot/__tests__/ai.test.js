@@ -8,7 +8,7 @@ import { costMicros, OWNER_RESERVE_USD, pickModel, PRICES, USER_DAILY_USD } from
 import { findTool, preflight, replyText, runAgent } from '../ai/engine.js'
 import { toMessages } from '../ai/memory.js'
 import { pdfPages, readable, sniff } from '../ai/media.js'
-import { inTeam, labelsFor, teamWhere } from '../ai/context.js'
+import { departmentWord, inTeam, labelsFor, teamWhere } from '../ai/context.js'
 import { roundTools, staffTools, teamTools } from '../ai/tools.js'
 import { REPORT_SCHEMA, verifiedQuote } from '../ai/report.js'
 import { clampMinutes, confirmText, draftText, linksIn, MAX_PEOPLE, reportText } from '../agent/rounds.js'
@@ -327,17 +327,30 @@ describe('файлы для модели', () => {
 })
 
 describe('как агент называет людей', () => {
-  test('(Отдел) Имя, тёзки в одном отделе — с буквой фамилии', () => {
+  test('Имя, отдел; тёзки в одном отделе с буквой фамилии', () => {
     const labels = labelsFor([
       { id: '1', name: 'Александр Петров', department: { name: 'Дизайн' } },
       { id: '2', name: 'Александр Сидоров', department: { name: 'Дизайн' } },
       { id: '3', name: 'Настя', department: { name: 'SEO' } },
       { id: '4', name: 'Ян', role: 'admin' },
     ])
-    assert.equal(labels.get('1'), '(Дизайн) Александр П.')
-    assert.equal(labels.get('2'), '(Дизайн) Александр С.')
-    assert.equal(labels.get('3'), '(SEO) Настя')
-    assert.equal(labels.get('4'), '(Владелец) Ян')
+    assert.equal(labels.get('1'), 'Александр П., дизайн')
+    assert.equal(labels.get('2'), 'Александр С., дизайн')
+    assert.equal(labels.get('3'), 'Настя, SEO')
+    assert.equal(labels.get('4'), 'Ян')
+  })
+
+  test('отдел с маленькой буквы, аббревиатуры не трогаем, без отдела просто имя', () => {
+    assert.equal(departmentWord('Дизайн'), 'дизайн')
+    assert.equal(departmentWord('Веб-разработка'), 'веб-разработка')
+    assert.equal(departmentWord('SEO статьи'), 'SEO статьи')
+    assert.equal(departmentWord('SEO'), 'SEO')
+    const labels = labelsFor([
+      { id: '1', name: 'Николай Волков', department: { name: 'SEO статьи' } },
+      { id: '2', name: 'Ольга Смирнова', department: null },
+    ])
+    assert.equal(labels.get('1'), 'Николай, SEO статьи')
+    assert.equal(labels.get('2'), 'Ольга')
   })
 })
 
@@ -406,11 +419,11 @@ describe('поручения', () => {
 
   test('черновик: кому, что и кому не уйдёт, всё экранировано', () => {
     const text = draftText({
-      people: [{ label: '(Дизайн) Александр', text: 'Привет <b>Саша</b>' }],
-      skipped: ['(SEO) Настя, телеграм не подключён'],
+      people: [{ label: 'Александр, дизайн', text: 'Привет <b>Саша</b>' }],
+      skipped: ['Настя, SEO, телеграм не подключён'],
     })
-    assert.match(text, /<b>\(Дизайн\) Александр<\/b>\nПривет &lt;b&gt;Саша&lt;\/b&gt;/)
-    assert.match(text, /Не уйдёт<\/b>\n• \(SEO\) Настя/)
+    assert.match(text, /<b>Александр, дизайн<\/b>\nПривет &lt;b&gt;Саша&lt;\/b&gt;/)
+    assert.match(text, /Не уйдёт<\/b>\n• Настя, SEO/)
   })
 
   test('под кнопками — тема, срок и ссылки из сообщений', () => {
@@ -427,24 +440,24 @@ describe('поручения', () => {
     const text = reportText({
       round: { topic: 'Как дела по задачам', sentAt: at },
       answered: [{
-        userId: 'a', label: '(Дизайн) Александр', summary: 'Делает баннер',
+        userId: 'a', label: 'Александр, дизайн', summary: 'Делает баннер',
         messages: [{ direction: 'in', text: 'Всё получается', createdAt: at }, { direction: 'file', text: '[фото]', fileId: 'f', fileKind: 'photo', createdAt: at }],
       }],
-      silent: [{ userId: 'b', label: '(SEO) Настя' }],
+      silent: [{ userId: 'b', label: 'Настя, SEO' }],
       failed: [],
       ai: { a: { points: ['- Баннер для Румикс (Цепляющая главная), готов наполовину', 'Причина: ждал правки'], quote: 'Всё получается' } },
     })
     assert.match(text, /^<b>Отчёт по опросу<\/b>/)
     assert.match(text, /Написал 2 в 15:30, ответили 1\./)
-    assert.match(text, /<b>\(Дизайн\) Александр<\/b>\n• Баннер для Румикс, Цепляющая главная, готов наполовину\n• Причина, ждал правки\n<i>«Всё получается»<\/i>\nПрислал файлов 1/)
-    assert.match(text, /Не ответили<\/b>\n• \(SEO\) Настя/)
+    assert.match(text, /<b>Александр, дизайн<\/b>\n• Баннер для Румикс, Цепляющая главная, готов наполовину\n• Причина, ждал правки\n<i>«Всё получается»<\/i>\nПрислал файлов 1/)
+    assert.match(text, /Не ответили<\/b>\n• Настя, SEO/)
   })
 
   test('без ИИ отчёт из ответов как есть', () => {
     const at = new Date()
     const text = reportText({
       round: { topic: 'т', sentAt: at },
-      answered: [{ userId: 'a', label: '(Дизайн) Александр', summary: null, messages: [{ direction: 'in', text: 'Делаю макет', createdAt: at }] }],
+      answered: [{ userId: 'a', label: 'Александр, дизайн', summary: null, messages: [{ direction: 'in', text: 'Делаю макет', createdAt: at }] }],
       silent: [],
       failed: [],
       ai: null,
