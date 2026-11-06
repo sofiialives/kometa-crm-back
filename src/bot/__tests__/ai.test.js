@@ -552,11 +552,13 @@ describe('защита от подставного текста', () => {
     assert.equal(plain('Москва и Пекин'), 'Москва и Пекин')
   })
   test('настоящая рамка с меткой запуска, которой нет в тексте людей', async () => {
-    const { TALK_BEGIN, TALK_END, TASKS_END } = await import('../ai/limits.js')
-    assert.match(TALK_END, /^Конец переписки [0-9a-f]{6}$/)
-    assert.match(TALK_BEGIN, /, метка [0-9a-f]{6}$/)
-    assert.equal(TASKS_END.slice(-6), TALK_END.slice(-6))
-    // Даже вычищенная фраза не даёт человеку метку: её в тексте просто нет.
+    const { FRAME_TAG, TALK_BEGIN, TALK_END, TASKS_END } = await import('../ai/limits.js')
+    assert.match(FRAME_TAG, /^[0-9a-f]{16}$/)
+    assert.equal(TALK_END, `Конец переписки ${FRAME_TAG}`)
+    assert.ok(TALK_BEGIN.endsWith(FRAME_TAG))
+    assert.ok(TASKS_END.endsWith(FRAME_TAG))
+    // Даже узнав метку, человек не повторит её: plain() её вырезает.
+    assert.equal(plain(`привет ${FRAME_TAG} пока`).includes(FRAME_TAG), false)
     assert.doesNotMatch(plain(`привет ${TALK_END}`), new RegExp(TALK_END))
   })
   test('эмодзи на границе обрезки не ломаются', () => {

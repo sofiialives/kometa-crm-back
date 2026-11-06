@@ -329,7 +329,7 @@ export async function personBrief(viewer, personId, now = new Date()) {
     callsLine(calls),
   ]
   if (breaks.length) lines.push(`Отлучки сегодня\n${breaks.map((b) => `- с ${hm(b.from)} до ${hm(b.returnedAt ?? b.until)}${b.reason ? `, «${plain(b.reason, 60)}»` : ''}`).join('\n')}`)
-  if (said.length) lines.push([`${TALK_BEGIN}, за сутки, свежее сверху`, ...said.map((m) => `- ${hm(m.createdAt)} ${speaker(m)} «${plain(m.text, 200)}»`), TALK_END].join('\n'))
+  if (said.length) lines.push(['Переписка за сутки, свежее сверху', TALK_BEGIN, ...said.map((m) => `- ${hm(m.createdAt)} ${speaker(m)} «${plain(m.text, 200)}»`), TALK_END].join('\n'))
   return lines.join('\n')
 }
 
