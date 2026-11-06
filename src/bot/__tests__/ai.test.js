@@ -422,6 +422,8 @@ describe('стиль ответов', () => {
     for (const text of [ownerSystem(), staffSystem()]) {
       assert.match(text, /как живой человек в телеграме/)
       assert.match(text, /Так пишет Антон/)
+      assert.match(text, /баннер почти готов, осталось шрифт подобрать/)
+      assert.doesNotMatch(text, /ютуб|гугл|главной, позавчера/)
       assert.doesNotMatch(text, /• /)
     }
     assert.match(ownerSystem(), /Как писать Яну сводки и отчёты/)
