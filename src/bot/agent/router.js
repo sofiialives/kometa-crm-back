@@ -14,6 +14,7 @@ import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES, tooFar
 import { agentReady, agentReply } from '../ai/agent.js'
 import { decideStyleNote } from '../ai/styleNotes.js'
 import { activeTarget, decideDraft, decideReport, linkMessages } from './rounds.js'
+import { decideOffer } from './offers.js'
 import { listIntent, listText } from './lists.js'
 
 /**
@@ -276,6 +277,11 @@ export async function onCallback(cb, user, now = new Date()) {
       ? await decideDraft(user, id, action === 'go', now)
       : await decideReport(user, id, action === 'rp', now)
     return closeButtons(cb, note)
+  }
+  if (kind === 'ta') {
+    // Задача по просьбе агента: ставит только тот, кто просил.
+    await answerCallback(cb.id)
+    return closeButtons(cb, await decideOffer(user, id, action === 'go', now))
   }
   if (kind === 'sn') {
     // Просьба о стиле для всех: решает только владелец, и кнопка живёт три часа.

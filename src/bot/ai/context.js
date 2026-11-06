@@ -407,7 +407,7 @@ export async function worksBrief(viewer, query = null, now = new Date()) {
     const seen = viewer.role === 'admin' ? w.assignees : w.assignees.filter((a) => a.id === viewer.id || inTeam(viewer, a))
     const hidden = w.assignees.length - seen.length
     const people = [...[...labelsFor(seen).values()], ...(hidden ? [`и ещё ${hidden} не из твоей команды`] : [])].join(', ') || 'никто не назначен'
-    lines.push(`- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», отдел ${plain(w.department?.name, 30)}; ведут ${people}; открыто задач ${countOf(openBy, w.id)}, в процессе ${countOf(progressBy, w.id)}, просрочено ${countOf(overdueBy, w.id)}`)
+    lines.push(`- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», id ${w.id}, отдел ${plain(w.department?.name, 30)}; ведут ${people}; открыто задач ${countOf(openBy, w.id)}, в процессе ${countOf(progressBy, w.id)}, просрочено ${countOf(overdueBy, w.id)}`)
     const mine = openBy.filter((g) => g.workId === w.id && known.has(g.ownerId)).sort((a, b) => String(labels.get(a.ownerId)).localeCompare(String(labels.get(b.ownerId)), 'ru'))
     for (const g of mine) {
       lines.push(`  ${labels.get(g.ownerId)}, открыто ${g._count}, в процессе ${countOf(progressBy, w.id, g.ownerId)}, просрочено ${countOf(overdueBy, w.id, g.ownerId)}`)
