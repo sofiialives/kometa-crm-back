@@ -774,7 +774,7 @@ export async function sendRoundReport(roundId, now = new Date()) {
  * перезапуска, — взять снова.
  */
 export async function tickRounds(now = new Date()) {
-  await prisma.botRound.updateMany({ where: { status: 'reporting', closedAt: { lt: new Date(now.getTime() - REPORT_STUCK_MS) } }, data: { status: 'sent' } })
+  await prisma.botRound.updateMany({ where: { kind: 'ask', status: 'reporting', closedAt: { lt: new Date(now.getTime() - REPORT_STUCK_MS) } }, data: { status: 'sent' } })
   // Утренний обход ведёт и закрывает свой проход (agent/morning.js).
   const rounds = await prisma.botRound.findMany({
     where: { status: 'sent', kind: 'ask' },

@@ -39,7 +39,7 @@ describe('шаблоны бота в новом стиле', () => {
       assertPlain(morningTemplate({ name: 'Антон Иванов', today: 3, overdue: 2, hierarchy: 4, offer }), 'утро')
       assertPlain(morningTemplate({ name: 'Антон Иванов', offer }), 'утро без задач')
     }
-    const tasks = { count: 4, titles: [{ title: 'Макет' }, { title: 'Баннер' }], offer: { title: 'Аудит', state: 'untouched' } }
+    const tasks = { count: 4, fresh: 2, titles: [{ title: 'Макет' }, { title: 'Баннер' }], offer: { title: 'Аудит', state: 'untouched' } }
     const people = [
       { userId: 'a', label: 'Роман, дизайн', status: 'answered', summary: 'Не возьмёт, сегодня в больницу', messages: [], answered: true, tasks },
       { userId: 'b', label: 'Олег, SEO', status: 'sent', messages: [], answered: false, tasks: { count: 0, titles: [], offer: null } },

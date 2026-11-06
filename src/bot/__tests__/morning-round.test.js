@@ -55,10 +55,20 @@ function world(t, { users = [roman, nina, oleg, yan], overdue = {}, hier = {}, c
     return where.AND[2] ? c.overdue ?? 0 : c.today ?? 0
   })
   const db = { rounds: [], targets: [], tasks, offered: [], updates: [] }
-  patch(t, prisma.task, 'findMany', async ({ where }) => {
-    if (where.id) return db.offered.filter((x) => where.id.in.includes(x.id))
+  patch(t, prisma.task, 'findMany', async ({ where, take }) => {
     const w = where.AND[1]
-    return db.tasks.filter((x) => w.ownerId.in.includes(x.ownerId))
+    if (w.id) return db.offered.filter((x) => w.id.in.includes(x.id) && w.ownerId.in.includes(x.ownerId))
+    return db.tasks.filter((x) => x.ownerId === w.ownerId).slice(0, take)
+  })
+  patch(t, prisma.task, 'groupBy', async ({ where }) => {
+    const w = where.AND[1]
+    const since = where.AND[2]?.createdAt?.gte
+    const counts = new Map()
+    for (const x of db.tasks) {
+      if (!w.ownerId.in.includes(x.ownerId) || (since && x.createdAt < since)) continue
+      counts.set(x.ownerId, (counts.get(x.ownerId) ?? 0) + 1)
+    }
+    return [...counts].map(([ownerId, _count]) => ({ ownerId, _count }))
   })
   patch(t, prisma.botRound, 'findFirst', async () => db.rounds.find((r) => r.kind === 'morning') ?? null)
   patch(t, prisma.botRound, 'create', async ({ data }) => {
@@ -278,7 +288,7 @@ describe('отчёт в 10:10', () => {
   const sentAt = NOW
   /** Обход с тремя людьми: Роман ответил и поставил задачи, Олег промолчал и без задач, Нина (руководитель) без ответа с задачей. */
   async function prepare(t, extra = {}) {
-    const offered = { id: 'x1', title: 'Баннер', status: 'today', deadline: new Date('2026-11-03T15:00:00Z'), updatedAt: new Date('2026-11-03T06:50:00Z') }
+    const offered = { id: 'x1', ownerId: 'roman', title: 'Баннер', status: 'today', deadline: new Date('2026-11-03T15:00:00Z'), updatedAt: new Date('2026-11-03T06:50:00Z') }
     const w = world(t, {
       tasks: [
         { ownerId: 'roman', title: 'Макет сайта', createdAt: new Date('2026-11-03T06:55:00Z') },
@@ -311,7 +321,7 @@ describe('отчёт в 10:10', () => {
     assert.equal(toNina.length, 1)
     assert.equal(toUser(h, 'roman').length + toUser(h, 'oleg').length, 0)
     // Яну все трое, Нина тоже как человек обхода.
-    assert.match(toYan[0].text, /^<b>Утренний обход<\/b>\nОтветили 1 из 3, задачи на день поставили 2/)
+    assert.match(toYan[0].text, /^<b>Утренний обход<\/b>\nОтветили 1 из 3, после сообщения задачи поставили 1/)
     assert.match(toYan[0].text, /<b>Роман, дизайн<\/b>/)
     assert.match(toYan[0].text, /<b>Нина, дизайн<\/b>/)
     assert.match(toYan[0].text, /<b>Не ответили и ничего не поставили<\/b> Олег, SEO$/)
@@ -319,7 +329,7 @@ describe('отчёт в 10:10', () => {
     assert.match(toNina[0].text, /Роман, дизайн/)
     assert.doesNotMatch(toNina[0].text, /Олег|SEO|Нина/)
     assert.doesNotMatch(toNina[0].text, /Не ответили и ничего/)
-    assert.match(toNina[0].text, /^<b>Утренний обход<\/b>\nОтветили 1 из 1, задачи на день поставили 1/)
+    assert.match(toNina[0].text, /^<b>Утренний обход<\/b>\nОтветили 1 из 1, после сообщения задачи поставили 1/)
   })
 
   test('свежие задачи из базы и судьба предложенной: что поставил, взял ли, что ответил', async (t) => {
@@ -327,20 +337,24 @@ describe('отчёт в 10:10', () => {
     await sendMorningReport('r1', REPORT_AT, { lines: noModel })
     const text = toUser(h, 'yan')[0].text
     const roman = text.split('\n\n').find((p) => p.startsWith('<b>Роман'))
-    assert.equal(roman, '<b>Роман, дизайн</b>\nОтветил «Не возьмёт баннер, сегодня в больницу»\nПоставил на сегодня 2 задачи\n«Макет сайта»\n«Правки по баннеру»\nПредложенную «Баннер» пока не взял')
+    assert.equal(roman, '<b>Роман, дизайн</b>\nОтветил «Не возьмёт баннер, сегодня в больницу»\nНа сегодня 2 задачи\nПосле моего сообщения поставил 1\n«Макет сайта»\n«Правки по баннеру»\nПредложенную «Баннер» пока не взял')
   })
 
   test('читает задачи заново: в запрос идёт только сегодняшний срок, и берёт состояние на момент отчёта', async (t) => {
     const w = await prepare(t)
     const seen = patch(t, prisma.task, 'findMany', async ({ where }) => {
-      if (where.id) return [{ id: 'x1', title: 'Баннер', status: 'progress', deadline: new Date('2026-11-03T15:00:00Z'), updatedAt: new Date('2026-11-03T07:00:00Z') }]
+      if (where.AND[1].id) return [{ id: 'x1', ownerId: 'roman', title: 'Баннер', status: 'progress', deadline: new Date('2026-11-03T15:00:00Z'), updatedAt: new Date('2026-11-03T07:00:00Z') }]
       return []
     })
+    const counted = patch(t, prisma.task, 'groupBy', async () => [])
     await sendMorningReport('r1', REPORT_AT, { lines: noModel })
-    assert.ok(seen.length >= 2)
-    const tasksQuery = seen.find(([q]) => q.where.AND)[0].where.AND[1]
+    // Числа считает база по ownerId, названия отдельными запросами не больше пяти на человека.
+    assert.equal(counted.length, 2)
+    const tasksQuery = counted[0][0].where.AND[1]
     assert.deepEqual(tasksQuery.ownerId.in.sort(), ['nina', 'oleg', 'roman'])
     assert.equal(tasksQuery.deadline.gte.toISOString(), '2026-11-02T21:00:00.000Z')
+    assert.ok(counted[1][0].where.AND[2].createdAt.gte)
+    assert.ok(seen.filter(([q]) => q.take === 5).length >= 2)
     assert.match(toUser(w.h, 'yan')[0].text, /Предложенную «Баннер» взял в работу/)
   })
 
@@ -350,7 +364,7 @@ describe('отчёт в 10:10', () => {
     await sendMorningReport('r1', REPORT_AT, { lines: async ({ people }) => { given.push(...people.map((p) => p.id)); return { roman: { lines: ['Поставил две задачи', 'Баннер не возьмёт, сегодня запись в больницу'] } } } })
     assert.deepEqual(given.sort(), ['nina', 'roman'])
     const text = toUser(h, 'yan')[0].text
-    assert.match(text, /<b>Роман, дизайн<\/b>\nПоставил две задачи\nБаннер не возьмёт, сегодня запись в больницу\n\n<b>Нина, дизайн<\/b>\nНе ответил\nПоставил на сегодня 1 задачу/)
+    assert.match(text, /<b>Роман, дизайн<\/b>\nПоставил две задачи\nБаннер не возьмёт, сегодня запись в больницу\n\n<b>Нина, дизайн<\/b>\nНе ответил\nНа сегодня 1 задача\nПосле моего сообщения ничего не ставил/)
   })
 
   test('отчёт уходит один раз: повторный запуск и застрявший отчёт ничего не дублируют', async (t) => {
@@ -441,18 +455,18 @@ describe('отчёт и сообщение, текст', () => {
 
   test('шаблон отчёта в стиле бота, без маркеров, точек в конце, двоеточий, скобок и баллов', () => {
     const people = [
-      p({ answered: true, summary: 'Берёт баннер сегодня после обеда', tasks: { count: 4, titles: [{ title: 'Макет' }, { title: 'Баннер' }, { title: 'Правки' }, { title: 'Отчёт' }], offer: { title: 'Баннер', state: 'progress' } } }),
-      p({ userId: 'b', label: 'Олег, SEO', tasks: { count: 1, titles: [{ title: 'Статья' }], offer: { title: 'Аудит', state: 'untouched' } } }),
+      p({ answered: true, summary: 'Берёт баннер сегодня после обеда', tasks: { count: 4, fresh: 2, titles: [{ title: 'Макет' }, { title: 'Баннер' }, { title: 'Правки' }, { title: 'Отчёт' }], offer: { title: 'Баннер', state: 'progress' } } }),
+      p({ userId: 'b', label: 'Олег, SEO', tasks: { count: 1, fresh: 1, titles: [{ title: 'Статья' }], offer: { title: 'Аудит', state: 'untouched' } } }),
       p({ userId: 'c', label: 'Нина, дизайн' }),
       p({ userId: 'd', label: 'Игорь, SMM', status: 'failed' }),
     ]
     const text = morningReportText({ people })
     const clean = text.replace(/<[^>]+>/g, '')
     assert.doesNotMatch(clean, /[!()•—]|\p{Extended_Pictographic}|(^|[^\d]):|:(?!\d)|\.[ \t]*$|балл|штраф|до 10:00/imu)
-    assert.match(text, /Ответили 1 из 3, задачи на день поставили 2/)
-    assert.match(text, /Поставил на сегодня 4 задачи\n«Макет»\n«Баннер»\n«Правки»\nи ещё 1/)
+    assert.match(text, /Ответили 1 из 3, после сообщения задачи поставили 2/)
+    assert.match(text, /На сегодня 4 задачи\nПосле моего сообщения поставил 2\n«Макет»\n«Баннер»\n«Правки»\nи ещё 1/)
     assert.match(text, /<b>Не ответили и ничего не поставили<\/b> Нина, дизайн\n\n<b>Сообщение не дошло<\/b> Игорь, SMM$/)
-    assert.deepEqual(personTemplate(p()), ['Не ответил', 'На сегодня задач не поставил'])
+    assert.deepEqual(personTemplate(p()), ['Не ответил', 'На сегодня задач нет'])
   })
 
   test('строки модели чистятся до стиля бота и не пропускают ссылки', async () => {
@@ -491,5 +505,174 @@ describe('отчёт и сообщение, текст', () => {
     assert.match(body, /Данные Романа/)
     assert.match(body, /Предложи ему взять задачу «Баннер», она просрочена/)
     assert.doesNotMatch(JSON.stringify(seen[0].system), /до 10:00/)
+  })
+})
+
+describe('обход дописывается и ничего не теряется', () => {
+  const minute = (m) => new Date(`2026-11-03T06:${String(m).padStart(2, '0')}:00Z`)
+
+  test('временный сбой телеграма у одного: следующий тик дописывает только его', async (t) => {
+    const { h, db } = world(t, { users: [roman, oleg, yan] })
+    const real = globalThis.fetch
+    let fail = true
+    globalThis.fetch = async (url, init) => {
+      if (fail && String(url).endsWith('sendMessage') && JSON.parse(init.body).chat_id === 'chat-oleg') return new Response(JSON.stringify({ ok: false }), { status: 500 })
+      return real(url, init)
+    }
+    t.after(() => { globalThis.fetch = real })
+    await runMorningRound(NOW, { ask: ask() })
+    assert.deepEqual(['roman', 'oleg'].map((id) => toUser(h, id).length), [1, 0])
+    fail = false
+    await tickMorning(minute(41))
+    assert.deepEqual(['roman', 'oleg'].map((id) => toUser(h, id).length), [1, 1])
+    assert.equal(db.rounds.length, 1)
+    // Все получили: следующий тик ничего не делает.
+    await tickMorning(minute(42))
+    assert.equal(h.sent.length, 2)
+  })
+
+  test('рестарт после создания раунда: тик дописывает остальных, написанному не пишет', async (t) => {
+    const { h, db } = world(t, { users: [roman, oleg, nina, yan] })
+    // До рестарта успели написать только Роману: раунд и ключ есть, остальных нет.
+    db.rounds.push({ id: 'r1', kind: 'morning', ownerId: 'yan', status: 'sent', reportTries: 0, createdAt: NOW, sentAt: NOW, deadlineAt: REPORT_AT })
+    h.notices.add('morning-round:2026-11-03:roman')
+    db.targets.push({ id: 't0', roundId: 'r1', userId: 'roman', status: 'sent', messages: [] })
+    await tickMorning(minute(45))
+    assert.deepEqual(['roman', 'oleg', 'nina'].map((id) => toUser(h, id).length), [0, 1, 1])
+    assert.equal(db.rounds.length, 1)
+  })
+
+  test('после 10:00 тик уже не догоняет', async (t) => {
+    const { h } = world(t, { users: [roman, yan] })
+    await tickMorning(new Date('2026-11-03T07:01:00Z'))
+    assert.equal(h.sent.length, 0)
+  })
+
+  test('нет ни одного admin: никому не пишет, в лог один раз в день, а не каждую минуту', async (t) => {
+    const { h, db } = world(t, { users: [roman, oleg] })
+    const logged = patch(t, console, 'error', () => {})
+    for (const m of [40, 41, 42]) await runMorningRound(minute(m), { ask: ask() })
+    assert.equal(h.sent.length, 0)
+    assert.equal(db.rounds.length, 0)
+    assert.equal(logged.filter(([msg]) => /нет активного владельца/.test(msg)).length, 1)
+  })
+
+  test('цели pending и skipped не пропадают из отчёта: строка «Не получили сообщение»', async (t) => {
+    const w = world(t, { tasks: [] })
+    await runMorningRound(NOW, { ask: ask() })
+    w.db.targets.find((x) => x.userId === 'oleg').status = 'pending'
+    w.db.targets.find((x) => x.userId === 'nina').status = 'skipped'
+    w.h.sent.length = 0
+    await sendMorningReport('r1', REPORT_AT, { lines: async () => null })
+    const text = toUser(w.h, 'yan')[0].text
+    assert.match(text, /Ответили 0 из 1/)
+    assert.match(text, /<b>Не получили сообщение<\/b> Нина, дизайн; Олег, SEO$/)
+    // Руководитель дизайна не увидит чужого отдела; про Романа у него обычная строка.
+    assert.doesNotMatch(toUser(w.h, 'nina')[0].text, /Олег/)
+  })
+})
+
+describe('отчёт не держит захваченную часть и считает честно', () => {
+  async function ready(t) {
+    const w = world(t, { tasks: [{ ownerId: 'roman', title: 'Макет', createdAt: NOW }] })
+    await runMorningRound(NOW, { ask: ask() })
+    w.h.sent.length = 0
+    return w
+  }
+
+  test('строки моделью готовятся до захвата частей отправки', async (t) => {
+    const w = await ready(t)
+    const order = []
+    const base = w.h.notices.add.bind(w.h.notices)
+    w.h.notices.add = (key) => { if (key.startsWith('round-report:')) order.push(`claim ${key.split(':')[2]}`); return base(key) }
+    await sendMorningReport('r1', REPORT_AT, { lines: async () => { order.push('lines'); return null } })
+    assert.equal(order[0], 'lines')
+    assert.ok(order.length > 1)
+  })
+
+  test('застрявший отчёт обхода возвращает в «sent» тик обхода со своим порогом, а тик поручений его не трогает', async (t) => {
+    const w = world(t, { users: [roman, yan] })
+    const calls = patch(t, prisma.botRound, 'updateMany', async () => ({ count: 0 }))
+    await tickMorning(new Date('2026-11-03T07:20:00Z'))
+    const reset = calls.find(([q]) => q.where.status === 'reporting')[0]
+    assert.equal(reset.where.kind, 'morning')
+    assert.equal(reset.where.closedAt.lt.toISOString(), '2026-11-03T07:05:00.000Z')
+    assert.ok(w)
+    const { tickRounds } = await import('../agent/rounds.js')
+    calls.length = 0
+    patch(t, prisma.botRound, 'findMany', async () => [])
+    await tickRounds(REPORT_AT)
+    assert.equal(calls.find(([q]) => q.where.status === 'reporting')[0].where.kind, 'ask')
+  })
+
+  test('в сообщении и в отчёте «на сегодня» считается одинаково: все статусы со сроком сегодня', async (t) => {
+    const asked = patch(t, prisma.task, 'count', async () => 0)
+    const { morningFacts } = await import('../agent/morning.js')
+    await morningFacts('roman', NOW)
+    const where = asked[0][0].where.AND[1]
+    assert.equal(where.status, undefined)
+    assert.ok(where.deadline.gte && where.deadline.lt)
+    const w = await ready(t)
+    assert.ok(w)
+  })
+
+  test('предложенная чужая задача не считается взятой', async (t) => {
+    const w = await ready(t)
+    w.db.targets.find((x) => x.userId === 'roman').offeredTaskId = 'x9'
+    w.db.offered.push({ id: 'x9', ownerId: 'oleg', title: 'Чужая', status: 'done', deadline: NOW, updatedAt: NOW })
+    await sendMorningReport('r1', REPORT_AT, { lines: async () => null })
+    assert.doesNotMatch(toUser(w.h, 'yan')[0].text, /Чужая/)
+  })
+
+  test('в цели лежит исходный текст без HTML, в телеграм уходит экранированный', async (t) => {
+    const w = world(t, { users: [roman, yan] })
+    await runMorningRound(NOW, { ask: async () => 'Роман, A & B' })
+    assert.equal(w.db.targets[0].text, 'Роман, A & B')
+    assert.equal(toUser(w.h, 'roman')[0].text, 'Роман, A &amp; B')
+  })
+
+  test('слова человека в шаблоне отчёта приведены к стилю бота', () => {
+    const lines = personTemplate({ answered: true, summary: 'Делает: макет (почти) — потом баннер!', messages: [], tasks: { count: 1, fresh: 0, titles: [{ title: 'Макет (правки): срочно!' }], offer: null } })
+    const text = lines.join('\n')
+    assert.doesNotMatch(text, /[:!—]|\(|\)/)
+    assert.match(text, /После моего сообщения ничего не ставил/)
+  })
+})
+
+describe('строки отчёта моделью: учёт вызовов и время', () => {
+  const person = (id) => ({ id, label: `${id}, дизайн`, summary: null, messages: [], tasks: { count: 1, fresh: 0, titles: [{ title: 'Макет', fresh: false }], offer: null } })
+  const reply = { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ lines: ['Строка'] }) }], usage: { input_tokens: 1, output_tokens: 1 } }
+  const deps = (over = {}) => ({ pick: async () => ({ model: 'm' }), can: async () => true, record: async () => {}, sharedNotes: '', ...over })
+
+  test('каждый запрос к модели занимает место в лимите, а не один на весь отчёт', async () => {
+    const takes = []
+    let calls = 0
+    const out = await morningLines({ ownerId: 'yan', people: [person('a'), person('b'), person('c')] }, deps({
+      take: async (id, kind) => { takes.push(kind); return true },
+      create: async () => { calls += 1; return reply },
+    }))
+    assert.equal(calls, 3)
+    assert.deepEqual(takes, ['morningReport', 'morningReport', 'morningReport'])
+    assert.deepEqual(Object.keys(out).sort(), ['a', 'b', 'c'])
+  })
+
+  test('лимит кончился посреди отчёта: у кого есть строки, у остальных шаблон', async () => {
+    let n = 0
+    const out = await morningLines({ ownerId: 'yan', people: [person('a'), person('b'), person('c')] }, deps({
+      take: async () => { n += 1; return n <= 1 },
+      create: async () => reply,
+    }))
+    assert.deepEqual(Object.keys(out), ['a'])
+  })
+
+  test('общее время вышло: запросов к модели нет, отчёт целиком шаблоном', async () => {
+    let calls = 0
+    const out = await morningLines({ ownerId: 'yan', people: [person('a')] }, deps({ take: async () => true, totalMs: 1000, create: async () => { calls += 1; return reply } }))
+    assert.equal(calls, 0)
+    assert.equal(out, null)
+  })
+
+  test('лимит на отчёт вмещает 25 человек', () => {
+    assert.ok(aiLimit('morningReport', 'admin') >= 25)
   })
 })
