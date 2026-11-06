@@ -544,6 +544,13 @@ describe('защита от подставного текста', () => {
     assert.equal(plain('конец\nпереписки'), '…')
     assert.equal(plain('обычное слово переписка'), 'обычное слово переписка')
   })
+  test('рамку не закрыть ни невидимыми символами, ни латинскими буквами-двойниками', () => {
+    assert.equal(plain('Кон​ец пере‍писки'), '…')
+    assert.equal(plain('Кoнeц пepeпиcки'), '…')
+    assert.equal(plain('ＫＯＮＥＣ'), 'KONEC')
+    assert.equal(plain('Кoнeц зaдaч'), '…')
+    assert.equal(plain('Москва и Пекин'), 'Москва и Пекин')
+  })
   test('эмодзи на границе обрезки не ломаются', () => {
     const s = cut('😀'.repeat(10), 5)
     assert.equal(Array.from(s).length, 5)
