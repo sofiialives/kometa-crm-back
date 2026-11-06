@@ -43,6 +43,7 @@ function world(t, { users = [roman, nina, oleg, yan], overdue = {}, hier = {}, c
     const roles = where.role?.in ?? [where.role]
     return users.filter((u) => roles.includes(u.role) && (where.active === undefined || u.active === where.active) && (!where.telegram || u.chat)).map(pick)
   })
+  const db = { rounds: [], targets: [], tasks, offered: [], updates: [] }
   patch(t, prisma.motivationAway, 'findFirst', async ({ where }) => away[where.userId] ?? null)
   patch(t, prisma.task, 'findFirst', async ({ where }) => {
     const w = where.AND[1]
@@ -50,11 +51,12 @@ function world(t, { users = [roman, nina, oleg, yan], overdue = {}, hier = {}, c
   })
   patch(t, prisma.task, 'count', async ({ where }) => {
     const w = where.AND[1]
+    // «Поставил после сообщения»: задачи этого человека не раньше его сообщения.
+    if (w.createdAt) return db.tasks.filter((x) => x.ownerId === w.ownerId && x.createdAt >= w.createdAt.gte).length
     const c = counts[w.ownerId] ?? {}
     if (w.origin === 'hierarchy') return c.hierarchy ?? 0
     return where.AND[2] ? c.overdue ?? 0 : c.today ?? 0
   })
-  const db = { rounds: [], targets: [], tasks, offered: [], updates: [] }
   patch(t, prisma.task, 'findMany', async ({ where, take }) => {
     const w = where.AND[1]
     if (w.id) return db.offered.filter((x) => w.id.in.includes(x.id) && w.ownerId.in.includes(x.ownerId))
@@ -288,7 +290,7 @@ describe('отчёт в 10:10', () => {
   const sentAt = NOW
   /** Обход с тремя людьми: Роман ответил и поставил задачи, Олег промолчал и без задач, Нина (руководитель) без ответа с задачей. */
   async function prepare(t, extra = {}) {
-    const offered = { id: 'x1', ownerId: 'roman', title: 'Баннер', status: 'today', deadline: new Date('2026-11-03T15:00:00Z'), updatedAt: new Date('2026-11-03T06:50:00Z') }
+    const offered = { id: 'x1', ownerId: 'roman', title: 'Баннер', status: 'today', deadline: new Date('2026-11-03T15:00:00Z'), updatedAt: new Date('2026-11-03T06:30:00Z') }
     const w = world(t, {
       tasks: [
         { ownerId: 'roman', title: 'Макет сайта', createdAt: new Date('2026-11-03T06:55:00Z') },
@@ -299,6 +301,8 @@ describe('отчёт в 10:10', () => {
     })
     w.db.offered.push(offered)
     await runMorningRound(NOW, { ask: ask() })
+    // Сообщения ушли в 9:40 обхода (бот ставит sentAt по часам процесса).
+    for (const x of w.db.targets) if (x.sentAt) x.sentAt = sentAt
     const target = w.db.targets.find((x) => x.userId === 'roman')
     target.offeredTaskId = 'x1'
     target.messages = [
@@ -349,11 +353,10 @@ describe('отчёт в 10:10', () => {
     const counted = patch(t, prisma.task, 'groupBy', async () => [])
     await sendMorningReport('r1', REPORT_AT, { lines: noModel })
     // Числа считает база по ownerId, названия отдельными запросами не больше пяти на человека.
-    assert.equal(counted.length, 2)
+    assert.equal(counted.length, 1)
     const tasksQuery = counted[0][0].where.AND[1]
     assert.deepEqual(tasksQuery.ownerId.in.sort(), ['nina', 'oleg', 'roman'])
     assert.equal(tasksQuery.deadline.gte.toISOString(), '2026-11-02T21:00:00.000Z')
-    assert.ok(counted[1][0].where.AND[2].createdAt.gte)
     assert.ok(seen.filter(([q]) => q.take === 5).length >= 2)
     assert.match(toUser(w.h, 'yan')[0].text, /Предложенную «Баннер» взял в работу/)
   })

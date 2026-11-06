@@ -136,7 +136,7 @@ export function morningTemplate({ name, today = 0, overdue = 0, hierarchy = 0, o
   lines.push(today ? `На сегодня у тебя ${today} ${plural(today, 'задача', 'задачи', 'задач')}` : 'На сегодня в CRM пока нет задач')
   if (overdue) lines.push(`Просрочено ${overdue}`)
   if (hierarchy) lines.push(`Открыто по Иерархии ${hierarchy}`)
-  if (offer) lines.push(`Может, возьмёшь «${plain(offer.title, 80)}», ${offer.why === 'overdue' ? 'она просрочена' : 'она открыта в Иерархии'}`)
+  if (offer) lines.push(`Может, возьмёшь «${plainStyle(plain(offer.title, 80))}», ${offer.why === 'overdue' ? 'она просрочена' : 'она открыта в Иерархии'}`)
   lines.push('Расставь, пожалуйста, задачи на день')
   return lines.join('\n')
 }
@@ -291,7 +291,12 @@ export async function gatherMorning(round, now = new Date()) {
   const offerIds = targets.map((t) => t.offeredTaskId).filter(Boolean)
   const [totals, freshs, titles, offered] = await Promise.all([
     ids.length ? prisma.task.groupBy({ by: ['ownerId'], where: today, _count: true }) : [],
-    ids.length ? prisma.task.groupBy({ by: ['ownerId'], where: { AND: [...today.AND, { createdAt: { gte: sentAt } }] }, _count: true }) : [],
+    // «Поставил после сообщения» — от времени, когда сообщение ушло именно ему
+    // (догнанным в 9:55 не засчитываем задачи 9:41–9:55).
+    Promise.all(targets.filter((t) => ids.includes(t.userId)).map(async (t) => ({
+      ownerId: t.userId,
+      _count: await prisma.task.count({ where: { AND: [VISIBLE, { ownerId: t.userId, deadline: { gte: start, lt: end }, createdAt: { gte: t.sentAt ?? sentAt } }] } }),
+    }))),
     Promise.all(ids.map(async (id) => [id, await prisma.task.findMany({
       where: { AND: [VISIBLE, { ownerId: id, deadline: { gte: start, lt: end } }] },
       orderBy: { deadline: 'asc' },
@@ -324,7 +329,7 @@ export async function gatherMorning(round, now = new Date()) {
       tasks: {
         count: total.get(t.userId) ?? 0,
         fresh: fresh.get(t.userId) ?? 0,
-        titles: (names.get(t.userId) ?? []).map((x) => ({ title: x.title, fresh: x.createdAt >= sentAt })),
+        titles: (names.get(t.userId) ?? []).map((x) => ({ title: x.title, fresh: x.createdAt >= (t.sentAt ?? sentAt) })),
         offer: offerTask && state !== 'gone' ? { title: offerTask.title, state } : null,
       },
     }
