@@ -201,7 +201,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
     }
     const told = toldOwnerReply({ tools: res.tools, quiet: ctx.quiet, toldOwner: ctx.toldOwner })
     if (told) {
-      await tellChat(chatId, told, { userId: user.id, roundTargetId: target?.id ?? null })
+      await tellChat(chatId, told, { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null })
       return true
     }
     // В опросе человек всегда должен понять, что его услышали: агент
@@ -226,7 +226,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
     // Яну уже ушло, а ход сорвался: человеку всё равно сказать, что передали.
     const told = toldOwnerReply({ toldOwner: ctx.toldOwner })
     if (told) {
-      await tellChat(chatId, told, { userId: user.id, roundTargetId: target?.id ?? null }).catch(() => {})
+      await tellChat(chatId, told, { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null }).catch(() => {})
       return true
     }
     if (target) return ack()
