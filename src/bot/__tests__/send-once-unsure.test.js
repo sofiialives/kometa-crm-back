@@ -1,6 +1,8 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { sendOnce } from '../agent/notify.js'
+import { sendOnce, tellOwners } from '../agent/notify.js'
+import { prisma } from '../../config/prisma.js'
+import { patch } from './patch.js'
 import { botHarness } from './harness.js'
 
 describe('sendOnce при неясном ответе телеграма', () => {
@@ -24,3 +26,35 @@ describe('sendOnce при неясном ответе телеграма', () =>
     assert.equal(calls, 2)
   })
 })
+
+describe('отчёт двум владельцам', () => {
+  const fetchBy = (t, byChat) => {
+    const ok = globalThis.fetch
+    globalThis.fetch = async (url, init) => {
+      const chat = JSON.parse(init.body).chat_id
+      if (byChat[chat] === 'timeout') throw Object.assign(new Error('timeout'), { name: 'TimeoutError' })
+      if (byChat[chat] === 'fail') return new Response(JSON.stringify({ ok: false }), { status: 500 })
+      return ok(url, init)
+    }
+    t.after(() => { globalThis.fetch = ok })
+  }
+
+  test('одному таймаут, другому ошибка 500: повторяем, а не считаем дошедшим', async (t) => {
+    botHarness(t)
+    patch(t, prisma.user, 'findMany', async () => [{ id: 'a' }, { id: 'b' }])
+    fetchBy(t, { 'chat-a': 'timeout', 'chat-b': 'fail' })
+    const res = await tellOwners('отчёт')
+    assert.equal(res.ok, false)
+    assert.equal(res.retry, true)
+    assert.equal(res.unsure, false)
+  })
+
+  test('обоим таймаут: могло дойти, повтора нет', async (t) => {
+    botHarness(t)
+    patch(t, prisma.user, 'findMany', async () => [{ id: 'a' }, { id: 'b' }])
+    fetchBy(t, { 'chat-a': 'timeout', 'chat-b': 'timeout' })
+    const res = await tellOwners('отчёт')
+    assert.equal(res.unsure, true)
+  })
+})
+

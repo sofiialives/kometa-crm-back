@@ -106,13 +106,17 @@ export async function tellOwners(text, opts = {}) {
   let ok = false
   let retry = false
   let unsure = false
+  // Хоть одному владельцу точно не дошло (ошибка, а не таймаут) — повторять
+  // надо, даже если другому, может быть, дошло.
+  let failed = false
   for (const id of ids) {
     const res = await tell(id, text, opts)
     ok ||= res.ok
     retry ||= Boolean(res.retry)
     unsure ||= Boolean(res.unsure)
+    failed ||= Boolean(!res.ok && res.retry && !res.unsure)
   }
-  return { ok, retry: !ok && retry, unsure: !ok && unsure }
+  return { ok, retry: !ok && retry, unsure: !ok && unsure && !failed }
 }
 
 /**
