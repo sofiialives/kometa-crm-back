@@ -421,9 +421,9 @@ describe('стиль ответов', () => {
   test('подсказка просит живой тон, без точек, двоеточий и маркеров', () => {
     for (const text of [ownerSystem(), staffSystem()]) {
       assert.match(text, /как живой человек в телеграме/)
-      assert.match(text, /Так пишет Антон/)
+      assert.match(text, /Примеры живого тона/)
       assert.match(text, /баннер почти готов, осталось шрифт подобрать/)
-      assert.doesNotMatch(text, /ютуб|гугл|главной, позавчера/)
+      assert.doesNotMatch(text, /ютуб|гугл|главной, позавчера|Антон|всё выполнит/)
       assert.doesNotMatch(text, /• /)
     }
     assert.match(ownerSystem(), /Как писать Яну сводки и отчёты/)
