@@ -11,6 +11,7 @@ export function botHarness(t) {
   const notices = new Set()
   const sent = []
   const logged = []
+  const edits = []
   patch(t, prisma.botNotice, 'findUnique', async ({ where }) => (notices.has(where.key) ? { key: where.key } : null))
   patch(t, prisma.botNotice, 'create', async ({ data }) => {
     if (notices.has(data.key)) throw Object.assign(new Error('dup'), { code: 'P2002' })
@@ -24,9 +25,10 @@ export function botHarness(t) {
   globalThis.fetch = async (url, init) => {
     const method = String(url).split('/').pop()
     const body = init?.body ? JSON.parse(init.body) : {}
+    if (method === 'editMessageText') edits.push({ text: body.text, buttons: body.reply_markup?.inline_keyboard })
     if (method === 'sendMessage') sent.push({ chatId: body.chat_id, text: body.text, buttons: body.reply_markup?.inline_keyboard })
     return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }))
   }
   t.after(() => { globalThis.fetch = realFetch })
-  return { notices, sent, logged }
+  return { notices, sent, logged, edits }
 }
