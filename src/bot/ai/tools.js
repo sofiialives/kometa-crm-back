@@ -2,6 +2,7 @@ import { comeBack, runningLate, startBreak } from '../agent/away.js'
 import { askReminderTime, createReminder } from '../agent/remind.js'
 import { tellChat } from '../agent/notify.js'
 import { askReportNow, createDraft, finishAnswer, roundStatus, setRoundDeadline } from '../agent/rounds.js'
+import { proposeTask } from '../agent/offers.js'
 import { escapeHtml, uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
 import { personBrief, teamBrief, worksBrief } from './context.js'
@@ -201,7 +202,7 @@ export function teamTools(ctx, { team = false } = {}) {
     },
     {
       name: 'message_people',
-      description: 'Написать людям: опросить, узнать, как дела, попросить скрин, передать сообщение. Каждому своё сообщение. Бот покажет черновик с кнопкой «Отправить».',
+      description: 'Написать людям: опросить, узнать, как дела, попросить скрин, передать сообщение. Каждому своё сообщение. Если в самом сообщении просящего названы по имени конкретные люди, их не больше трёх, сейчас не ночь и в текстах нет ссылок, бот отправит сразу и сам скажет просящему, кому написал. Иначе покажет черновик с кнопкой «Отправить». В ответе инструмента написано, что случилось.',
       input_schema: object({
         topic: { type: 'string', description: 'Что нужно узнать или передать, одной строкой, для отчёта.' },
         minutes: nullable('integer', 'Сколько минут собирать ответы, от 10 до 480. null, если не сказали, тогда 60.'),
@@ -213,7 +214,25 @@ export function teamTools(ctx, { team = false } = {}) {
         },
       }),
       run: async (input) => {
-        const res = await createDraft(user, chatId, input, now)
+        const res = await createDraft(user, chatId, input, now, { texts: [ctx.text].filter(Boolean) })
+        ctx.quiet ||= res.shown
+        return res.text
+      },
+    },
+    {
+      name: 'assign_task',
+      description: 'Поставить человеку задачу в CRM по прямой просьбе: «поставь Ивану задачу сделать баннер до завтра 12:00». Сначала ничего не создаётся: бот покажет просящему карточку с кнопками «Поставить» и «Отмена». person_id из сводки или get_team. title до 200 знаков, коротко и по делу. description подробности или null. deadline срок, ISO по Москве вроде 2026-11-07T12:00, или null, если срок не назвали, тогда бот поставит сегодня до 19:00, а после 18:00 завтра до 19:00. Срок спрашивать не нужно. start_at null. work_id id работы из get_works, если это задача по работе клиента, null для личной задачи на день. note короткое человеческое сообщение исполнителю от тебя или null. Не ставь задачи без прямой просьбы.',
+      input_schema: object({
+        person_id: { type: 'string' },
+        title: { type: 'string', description: 'Название задачи, до 200 знаков.' },
+        description: { type: 'string', description: 'Подробности или пустая строка.' },
+        deadline: nullable('string', 'Срок, ISO по Москве, например 2026-11-07T12:00, или null.'),
+        start_at: { type: 'string', description: 'Время начала, ISO по Москве, обычно пустая строка.' },
+        work_id: nullable('string', 'id работы из get_works или null для личной задачи.'),
+        note: { type: 'string', description: 'Короткое сообщение исполнителю от агента или пустая строка.' },
+      }),
+      run: async (input) => {
+        const res = await proposeTask(user, chatId, input, now)
         ctx.quiet ||= res.shown
         return res.text
       },

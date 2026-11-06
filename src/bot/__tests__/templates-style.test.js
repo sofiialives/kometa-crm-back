@@ -2,7 +2,8 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildReminder } from '../reminders.js'
 import { bankLine, eventLine, reviewText } from '../agent/feed.js'
-import { confirmText, draftText, reportText } from '../agent/rounds.js'
+import { confirmText, directNote, draftText, reportText } from '../agent/rounds.js'
+import { assigneeText, offerText } from '../agent/offers.js'
 import { eveningText, notStartedText, startText } from '../agent/tasks.js'
 import { DAILY } from '../index.js'
 import { limitText } from '../ai/agent.js'
@@ -60,6 +61,20 @@ describe('шаблоны бота в новом стиле', () => {
     assertPlain(text, 'отчёт')
     assert.match(text, /^<b>Отчёт по опросу<\/b>\nКак дела\nОтветили 1 из 2, написал в 12:00\n\n<b>Роман, дизайн<\/b>\nДелает баннер, готов наполовину\nждёт правки, от клиента\n<i>«Делаю»<\/i>/)
     assert.match(text, /<b>Не ответили<\/b> Настя, SEO; Олег, SMM, сообщение не дошло$/)
+  })
+
+  test('сообщения, которые агент отправляет сам', () => {
+    const lead = { id: 'l', name: 'Мария Попова', role: 'lead', department: { name: 'Дизайн' } }
+    const ivan = { id: 'i', name: 'Иван Петров', role: 'staff', department: { name: 'Дизайн' } }
+    const work = { title: 'Лендинг', client: { name: 'Румикс' } }
+    const tomorrow = new Date('2026-11-04T09:00:00Z')
+    assertPlain(directNote({ sent: ['Николай, дизайн'], failed: ['Роман, дизайн'], skipped: ['Денис, SMM'], notSent: ['Настя, SEO, телеграм не подключён'], collect: true, deadlineAt: T }), 'написал сам')
+    assertPlain(directNote({ sent: [], failed: [], skipped: [], collect: true, deadlineAt: T }), 'никому не написал')
+    for (const w of [null, work]) {
+      assertPlain(offerText({ assignee: ivan, title: 'Баннер', description: 'Размер 1080', deadline: tomorrow, work: w, note: 'Бриф в папке', now: T }), 'карточка задачи')
+      assertPlain(assigneeText({ requester: lead, title: 'Баннер', deadline: tomorrow, work: w, note: 'Бриф в папке', now: T }), 'задача от руководителя')
+      assertPlain(assigneeText({ requester: { role: 'admin' }, title: 'Баннер', deadline: T, work: w, now: T }), 'задача от Яна')
+    }
   })
 
   test('лимиты ИИ', () => {

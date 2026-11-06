@@ -65,6 +65,7 @@ export async function pruneNotices(now = new Date()) {
   await prisma.botReminder.deleteMany({ where: { at: { lt: before } } })
   // Поручения — вместе с перепиской: без неё в них ничего не осталось.
   await prisma.botRound.deleteMany({ where: { createdAt: { lt: before } } })
+  await prisma.botTaskOffer.deleteMany({ where: { createdAt: { lt: before } } })
   // В журнале действий факт остаётся, а слова человека — нет.
   const words = await prisma.botEvent.updateMany({ where: { at: { lt: before }, text: { not: null } }, data: { text: null } })
   if (notices.count || messages.count || words.count) {

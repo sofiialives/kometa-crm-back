@@ -1,9 +1,9 @@
 import { prisma } from '../../config/prisma.js'
 import { escapeHtml, sendAlbum, sendFileById } from '../telegram.js'
-import { isQuietHour } from '../plan.js'
+import { isQuietHour, mskDayKey, mskDayStart } from '../plan.js'
 import { aiReport } from '../ai/report.js'
 import { noLinks, plainStyle } from '../ai/style.js'
-import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END } from '../ai/context.js'
+import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END, teamWhere } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
 import { hm } from './format.js'
@@ -54,6 +54,147 @@ const LINK = /(?:https?:\/\/|tg:\/\/|www\.)\S+|(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[
 export function clampMinutes(minutes) {
   const m = Number.isInteger(minutes) ? minutes : ROUND_DEFAULT_MIN
   return Math.min(ROUND_MAX_MIN, Math.max(ROUND_MIN_MIN, m))
+}
+
+// Прямая отправка без черновика: не больше трёх человек, не больше 20
+// человеко-сообщений в день на просящего, имя названо в самой просьбе.
+export const DIRECT_PEOPLE_MAX = 3
+export const DIRECT_PER_DAY = 20
+
+
+function nameBase(token) {
+  const t = token.toLowerCase().replace(/ё/g, 'е')
+  const base = /[аяуюеиыоэйь]$/.test(t) ? t.slice(0, -1) : t
+  if (base.length >= 3) return base
+  return t.length >= 3 ? t : null
+}
+
+const nameTokens = (person) => String(person?.name ?? '').split(/\s+/).flatMap((w) => w.match(/[\p{L}]+/gu) ?? [])
+
+// Падежные окончания по последней букве имени: у «Николай» только й, я, ю,
+// ем, е, у «Надя» только я, и, е, ю, ей, ею. Общий список окончаний пускал
+// «надо» за Надю и «верим» за Веру.
+function caseForms(token) {
+  const t = token.toLowerCase().replace(/ё/g, 'е')
+  const last = t.at(-1)
+  const stem = t.slice(0, -1)
+  if (last === 'й') return { base: stem, ends: ['й', 'я', 'ю', 'ем', 'е'] }
+  if (last === 'ь') return { base: stem, ends: ['ь', 'я', 'ю', 'ем', 'е', 'и', 'ью'] }
+  if (last === 'а') return { base: stem, ends: ['а', 'ы', 'и', 'е', 'у', 'ой', 'ою'] }
+  if (last === 'я') return { base: stem, ends: ['я', 'и', 'е', 'ю', 'ей', 'ею'] }
+  if (/[еиоуыэю]/.test(last)) return { base: t, ends: [''] }
+  const ends = ['', 'а', 'у', 'ом', 'е', 'ы']
+  if (/(?:ов|ев|ин|ын)$/.test(t)) ends.push('ым')
+  return { base: t, ends }
+}
+
+/**
+ * Какие части имени человека («Николай», «Волков») есть в тексте просьбы, в
+ * любом падеже. Короткая основа («Люба», «Света») засчитывается только с
+ * большой буквы: иначе «любой» и «в свете» назвали бы человека.
+ */
+export function namedTokens(person, texts) {
+  const words = texts.flatMap((text) => String(text ?? '').replace(/ё/g, 'е').replace(/Ё/g, 'Е').match(/[\p{L}]+/gu) ?? [])
+  return nameTokens(person).filter((token) => {
+    const { base, ends } = caseForms(token)
+    if (base.length < 3) return false
+    return words.some((word) => {
+      const w = word.toLowerCase()
+      if (!w.startsWith(base) || !ends.includes(w.slice(base.length))) return false
+      return base.length > 4 || /^\p{Lu}/u.test(word)
+    })
+  })
+}
+
+/** Назван ли человек в тексте просьбы: его имя или фамилия, в любом падеже. */
+export function isNamedIn(person, texts) {
+  return namedTokens(person, texts).length > 0
+}
+
+/**
+ * Тёзки и однофамильцы: среди тех, кому просящий может писать, есть ещё кто-то
+ * с теми же названными частями имени («напиши Александру» — модель могла
+ * выбрать не того). Тогда черновик, где видно, кому уйдёт. Ищем только в
+ * пределах видимости просящего, не по всей базе.
+ */
+async function hasNamesake(owner, people, texts) {
+  // Тот же разбор имён, что и в namedTokens, а не contains в базе: иначе
+  // «Фёдор» и «Федор» или падежи разошлись бы. Кандидаты — только те, кому
+  // просящий может писать.
+  const team = await prisma.user.findMany({ where: teamWhere(owner), select: { id: true, name: true } })
+  const bases = (person) => new Set(nameTokens(person).map(nameBase).filter(Boolean))
+  for (const p of people) {
+    const found = namedTokens(p.person, texts).map(nameBase).filter(Boolean)
+    if (!found.length) continue
+    if (team.some((c) => c.id !== p.person.id && found.every((b) => bases(c).has(b)))) return true
+  }
+  return false
+}
+
+// Просьбы о данных и деньгах уходят людям только через черновик. Текст
+// сначала приводим к одному виду: NFKC, латинские двойники кириллицы, ё как е.
+// Самые опасные слова ищем и в тексте без разделителей («п.а.р.о.л.ь»).
+const SENSITIVE = /парол|логин|(?<![\p{L}])(?:код(?!екс|ир)|пин)|доступ(?!н)|карт(?!ин|очк)|реквизит|перевед|перевод|оплат|деньг|паспорт|телефон|почт(?!и(?![\p{L}]))|ключ(?!ев|ик)|токен|кошел|снилс|выписк|скан(?!д)|cvv|otp|2fa|смс|(?<![\p{L}])(?:инн|сч[её]т(?:[ауе]|ом|ов|ам|ами|ах)?|code)(?![\p{L}])/iu
+const SENSITIVE_TIGHT = /парол|логин|реквизит|паспорт|токен|кошел|снилс|cvv/iu
+const LOOKALIKE = { a: 'а', e: 'е', o: 'о', p: 'р', c: 'с', x: 'х', y: 'у', k: 'к', m: 'м', t: 'т', h: 'н', b: 'в', '0': 'о', '3': 'з' }
+
+/** Есть ли в тексте просьба о данных или деньгах, с поправкой на подмену букв. */
+export function isSensitive(text) {
+  const norm = String(text ?? '').normalize('NFKC').replace(/[\p{Cf}]/gu, '').toLowerCase().replace(/ё/g, 'е')
+  if (SENSITIVE.test(norm)) return true
+  // Латинские буквы внутри кириллического слова — подмена.
+  const folded = norm.replace(/[\p{L}\d]+/gu, (w) => (/[а-я]/.test(w) ? w.replace(/[aeopcxykmthb03]/g, (ch) => LOOKALIKE[ch]) : w))
+  if (SENSITIVE.test(folded)) return true
+  return SENSITIVE_TIGHT.test(folded.replace(/[^\p{L}\d]+/gu, ''))
+}
+
+/** Короткий итог прямой отправки для модели. */
+export function directSummary({ sent, failed = 0, skipped = 0, notSent = 0 }) {
+  return `Дошло ${sent}${failed ? `, не дошло ${failed}` : ''}${skipped ? `, не писал ${skipped}, задачи уже сделаны` : ''}${notSent ? `, не уйдёт ${notSent}` : ''}`
+}
+
+/** Сколько человеко-сообщений без черновика просящий отправил сегодня. */
+function directToday(ownerId, now) {
+  return prisma.botRoundTarget.count({
+    where: { round: { ownerId, direct: true, createdAt: { gte: mskDayStart(mskDayKey(now)) } } },
+  })
+}
+
+/**
+ * Можно ли писать без черновика. null — можно, иначе одна фраза: почему
+ * показан черновик. Проверка чужих задач и перекрытие поручений уже были.
+ */
+async function draftReason({ owner, people, texts, unchecked, now }) {
+  if (!['admin', 'lead'].includes(owner.role)) return 'просит не владелец и не руководитель'
+  if (people.length > DIRECT_PEOPLE_MAX) return `людей больше ${DIRECT_PEOPLE_MAX}`
+  if (!people.every((p) => isNamedIn(p.person, texts))) return 'не все названы по имени в просьбе'
+  if (await hasNamesake(owner, people, texts)) return 'в команде есть тёзки или однофамильцы'
+  if (isQuietHour(now)) return 'сейчас ночь, тихие часы'
+  if (people.some((p) => noLinks(p.text) !== p.text)) return 'в текстах есть ссылки'
+  if (people.some((p) => isSensitive(p.text))) return 'в сообщении просьба о данных или деньгах'
+  if (unchecked) return 'проверены не все названия задач'
+  if ((await directToday(owner.id, now)) + people.length > DIRECT_PER_DAY) return `дневной лимит ${DIRECT_PER_DAY} сообщений без черновика исчерпан`
+  return null
+}
+
+/**
+ * Что написать просящему, когда сообщения ушли без черновика: кому и что
+ * именно. sent — [{ label, text }], остальные списки — подписи.
+ */
+export function directNote({ sent, failed, skipped, notSent = [], collect, deadlineAt }) {
+  const lines = []
+  if (sent.length) {
+    lines.push('Написал')
+    for (const p of sent) lines.push(`<b>${escapeHtml(p.label)}</b>`, escapeHtml(p.text))
+  }
+  const plainLines = []
+  if (failed.length) plainLines.push('Не дошло', ...failed)
+  if (skipped.length) plainLines.push('Не писал, задачи уже сделаны', ...skipped)
+  if (notSent.length) plainLines.push('Не уйдёт', ...notSent)
+  if (!sent.length && !failed.length && !skipped.length) plainLines.push('Никому не написал')
+  lines.push(...plainLines.map((l) => escapeHtml(l)))
+  if (collect && sent.length) lines.push(`Отчёт пришлю к ${hm(deadlineAt)}`)
+  return lines.join('\n')
 }
 
 /** Ссылки и упоминания в текстах — Ян должен их видеть до отправки. */
@@ -137,10 +278,13 @@ export function foreignText(problems, labels, viewer) {
 }
 
 /**
- * Черновик поручения от агента. messages — [{ person_id, text }].
- * Возвращает { shown, text }: показан ли черновик и текст для модели.
+ * Поручение от агента. messages — [{ person_id, text }]. texts — слова
+ * просящего (только текущее сообщение): назвал всех по имени и условия
+ * выполнены, сообщения уходят сразу, иначе показан черновик.
+ * Возвращает { shown, text, direct }: показано ли сообщение просящему
+ * (черновик или «Написал») и текст для модели.
  */
-export async function createDraft(owner, chatId, { topic, minutes, collect = true, messages = [], new_round: newRound = false }, now = new Date()) {
+export async function createDraft(owner, chatId, { topic, minutes, collect = true, messages = [], new_round: newRound = false }, now = new Date(), { texts = [] } = {}) {
   const seen = new Set()
   const people = []
   const skipped = []
@@ -184,28 +328,57 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   if (foreign.incomplete) console.warn(`[агент] поручение: названия задач проверены не все, их больше ${SCAN_MAX} или упоминаний слишком много`)
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
   const subject = cut(plain(String(topic ?? ''), 500) || 'Узнать, как дела', 500)
+  const links = linksIn(people.map((p) => p.text))
+  const reason = await draftReason({ owner, people, texts, unchecked: foreign.incomplete, now })
+  const direct = reason === null
   // Прежний черновик этого человека больше не нужен: новый его заменяет.
-  await prisma.botRound.updateMany({ where: { ownerId: owner.id, status: 'draft' }, data: { status: 'cancelled', closedAt: now } })
+  // Прямая отправка чужой черновик не трогает.
+  if (!direct) await prisma.botRound.updateMany({ where: { ownerId: owner.id, status: 'draft' }, data: { status: 'cancelled', closedAt: now } })
   const round = await prisma.botRound.create({
     data: {
       ownerId: owner.id,
       topic: subject,
       collect: Boolean(collect),
       deadlineAt,
+      direct,
+      ...(direct ? { status: 'sent', sentAt: now } : {}),
       targets: { create: people.map((p) => ({ userId: p.person.id, text: p.text })) },
     },
   })
+
+  if (direct) {
+    let out
+    try {
+      out = await deliverRound(owner, round, labels)
+    } catch (e) {
+      // Сбой посередине: часть людей могла уже получить сообщение. Повторять
+      // нельзя, иначе им придёт второй раз; просящему честно говорим.
+      console.error(`[агент] прямая отправка: ${e.name}`)
+      await prisma.botRoundTarget.updateMany({ where: { roundId: round.id, status: 'pending' }, data: { status: 'failed' } }).catch(() => {})
+      await tellChat(chatId, 'Отправка сорвалась посередине\nКому-то могло уже дойти, повторять не буду', { userId: owner.id }).catch(() => {})
+      return { shown: true, direct: true, text: 'Отправка сорвалась посередине, часть людей могла получить сообщение. Повторно не отправляй, просящему бот уже сказал.' }
+    }
+    const note = directNote({ sent: out.sentPeople, failed: out.failedLabels, skipped: out.skipped, notSent: skipped, collect: round.collect, deadlineAt })
+    const shown = await tellChat(chatId, note, { userId: owner.id })
+    const summary = directSummary({ sent: out.sent, failed: out.failedLabels.length, skipped: out.skipped.length, notSent: skipped.length })
+    return {
+      shown: Boolean(shown.ok),
+      direct: true,
+      text: `Написал сам, без черновика, человек просил прямо. ${summary}. ${shown.ok ? 'Просящему бот уже ответил, ничего больше не пиши.' : 'Подтверждение просящему не дошло, скажи ему коротко, кому написал.'}`,
+    }
+  }
+
   const shown = await tellChat(chatId, draftText({ people: people.map((p) => ({ label: labels.get(p.person.id), text: p.text })), skipped }), { userId: owner.id })
   // Кнопки — отдельным коротким сообщением: длинный черновик телеграм режет
   // на части, и кнопки не должны потеряться вместе с частью.
   const asked = shown.ok && await tellChat(chatId, confirmText({
-    topic: subject, collect: round.collect, deadlineAt, count: people.length, links: linksIn(people.map((p) => p.text)), unchecked: foreign.incomplete,
+    topic: subject, collect: round.collect, deadlineAt, count: people.length, links, unchecked: foreign.incomplete,
   }), { userId: owner.id, buttons: BUTTONS(round.id) })
   if (!asked?.ok) {
     await prisma.botRound.update({ where: { id: round.id }, data: { status: 'cancelled', closedAt: now } })
     return { shown: false, text: 'Черновик не отправился, сбой телеграма. Скажи, чтобы попробовали ещё раз.' }
   }
-  return { shown: true, text: `Черновик на ${people.length} чел. показан с кнопкой «Отправить»${skipped.length ? `, не уйдёт ${skipped.length}` : ''}. Ничего больше не пиши.` }
+  return { shown: true, text: `Показан черновик на ${people.length} чел. с кнопкой «Отправить», сразу не отправлено, потому что ${reason}${skipped.length ? `. Не уйдёт ${skipped.length}` : ''}. Ничего больше не пиши.` }
 }
 
 /** Отправить человеку: временный сбой телеграма — ещё раз через пару секунд. */
@@ -239,11 +412,26 @@ export async function decideDraft(user, roundId, go, now = new Date()) {
   const claimed = await prisma.botRound.updateMany({ where: { id: round.id, status: 'draft' }, data: { status: 'sent', sentAt: now, deadlineAt } })
   if (!claimed.count) return 'Уже отправлено'
 
+  const out = await deliverRound(user, round)
+  return sentNote({ sent: out.sent, failed: out.failed, skipped: out.skipped, collect: round.collect, deadlineAt })
+}
+
+/**
+ * Общая часть для кнопки «Отправить» и прямой отправки: поручение уже в
+ * статусе sent. Каждому адресату права проверяются заново, задачи из текста
+ * перечитываются: все сделаны — человеку не пишем. labels — подписи, если
+ * уже известны. Возвращает { sent, failed, skipped, sentPeople, failedLabels }:
+ * skipped это подписи тех, кому не писали.
+ */
+async function deliverRound(user, round, labels = new Map()) {
   const targets = await prisma.botRoundTarget.findMany({ where: { roundId: round.id } })
   let sent = 0
   const skipped = []
+  const sentPeople = []
+  const failedLabels = []
   for (const t of targets) {
     const allowed = await personInScope(user, t.userId)
+    const label = allowed ? labelOf(allowed) : labels.get(t.userId) ?? 'другой человек'
     // Черновик лежал до трёх часов: человек мог уже сделать всё, о чём мы
     // собрались спросить. Тогда ему не пишем. Не смогли прочитать задачи — пишем как есть.
     const done = allowed && await allTitlesDone(t.userId, t.text).catch((e) => {
@@ -257,12 +445,17 @@ export async function decideDraft(user, roundId, go, now = new Date()) {
     }
     const res = allowed ? await deliver(t.userId, escapeHtml(t.text), { source: 'round', roundTargetId: t.id }) : { ok: false }
     await prisma.botRoundTarget.update({ where: { id: t.id }, data: res.ok ? { status: 'sent', sentAt: new Date() } : { status: 'failed' } })
-    if (res.ok) sent += 1
+    if (res.ok) {
+      sent += 1
+      sentPeople.push({ label, text: t.text })
+    } else {
+      failedLabels.push(label)
+    }
   }
   const failed = targets.length - sent - skipped.length
   // Все пропущены — ждать некого и отчёта не будет.
   if (skipped.length === targets.length) await prisma.botRound.update({ where: { id: round.id }, data: { status: 'closed', closedAt: new Date() } })
-  return sentNote({ sent, failed, skipped, collect: round.collect, deadlineAt })
+  return { sent, failed, skipped, sentPeople, failedLabels }
 }
 
 /** Что дописать под черновиком после кнопки «Отправить». */

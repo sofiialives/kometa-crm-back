@@ -110,6 +110,8 @@ model User {
   botStyleNotes             BotStyleNote[]   @relation("BotStyleNoteFor")
   botStyleNotesMade         BotStyleNote[]   @relation("BotStyleNoteAuthor")
   botRounds                 BotRound[]       @relation("BotRoundOwner")
+  botTaskOffersMade         BotTaskOffer[]   @relation("BotTaskOfferRequester")
+  botTaskOffersFor          BotTaskOffer[]   @relation("BotTaskOfferAssignee")
   botRoundTargets           BotRoundTarget[]
 
   ambassadorReports       AmbassadorReport[]       @relation("AmbassadorReportManager")
@@ -1271,6 +1273,9 @@ model BotRound {
   reportText  String?
   reportTries Int     @default(0)
 
+  // true — агент написал сам, без черновика и кнопки: для лимита в день и отчётов.
+  direct Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   targets BotRoundTarget[]
@@ -1348,6 +1353,36 @@ model BotStyleNote {
   removedAt   DateTime?
 
   @@index([userId, removedAt])
+}
+
+// Задача, которую Ян или руководитель попросили поставить через агента.
+// Пока не нажата кнопка «Поставить», в CRM ничего не создано. draft — ждёт
+// решения (живёт 3 часа), created — задача поставлена, cancelled — отменено
+// или отказ. workId пуст у личной задачи на день; связи с Work нет, чтобы
+// удаление работы не цеплялось за журнал предложений.
+model BotTaskOffer {
+  id String @id @default(cuid())
+
+  requesterId String
+  requester   User   @relation("BotTaskOfferRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  assigneeId  String
+  assignee    User   @relation("BotTaskOfferAssignee", fields: [assigneeId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  deadline    DateTime
+  startAt     DateTime?
+  workId      String?
+  // Слова агента исполнителю, если были.
+  note        String?
+
+  status String  @default("draft")
+  taskId String?
+
+  createdAt DateTime  @default(now())
+  decidedAt DateTime?
+
+  @@index([requesterId, createdAt])
 }
 
 // Что бот уже отправил: «напомнил о задаче X», «написал про заявку Y».
