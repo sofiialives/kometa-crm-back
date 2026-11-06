@@ -105,12 +105,14 @@ export async function tellOwners(text, opts = {}) {
   }
   let ok = false
   let retry = false
+  let unsure = false
   for (const id of ids) {
     const res = await tell(id, text, opts)
     ok ||= res.ok
     retry ||= Boolean(res.retry)
+    unsure ||= Boolean(res.unsure)
   }
-  return { ok, retry: !ok && retry }
+  return { ok, retry: !ok && retry, unsure: !ok && unsure }
 }
 
 /**
@@ -144,7 +146,9 @@ export async function sendOnce(key, send) {
   if ((await hasNotice(key)) || !(await claimNotice(key))) return { ok: false, skipped: true }
   try {
     const res = await send()
-    if (!res?.ok && res?.retry) await releaseNotice(key)
+    // Не дождались ответа телеграма (unsure): сообщение могло дойти, ключ
+    // не отпускаем, иначе следующий проход отправит его второй раз.
+    if (!res?.ok && res?.retry && !res?.unsure) await releaseNotice(key)
     return res
   } catch (e) {
     await releaseNotice(key)

@@ -156,7 +156,7 @@ export async function tickTaskStarts(now = new Date()) {
       for (const task of claimed) await releaseNotice(keyOf(task))
       throw e
     }
-    if (!res?.ok && res?.retry) for (const task of claimed) await releaseNotice(keyOf(task))
+    if (!res?.ok && res?.retry && !res?.unsure) for (const task of claimed) await releaseNotice(keyOf(task))
   }
 }
 
