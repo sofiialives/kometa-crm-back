@@ -18,7 +18,7 @@ import { currentTurn, ownerSystem, roundSection, staffSystem } from '../ai/syste
 
 const M = (usd) => Math.round(usd * 1_000_000)
 
-describe('деньги на ИИ — не больше $60 в месяц', () => {
+describe('деньги на ИИ — не больше $80 в месяц', () => {
   test('цена по модели: миллион на входе у Sonnet — $2, у Haiku — $0,10', () => {
     assert.equal(costMicros({ input_tokens: 1_000_000 }, 'claude-sonnet-5-5'), M(2))
     assert.equal(costMicros({ input_tokens: 1_000_000 }, 'claude-haiku-5-5'), M(0.1))
@@ -57,8 +57,9 @@ describe('деньги на ИИ — не больше $60 в месяц', () =>
     assert.doesNotMatch(limitText({ status: 'budget', why: 'day' }, true), /работают как обычно/)
   })
 
-  test('по умолчанию месяц меньше лимита в консоли $60', () => {
-    assert.ok(env.aiMonthlyUsd < 60)
+  test('по умолчанию $80 в месяц и $3,5 в день', () => {
+    assert.equal(env.aiMonthlyUsd, 80)
+    assert.equal(env.aiDailyUsd, 3.5)
     assert.equal(env.aiModel, 'claude-sonnet-5-5')
     assert.ok(PRICES[env.aiFallbackModel].input < PRICES[env.aiModel].input)
   })
