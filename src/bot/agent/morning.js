@@ -145,7 +145,9 @@ export function morningTemplate({ name, today = 0, overdue = 0, hierarchy = 0, o
 
 /** Раунд обхода за этот день, если уже есть. */
 function todaysRound(day) {
-  return prisma.botRound.findFirst({ where: { kind: 'morning', createdAt: { gte: mskDayStart(day) } } })
+  // По sentAt, который ставит бот, а не по createdAt из базы: часы одни и те же.
+  const start = mskDayStart(day)
+  return prisma.botRound.findFirst({ where: { kind: 'morning', sentAt: { gte: start, lt: new Date(start.getTime() + 24 * 60 * 60 * 1000) } } })
 }
 
 async function ensureRound(owner, now, day) {
