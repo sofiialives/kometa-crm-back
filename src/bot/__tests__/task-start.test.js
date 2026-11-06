@@ -65,6 +65,22 @@ describe('«Не успеваю» на несколько задач', () => {
   })
 })
 
+describe('группа по минуте начала', () => {
+  test('12:00:00 и 12:00:30 — одно сообщение, один ключ', async (t) => {
+    const h = botHarness(t)
+    const a = { ...task('a', '12:00'), startAt: new Date(T('12:00').getTime()) }
+    const b = { ...task('b', '12:00'), startAt: new Date(T('12:00').getTime() + 30000) }
+    assert.equal(startGroups([a, b]).length, 1)
+    patch(t, prisma.motivationAway, 'findFirst', async () => null)
+    patch(t, prisma.task, 'findMany', async () => [a, b])
+    await tickTaskStarts(T('11:56'))
+    await tickTaskStarts(T('11:57'))
+    assert.equal(h.sent.length, 1)
+    assert.match(h.sent[0].text, /«Задача a»\n«Задача b»/)
+    assert.ok([...h.notices].some((k) => k === `task-start:u1:${Math.floor(T('12:00').getTime() / 60000)}`))
+  })
+})
+
 describe('напоминание не теряется, если проход пропустили', () => {
   test('окно — все оставшиеся 5 минут, а не одна минута; текст «скоро», если осталось меньше', async (t) => {
     const h = botHarness(t)

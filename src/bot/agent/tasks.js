@@ -88,11 +88,14 @@ export async function eveningOpenTasks(now = new Date()) {
   return sent
 }
 
-/** Задачи по человеку и времени начала: на 12:00 их может быть несколько, сообщение одно. */
+/** Минута начала: 12:00:00 и 12:00:30 — одно время начала. */
+export const startMinute = (date) => Math.floor(new Date(date).getTime() / 60000)
+
+/** Задачи по человеку и минуте начала: на 12:00 их может быть несколько, сообщение одно. */
 export function startGroups(tasks) {
   const groups = new Map()
   for (const task of tasks) {
-    const key = `${task.ownerId}:${task.startAt.getTime()}`
+    const key = `${task.ownerId}:${startMinute(task.startAt)}`
     if (!groups.has(key)) groups.set(key, { ownerId: task.ownerId, startAt: task.startAt, tasks: [] })
     groups.get(key).tasks.push(task)
   }
@@ -128,7 +131,7 @@ export async function tickTaskStarts(now = new Date()) {
     // напоминание в 8:55, а задача на 21:00 не получает его в 20:55.
     if (isQuietHour(group.startAt)) continue
     if ((await activeAway(group.ownerId, now)) || (await hasEndedDay(group.ownerId, now))) continue
-    await sendOnce(`task-start:${group.ownerId}:${group.startAt.getTime()}`, () => tell(group.ownerId, startText(group, now),
+    await sendOnce(`task-start:${group.ownerId}:${startMinute(group.startAt)}`, () => tell(group.ownerId, startText(group, now),
       { buttons: taskButtons(group.tasks) }))
   }
 }
