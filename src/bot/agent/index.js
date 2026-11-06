@@ -17,11 +17,12 @@ let running = false
 const STEPS = [
   ['отлучки', tickBreaks],
   ['задачи', tickTaskStarts],
-  ['не начатые задачи', tickNotStarted],
   ['напоминания', tickReminders],
   ['чек-ин', tickCheckin],
   ['лента', tickFeed],
   ['поручения', tickRounds],
+  // Последним: вопросы агента могут занять до ~20 секунд и не должны задерживать остальное.
+  ['не начатые задачи', tickNotStarted],
 ]
 
 export async function runAgentOnce(now = new Date()) {

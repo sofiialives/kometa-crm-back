@@ -16,7 +16,7 @@ import { nudgeSystem } from './system.js'
  * deps подменяют базу и API в проверках: pick, can, take, record, create,
  * а также brief, rows, shared, personal.
  */
-export async function nudgeText({ user, titles, startAt, minutes, now = new Date() }, deps = {}) {
+export async function nudgeText({ user, titles, startAt, minutes, now = new Date(), timeoutMs = 10_000 }, deps = {}) {
   try {
     const check = await preflight({ userId: user.id, role: user.role, kind: 'nudge' }, deps)
     if (check.status !== 'ok') return null
@@ -36,7 +36,7 @@ export async function nudgeText({ user, titles, startAt, minutes, now = new Date
       maxTokens: 600,
       maxSteps: 1,
       effort: 'low',
-      deadlineMs: 30_000,
+      deadlineMs: Math.max(5000, timeoutMs),
     }, deps)
     if (res.status !== 'ok') return null
     const text = noLinks(plainStyle(cut(res.text, 500)))

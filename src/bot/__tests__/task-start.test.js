@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { lateForTask, reportTaskLate, startGroups, startText, taskButtons } from '../agent/tasks.js'
+import { lateForTask, reportTaskLate, startGroups, startText, taskButtons, tickTaskStarts } from '../agent/tasks.js'
 import { peek } from '../agent/state.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
@@ -62,5 +62,19 @@ describe('«Не успеваю» на несколько задач', () => {
     assert.ok(toOwner)
     assert.equal((toOwner.text.match(/«Задача/g) ?? []).length, 5)
     assert.match(toOwner.text, /\nи ещё 4\n/)
+  })
+})
+
+describe('напоминание не теряется, если проход пропустили', () => {
+  test('окно — все оставшиеся 5 минут, а не одна минута; текст «скоро», если осталось меньше', async (t) => {
+    const h = botHarness(t)
+    const seen = []
+    patch(t, prisma.task, 'findMany', async (q) => { seen.push(q.where.startAt); return [task('a', '12:03')] })
+    patch(t, prisma.motivationAway, 'findFirst', async () => null)
+    await tickTaskStarts(T('12:00'))
+    assert.equal(seen[0].gt.getTime(), T('12:00').getTime())
+    assert.equal(seen[0].lte.getTime(), T('12:05').getTime())
+    assert.match(h.sent[0].text, /^Скоро, в <b>12:03<\/b>/)
+    assert.match(startText({ startAt: T('12:05'), tasks: [task('a', '12:05')] }, T('12:00')), /^Через 5 минут/)
   })
 })

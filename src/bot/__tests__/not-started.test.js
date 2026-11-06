@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
 import { env } from '../../config/env.js'
 import { nudgeText } from '../ai/nudge.js'
-import { notStartedText, tickNotStarted } from '../agent/tasks.js'
+import { askAll, notStartedText, tickNotStarted } from '../agent/tasks.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
 
@@ -81,5 +81,45 @@ describe('текст вопроса пишет агент', () => {
     assert.equal(await nudgeText(base, { ...deps('Привет'), pick: async () => ({ model: null, why: 'day' }) }), null)
     assert.equal(await nudgeText(base, deps('   ')), null)
     assert.equal(await nudgeText(base, deps('Глянь t.me/x')), 'Глянь [ссылка]')
+  })
+})
+
+describe('вопросы агента не держат проход', () => {
+  const job = (id) => ({ userId: id, owner: { id, name: id, role: 'staff' }, list: [{ id: `t${id}`, title: `Задача ${id}` }], startAt: T('12:00'), minutes: 20 })
+
+  test('агент не ответил за отведённое время — сразу шаблон, остальные не ждут по очереди', async (t) => {
+    const h = botHarness(t)
+    const started = Date.now()
+    await askAll([job('a'), job('b'), job('c')], NOW, { nudge: () => new Promise(() => {}), eachMs: 60, totalMs: 5000 })
+    assert.ok(Date.now() - started < 400, 'три человека параллельно, а не по очереди')
+    assert.equal(h.sent.length, 3)
+    assert.ok(h.sent.every((m) => /должна была начаться/.test(m.text)))
+  })
+
+  test('не больше трёх одновременно, сбой агента — шаблон, ответ агента — его текст', async (t) => {
+    const h = botHarness(t)
+    let live = 0
+    let peak = 0
+    const nudge = async ({ user }) => {
+      live += 1
+      peak = Math.max(peak, live)
+      await new Promise((r) => setTimeout(r, 20))
+      live -= 1
+      if (user.id === 'e') throw new Error('сбой')
+      return user.id === 'a' ? 'Как дела с макетом' : null
+    }
+    await askAll(['a', 'b', 'c', 'd', 'e'].map(job), NOW, { nudge, eachMs: 500, totalMs: 5000 })
+    assert.equal(peak, 3)
+    assert.equal(h.sent.length, 5)
+    assert.equal(h.sent.find((m) => m.chatId === 'chat-a').text, 'Как дела с макетом')
+    assert.match(h.sent.find((m) => m.chatId === 'chat-e').text, /должна была начаться/)
+  })
+
+  test('общий бюджет времени вышел — остальным шаблон без запроса к агенту', async (t) => {
+    const h = botHarness(t)
+    let calls = 0
+    await askAll(['a', 'b', 'c', 'd'].map(job), NOW, { nudge: async () => { calls += 1; return null }, parallel: 1, totalMs: -1 })
+    assert.equal(calls, 0)
+    assert.equal(h.sent.length, 4)
   })
 })
