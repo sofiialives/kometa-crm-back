@@ -177,6 +177,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
         status: target.status,
         replies: target.replies,
         maxReplies: ROUND_REPLIES_MAX,
+        kind: target.round.kind,
       })
       : ''
     const dynamic = [personal, round].filter(Boolean).join('\n\n') || null

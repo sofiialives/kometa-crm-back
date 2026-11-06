@@ -35,8 +35,8 @@ export const MAX_PEOPLE = 25
 const MAX_TEXT = 700
 // Отчёт застрял (процесс перезапустился посреди отправки) — через 10 минут
 // следующий проход возьмётся снова; после пяти попыток сдаёмся.
-const REPORT_STUCK_MS = 10 * 60 * 1000
-const REPORT_TRIES = 5
+export const REPORT_STUCK_MS = 10 * 60 * 1000
+export const REPORT_TRIES = 5
 // Файлов одного человека в отчёте — не больше 20, остальные пометкой.
 const MAX_FILES = 20
 const IN = ['in', 'reply', 'file']
@@ -228,7 +228,7 @@ export function confirmText({ topic, collect, deadlineAt, count, links, unchecke
 /** Идущие поручения автора с отчётом, где среди адресатов есть кто-то из этого черновика. */
 async function overlapping(owner, ids, labels) {
   const rounds = await prisma.botRound.findMany({
-    where: { ownerId: owner.id, status: 'sent', collect: true, targets: { some: { userId: { in: ids }, status: { in: ['pending', 'sent', 'answered'] } } } },
+    where: { ownerId: owner.id, kind: 'ask', status: 'sent', collect: true, targets: { some: { userId: { in: ids }, status: { in: ['pending', 'sent', 'answered'] } } } },
     orderBy: { createdAt: 'desc' },
     take: 1,
     include: { targets: { where: { userId: { in: ids }, status: { in: ['pending', 'sent', 'answered'] } }, select: { userId: true } } },
@@ -246,7 +246,7 @@ export function runningText(r) {
 /** Поручение, в котором ждём ответы и отчёт: последнее или по id, только своё. */
 function runningRound(owner, roundId) {
   return prisma.botRound.findFirst({
-    where: { ownerId: owner.id, status: 'sent', collect: true, ...(roundId ? { id: String(roundId) } : {}) },
+    where: { ownerId: owner.id, kind: 'ask', status: 'sent', collect: true, ...(roundId ? { id: String(roundId) } : {}) },
     orderBy: { createdAt: 'desc' },
   })
 }
@@ -471,7 +471,8 @@ export function sentNote({ sent, failed, skipped, collect, deadlineAt }) {
 export function activeTarget(userId, now = new Date()) {
   return prisma.botRoundTarget.findFirst({
     where: { userId, status: { in: ['sent', 'answered'] }, round: { status: 'sent', collect: true, deadlineAt: { gt: now } } },
-    orderBy: { sentAt: 'desc' },
+    // Поручение владельца важнее утреннего обхода: 'ask' раньше 'morning'.
+    orderBy: [{ round: { kind: 'asc' } }, { sentAt: 'desc' }],
     include: { round: { include: { owner: PERSON } } },
   })
 }
@@ -498,7 +499,7 @@ export async function countReply(targetId) {
 /** Последнее поручение того, кто спрашивает, или по id — только своё. */
 async function roundOf(owner, roundId) {
   return prisma.botRound.findFirst({
-    where: { ownerId: owner.id, status: { in: ['sent', 'reporting', 'closed'] }, ...(roundId ? { id: String(roundId) } : {}) },
+    where: { ownerId: owner.id, kind: 'ask', status: { in: ['sent', 'reporting', 'closed'] }, ...(roundId ? { id: String(roundId) } : {}) },
     orderBy: { createdAt: 'desc' },
   })
 }
@@ -774,8 +775,9 @@ export async function sendRoundReport(roundId, now = new Date()) {
  */
 export async function tickRounds(now = new Date()) {
   await prisma.botRound.updateMany({ where: { status: 'reporting', closedAt: { lt: new Date(now.getTime() - REPORT_STUCK_MS) } }, data: { status: 'sent' } })
+  // Утренний обход ведёт и закрывает свой проход (agent/morning.js).
   const rounds = await prisma.botRound.findMany({
-    where: { status: 'sent' },
+    where: { status: 'sent', kind: 'ask' },
     orderBy: { deadlineAt: 'asc' },
     include: {
       targets: {
