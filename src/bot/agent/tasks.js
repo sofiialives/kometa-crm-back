@@ -5,6 +5,7 @@ import { mskDateStart } from '../../services/motivation/taskRules.js'
 import { updateTaskStatus } from '../../services/task.service.js'
 import { chargeNotStarted } from '../../services/motivation/autoTasks.service.js'
 import { dueInMinutes, isQuietHour, isWorkday, mskDayKey } from '../plan.js'
+import { nudgeText } from '../ai/nudge.js'
 import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
 import { crmButton, firstName, hasNotice, logEvent, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
@@ -170,6 +171,31 @@ export function notStartedGroups(tasks) {
   return [...groups.values()]
 }
 
+/** Шаблонный вопрос, когда агент недоступен. */
+export function notStartedText(tasks, startAt) {
+  const titles = tasks.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
+  const time = `<b>${hm(startAt)}</b>`
+  return titles.length > 1
+    ? `Эти задачи должны были начаться в ${time}\n${titles.join('\n')}\nКак дела?`
+    : `${titles[0]} должна была начаться в ${time}\nКак дела?`
+}
+
+/** Взял в работу хоть одну задачу этого времени или сейчас есть задача в процессе. */
+async function isWorking(ownerId, startAt, now) {
+  const dayStart = mskDateStart(mskDayKey(now))
+  const busy = await prisma.task.findFirst({
+    where: {
+      ownerId,
+      OR: [
+        { startAt, status: { in: ['progress', 'done'] } },
+        { status: 'progress', OR: [{ startAt: { gte: dayStart } }, { updatedAt: { gte: dayStart } }] },
+      ],
+    },
+    select: { id: true },
+  })
+  return Boolean(busy)
+}
+
 /**
  * Раз в минуту: задача должна была начаться 15+ минут назад, а она всё ещё
  * «На сегодня». Человеку — вопрос с кнопками, Яну — отчёт. Не трогаем, если
@@ -187,7 +213,7 @@ export async function tickNotStarted(now = new Date()) {
       startAt: { gt: from, lte: to },
       owner: { active: true, role: { in: PARTICIPANT_ROLES }, telegram: { chatId: { not: null } } },
     },
-    select: { id: true, title: true, description: true, deadline: true, origin: true, startAt: true, createdAt: true, ownerId: true, owner: { select: { id: true, name: true } } },
+    select: { id: true, title: true, description: true, deadline: true, origin: true, startAt: true, createdAt: true, ownerId: true, owner: { select: { id: true, name: true, role: true } } },
     orderBy: { startAt: 'asc' },
   })
   for (const group of notStartedGroups(tasks)) {
@@ -200,14 +226,11 @@ export async function tickNotStarted(now = new Date()) {
       select: { at: true, data: true },
     })
     if (excusedByLate(lates, now)) continue
-    // Предыдущая сегодняшняя задача ещё в работе — цепочка 10–11, 11–12 не
-    // повод для отчёта. Только сегодняшняя и со временем начала: забытая
-    // в «В процессе» старая задача не должна глушить отчёты навсегда.
-    const busy = await prisma.task.findFirst({
-      where: { ownerId: userId, status: 'progress', startAt: { gte: mskDateStart(mskDayKey(now)), lt: group.startAt } },
-      select: { id: true },
-    })
-    if (busy) continue
+    // Человек уже работает: взял в работу хоть одну задачу этой группы или у
+    // него сейчас что-то в процессе. Тогда ни вопроса, ни отчёта Яну, ни
+    // баллов за остальные. Забытая в «В процессе» старая задача не в счёт:
+    // считаем только ту, к которой сегодня прикасались.
+    if (await isWorking(userId, group.startAt, now)) continue
     const warned = await prisma.botEvent.findMany({
       where: { userId, type: 'task_late', OR: group.tasks.map((t) => ({ data: { path: ['taskId'], equals: t.id } })) },
       select: { data: true },
@@ -219,10 +242,7 @@ export async function tickNotStarted(now = new Date()) {
     const minutes = Math.round((now.getTime() - group.startAt.getTime()) / 60000)
     const titles = list.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
     const many = list.length > 1
-    const bullets = titles.map((t) => `• ${t}`).join('\n')
-    const res = await sendOnce(key, () => tellOwners(many
-      ? `<b>Задачи не начаты вовремя</b>\n${nameOf(group.owner)}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин\n\n${bullets}`
-      : `<b>Задача не начата вовремя</b>\n${nameOf(group.owner)}\n${titles[0]}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
+    const res = await sendOnce(key, () => tellOwners(`<b>${many ? 'Задачи не начаты вовремя' : 'Задача не начата вовремя'}</b>\n${nameOf(group.owner)}\n${titles.join('\n')}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
     if (res.skipped) continue
     // Временный сбой — ключ освобождён, повторим на следующем проходе целиком.
     if (!res.ok && res.retry) continue
@@ -232,11 +252,9 @@ export async function tickNotStarted(now = new Date()) {
       // сразу или заявкой владельцу. Сбой баллов не должен сорвать сообщения.
       await chargeNotStarted(t, now).catch((e) => console.error('[бот] баллы за неначатую задачу:', e.message))
     }
-    await tell(userId,
-      many
-        ? `Эти задачи должны были начаться в <b>${hm(group.startAt)}</b>\n\n${bullets}\n\nКак дела?`
-        : `Задача ${titles[0]} должна была начаться в <b>${hm(group.startAt)}</b>. Как дела?`,
-      { buttons: taskButtons(list) })
+    // Вопрос пишет агент по данным человека; нет ИИ, лимит или сбой, уходит шаблон.
+    const asked = await nudgeText({ user: group.owner, titles: list.map((t) => t.title), startAt: group.startAt, minutes, now })
+    await tell(userId, asked ? escapeHtml(asked) : notStartedText(list, group.startAt), { buttons: taskButtons(list) })
   }
 }
 
