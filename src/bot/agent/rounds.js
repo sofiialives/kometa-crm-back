@@ -550,6 +550,8 @@ export async function sendRoundReport(roundId, now = new Date()) {
     const res = await sendPart(round.id, 'text', () => tellChat(chatId, text, { userId: round.ownerId, source: 'report' }))
     // Не принял телеграм явно (429, 5xx) — повторим; нет — закрываем.
     if (!res.ok && !res.unsure) {
+      // Все попытки оборвались: Ян ждёт отчёт и должен знать, что его не будет.
+      if (res.exhausted) await tellChat(chatId, `Отчёт по поручению «${escapeHtml(cut(round.topic, 80))}» не дошёл из-за сбоя\nСпроси меня, кто что ответил`, { userId: round.ownerId }).catch(() => {})
       await (res.retry ? retry() : close())
       return { ok: false, reason: 'telegram' }
     }

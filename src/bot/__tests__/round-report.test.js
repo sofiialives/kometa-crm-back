@@ -155,12 +155,13 @@ describe('отчёт по поручению не дублируется', () =>
     assert.equal(ctx.sent.filter((m) => m === 'sendMessage').length, 1)
   })
 
-  test('попытки оборвались все пять раз — шестой нет, отчёт закрывается', async (t) => {
+  test('попытки оборвались все пять раз — шестой нет, Яну одна строка, что отчёта не будет, поручение закрыто', async (t) => {
     const ctx = setup(t)
     for (let n = 1; n <= 5; n += 1) ctx.notices.add(`round-report:r1:text:try:${n}`)
     const res = await sendRoundReport('r1')
     assert.equal(res.ok, false)
-    assert.equal(ctx.sent.filter((m) => m === 'sendMessage').length, 0)
+    assert.equal(ctx.sent.filter((m) => m === 'sendMessage').length, 1)
+    assert.equal(ctx.sent.filter((m) => m === 'sendPhoto').length, 0)
     assert.equal(ctx.state.status, 'closed')
   })
 })
