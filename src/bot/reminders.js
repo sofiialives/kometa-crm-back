@@ -1,6 +1,7 @@
 import { prisma } from '../config/prisma.js'
 import { env } from '../config/env.js'
-import { escapeHtml, sendMessage } from './telegram.js'
+import { tellChat } from './agent/notify.js'
+import { escapeHtml } from './telegram.js'
 
 const MSK_OFFSET_MS = 3 * 60 * 60 * 1000
 
@@ -25,8 +26,8 @@ export function buildReminder(call, person, everyone, minutes = env.remindBefore
     `<b>${escapeHtml(call.title)}</b>`,
   ]
   if (call.note) lines.push(escapeHtml(call.note))
-  if (others.length) lines.push('', `Вместе с вами ${others.join(', ')}`)
-  if (person.id !== call.ownerId) lines.push('', '<i>Вас позвали на этот звонок</i>')
+  if (others.length) lines.push('', `Вместе с тобой ${others.join(', ')}`)
+  if (person.id !== call.ownerId) lines.push('', '<i>Тебя позвали на этот звонок</i>')
 
   return lines.join('\n')
 }
@@ -84,7 +85,7 @@ async function remindAt(minutes) {
         skipped.add(person.name)
         continue
       }
-      const res = await sendMessage(chatId, buildReminder(call, person, people, minutes))
+      const res = await tellChat(chatId, buildReminder(call, person, people, minutes), { userId: person.id })
       if (res.ok) sent += 1
     }
   }
@@ -106,7 +107,11 @@ export async function forceMajeureIds(now = new Date()) {
   return new Set(rows.map((r) => r.userId))
 }
 
-/** Сообщения по расписанию — всем, кто подключился, кроме тех, у кого форс-мажор. */
+/**
+ * Сообщения по расписанию — всем, кто подключился, кроме тех, у кого
+ * форс-мажор. Каждое ложится в BotMessage, чтобы агент знал, что бот уже
+ * писал человеку.
+ */
 export async function broadcast(text) {
   const [links, away] = await Promise.all([
     prisma.telegramLink.findMany({
@@ -116,6 +121,6 @@ export async function broadcast(text) {
     forceMajeureIds(),
   ])
   const targets = links.filter((l) => !away.has(l.userId))
-  for (const l of targets) await sendMessage(l.chatId, text)
+  for (const l of targets) await tellChat(l.chatId, text, { userId: l.userId })
   console.log(`[бот] рассылка по расписанию: ${targets.length}${away.size ? `, с форс-мажором пропущено ${links.length - targets.length}` : ''}`)
 }

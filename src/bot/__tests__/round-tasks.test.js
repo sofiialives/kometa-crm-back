@@ -205,9 +205,9 @@ describe('чужая задача в сообщении человеку', () =>
   })
 
   test('текст для модели: кому, какая задача, чья; чужого из другого отдела не называем', () => {
-    const labels = new Map([['denis', '(SMM) Денис']])
+    const labels = new Map([['denis', 'Денис, SMM']])
     const problems = [{ userId: 'denis', title: POSTS, owners: [anton] }]
-    assert.match(foreignText(problems, labels, { role: 'admin' }), /\(SMM\) Денис, «Десять постов на MMGP и bits\.media» это задача \(SMM\) Антон, а у него такой нет/)
+    assert.match(foreignText(problems, labels, { role: 'admin' }), /Денис, SMM, «Десять постов на MMGP и bits\.media» это задача Антон, SMM, а у него такой нет/)
     assert.match(foreignText(problems, labels, { role: 'lead', id: 'l', departmentId: 'other' }), /это задача другого человека/)
     assert.match(foreignText(problems, labels, { role: 'admin' }), /Черновик не создан/)
   })
@@ -220,7 +220,7 @@ describe('чужая задача в сообщении человеку', () =>
     const res = await createDraft({ id: 'owner', role: 'admin' }, '9001', { topic: 'Как дела', minutes: 60, collect: true, messages: [{ person_id: 'denis', text: `Денис, привет. Как идёт «${POSTS}»?` }] })
     assert.equal(res.shown, false)
     assert.match(res.text, /Черновик не создан/)
-    assert.match(res.text, /\(SMM\) Денис/)
+    assert.match(res.text, /Денис, SMM/)
     assert.equal(created.length, 0)
     assert.equal(cancelled.length, 0)
   })
@@ -286,12 +286,12 @@ describe('свежие задачи при отправке', () => {
     const at = new Date('2026-11-04T10:00:00Z')
     const text = reportText({
       round: { topic: 'Как дела', sentAt: at },
-      answered: [], silent: [{ userId: 'a', label: '(SMM) Антон' }], failed: [],
-      skipped: [{ userId: 'd', label: '(SMM) Денис' }],
+      answered: [], silent: [{ userId: 'a', label: 'Антон, SMM' }], failed: [],
+      skipped: [{ userId: 'd', label: 'Денис, SMM' }],
       ai: null,
     })
-    assert.match(text, /Не ответили<\/b>\n• \(SMM\) Антон/)
-    assert.match(text, /Не писал, задачи уже сделаны<\/b>\n• \(SMM\) Денис/)
+    assert.match(text, /<b>Не ответили<\/b> Антон, SMM/)
+    assert.match(text, /\nНе писал, задачи уже сделаны\nДенис, SMM/)
   })
 
   test('get_round: кому не писали — так и сказано, и в «написал» он не входит', async (t) => {
@@ -302,7 +302,7 @@ describe('свежие задачи при отправке', () => {
     ])
     const text = await roundStatus({ id: 'owner', role: 'admin' })
     assert.match(text, /Написал 1, ответили 0/)
-    assert.match(text, /\(SMM\) Денис, не писал, его задачи уже сделаны/)
+    assert.match(text, /Денис, SMM, не писал, его задачи уже сделаны/)
   })
 
   test('выборка задач человека упёрлась в предел — не уверены, пишем как обычно', async (t) => {
@@ -312,9 +312,9 @@ describe('свежие задачи при отправке', () => {
 
   test('подтверждение: сколько отправил и кому не писал', () => {
     const deadlineAt = new Date('2026-11-04T14:00:00Z')
-    assert.equal(sentNote({ sent: 2, failed: 1, skipped: [], collect: true, deadlineAt }), 'Отправил 2, не дошло 1. Отчёт пришлю к 17:00')
-    assert.equal(sentNote({ sent: 1, failed: 0, skipped: ['(SMM) Денис'], collect: false, deadlineAt }), 'Отправил 1\nНе отправил (SMM) Денис, задачи уже сделаны')
-    assert.equal(sentNote({ sent: 0, failed: 0, skipped: ['(SMM) Денис', '(SMM) Антон'], collect: true, deadlineAt }), 'Никому не отправил\nНе отправил (SMM) Денис, задачи уже сделаны\nНе отправил (SMM) Антон, задачи уже сделаны')
+    assert.equal(sentNote({ sent: 2, failed: 1, skipped: [], collect: true, deadlineAt }), 'Отправил 2, не дошло 1\nОтчёт пришлю к 17:00')
+    assert.equal(sentNote({ sent: 1, failed: 0, skipped: ['Денис, SMM'], collect: false, deadlineAt }), 'Отправил 1\nНе отправил Денис, SMM, задачи уже сделаны')
+    assert.equal(sentNote({ sent: 0, failed: 0, skipped: ['Денис, SMM', 'Антон, SMM'], collect: true, deadlineAt }), 'Никому не отправил\nНе отправил Денис, SMM, задачи уже сделаны\nНе отправил Антон, SMM, задачи уже сделаны')
   })
 
   /** Подмена базы и телеграма для кнопки «Отправить»: возвращает, что записали и кому написали. */
@@ -348,7 +348,7 @@ describe('свежие задачи при отправке', () => {
     const note = await run.run()
     assert.deepEqual(run.written.map((w) => w.chat_id), ['1001'])
     assert.deepEqual(run.updates.map(([a]) => [a.where.id, a.data.status]), [['target-denis', 'skipped'], ['target-roman', 'sent']])
-    assert.match(note, /^Отправил 1\. Отчёт пришлю к \d\d:\d\d\nНе отправил \(SMM\) Денис, задачи уже сделаны$/)
+    assert.match(note, /^Отправил 1\nОтчёт пришлю к \d\d:\d\d\nНе отправил Денис, SMM, задачи уже сделаны$/)
     assert.equal(run.closed.length, 0)
   })
 
@@ -359,7 +359,7 @@ describe('свежие задачи при отправке', () => {
     })
     const note = await run.run()
     assert.equal(run.written.length, 0)
-    assert.match(note, /^Никому не отправил\nНе отправил \(SMM\) Денис, задачи уже сделаны$/)
+    assert.match(note, /^Никому не отправил\nНе отправил Денис, SMM, задачи уже сделаны$/)
     assert.equal(run.closed[0][0].data.status, 'closed')
   })
 
@@ -368,7 +368,7 @@ describe('свежие задачи при отправке', () => {
     patch(t, prisma.task, 'findMany', async () => { throw new Error('база') })
     const note = await run.run()
     assert.equal(run.written.length, 1)
-    assert.match(note, /^Отправил 1\./)
+    assert.match(note, /^Отправил 1\n/)
   })
 })
 

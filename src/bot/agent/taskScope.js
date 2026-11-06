@@ -46,6 +46,16 @@ export function metricWhere(metric, now) {
   throw new Error(`Нет такого счёта: ${metric}`)
 }
 
+/**
+ * Не закрыта и срок сегодня, даже если час уже прошёл. Это шире 'today' в
+ * metricWhere, где срок ещё впереди: к вечернему звонку просроченная утром
+ * задача тоже «осталась на сегодня».
+ */
+export function dueTodayWhere(now) {
+  const { start, end } = dayBounds(now)
+  return { status: OPEN, deadline: { gte: start, lt: end } }
+}
+
 const METRICS = ['overdue', 'today', 'later', 'progress', 'notStarted', 'done']
 const emptyCounts = () => ({ open: 0, overdue: 0, today: 0, later: 0, progress: 0, notStarted: 0, done: 0 })
 

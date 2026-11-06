@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { listIntent, tasksText } from '../agent/lists.js'
+import { listIntent, listText, tasksText } from '../agent/lists.js'
 import { patch } from './patch.js'
 
 // 4 ноября, 17:00 по Москве.
@@ -18,6 +18,13 @@ describe('просьба показать список', () => {
   })
   test('только звонки', () => {
     for (const t of ['что у меня по звонкам?', 'есть сегодня звонки?', 'когда звонок']) assert.equal(listIntent(t), 'calls', t)
+  })
+  test('задачи отдела без ИИ не собрать: руководителю — честно, что их собирает агент', async () => {
+    for (const t of ['покажи задачи отдела', 'какие задачи у ребят', 'список задач команды']) assert.equal(listIntent(t), 'team', t)
+    assert.equal(listIntent('мои задачи'), 'tasks')
+    const text = await listText('team', 'u1', NOW)
+    assert.match(text, /собирает агент/)
+    assert.doesNotMatch(text, /[.:!]/)
   })
   test('остальное — не список', () => {
     for (const t of ['отхожу на 20 минут', 'привет, как дела', 'что думаешь о моих задачах', '']) assert.equal(listIntent(t), null, t)
@@ -39,8 +46,8 @@ describe('списки задач в боте без ИИ', () => {
     })
     const text = await tasksText('u1', NOW)
     assert.match(text, /<b>Личные задачи на сегодня, 22<\/b>/)
-    assert.match(text, /И ещё 2 в CRM, во вкладке «Задачи»/)
-    assert.match(text, /<b>Задачи по Иерархии на сегодня, 1<\/b>\n• hierarchy 0, клиент Румикс, до 19:00/)
+    assert.match(text, /\nи ещё 2 в CRM, во вкладке «Задачи»/)
+    assert.match(text, /<b>Задачи по Иерархии на сегодня, 1<\/b>\n«hierarchy 0», клиент Румикс, до 19:00/)
     assert.match(text, /Со сроком на завтра и позже ещё личных 2$/m)
     assert.match(text, /<b>Личные просроченные задачи, 1<\/b>/)
     assert.match(text, /<b>Просроченные задачи по Иерархии, 2<\/b>/)

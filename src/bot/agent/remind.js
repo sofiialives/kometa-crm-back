@@ -51,7 +51,7 @@ export async function createReminder(user, when, text, now = new Date()) {
   state.clear(user.id)
   const ms = new Date(when).getTime() - now.getTime()
   if (!(ms >= 60000)) {
-    await tell(user.id, 'Это уже сейчас.\nНазови время хотя бы через минуту.')
+    await tell(user.id, 'Это уже сейчас\nНазови время хотя бы через минуту')
     return null
   }
   if (ms > MAX_AHEAD_MS) {
@@ -60,7 +60,7 @@ export async function createReminder(user, when, text, now = new Date()) {
   }
   const active = await prisma.botReminder.count({ where: { userId: user.id, sentAt: null, cancelledAt: null, at: { gt: now } } })
   if (active >= MAX_ACTIVE) {
-    await tell(user.id, `У тебя уже ${active} напоминаний, больше не держу.\nДождись ближайших или отмени лишние кнопкой «Отменить».`)
+    await tell(user.id, `У тебя уже ${active} напоминаний, больше не держу\nДождись ближайших или отмени лишние кнопкой «Отменить»`)
     return null
   }
   const reminder = await prisma.botReminder.create({ data: { userId: user.id, at: new Date(when), text: reminderText(text) } })
@@ -70,7 +70,7 @@ export async function createReminder(user, when, text, now = new Date()) {
   return reminder
 }
 
-const FAR_TEXT = 'Напомнить могу только сегодня или завтра.\nНапиши, например, <i>напомни завтра в 10:00 позвонить клиенту</i>'
+const FAR_TEXT = 'Напомнить могу только сегодня или завтра\nНапиши, например, <i>напомни завтра в 10:00 позвонить клиенту</i>'
 
 /** «В пятницу», «через неделю» — так далеко не напоминаем. */
 export async function tooFarReminder(user) {

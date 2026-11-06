@@ -6,9 +6,9 @@ import { MENU } from './agent/away.js'
 import { userByChat } from './agent/notify.js'
 
 const HELP =
-  'Привет. Я бот KOMETA.\n\n' +
-  'Чтобы я знал, кому писать, зайдите в CRM, откройте Настройки и нажмите «Подключить телеграм».\n' +
-  'Оттуда вы вернётесь сюда, и всё свяжется само.'
+  'Привет, я бот KOMETA\n\n' +
+  'Чтобы я знал, кому писать, зайди в CRM, открой Настройки и нажми «Подключить телеграм»\n' +
+  'Оттуда ты вернёшься сюда, и всё свяжется само'
 
 /**
  * Нас интересует одна команда — /start с кодом из ссылки, которую выдаёт
@@ -95,8 +95,8 @@ async function handleMessage(msg, files = filesOf(msg)) {
     if (!shouldAnswerStranger(`code:${chatId}`, Date.now(), { start: true })) return
     await sendMessage(
       chatId,
-      'Ссылка не подошла, скорее всего, она истекла.\n\n' +
-      'Откройте в CRM Настройки и нажмите «Подключить телеграм» заново.',
+      'Ссылка не подошла, скорее всего, она истекла\n\n' +
+      'Открой в CRM Настройки и нажми «Подключить телеграм» заново',
     )
     return
   }
@@ -123,12 +123,12 @@ async function handleMessage(msg, files = filesOf(msg)) {
 
   await sendMessage(
     chatId,
-    `Готово, ${escapeHtml(String(link.user.name || '').split(' ')[0] || 'коллега')}.\n\n` +
-    'Теперь я напомню о каждом звонке за 15 и за 5 минут.\n\n' +
+    `Готово, ${escapeHtml(String(link.user.name || '').split(' ')[0] || 'коллега')}\n\n` +
+    'Теперь я напомню о каждом звонке за 15 и за 5 минут\n\n' +
     (link.user.role === 'admin'
-      ? 'Сюда же будут приходить отчёты по команде.\nРешения принимаются кнопками под сообщениями.'
-      : 'Если отходишь, напиши мне, например, <i>отхожу на 30 минут</i> или <i>буду в 16:30</i>.\n' +
-        'Когда вернёшься, напиши <i>вернулся</i> или нажми кнопку ниже.'),
+      ? 'Сюда же будут приходить отчёты по команде\nРешения принимаются кнопками под сообщениями'
+      : 'Если отходишь, напиши мне, например, <i>отхожу на 30 минут</i> или <i>буду в 16:30</i>\n' +
+        'Когда вернёшься, напиши <i>вернулся</i> или нажми кнопку ниже'),
     { buttons: link.user.role === 'admin' ? undefined : MENU },
   )
   console.log(`[бот] ${link.user.name} подключил телеграм`)
@@ -144,7 +144,7 @@ async function handleCallback(cb) {
   }
   const user = await userByChat(chatId)
   if (!user) {
-    await answerCallback(cb.id, 'Сначала подключите телеграм в настройках CRM')
+    await answerCallback(cb.id, 'Сначала подключи телеграм в настройках CRM')
     return
   }
   await onCallback(cb, user)

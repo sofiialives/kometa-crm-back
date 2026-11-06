@@ -72,11 +72,12 @@ export async function tell(userId, text, opts = {}) {
 }
 
 /**
- * source — кто написал: ai — агент, round — сообщение по поручению; так
- * агент отличает свои ответы от шаблонов. roundTargetId — из разговора по
- * поручению.
+ * source — кто написал: ai — агент, round — сообщение по поручению; всё
+ * остальное шаблон бота (notice): в нём бывает чужой текст, поэтому агент
+ * читает его как данные, а не как свои слова. roundTargetId — из разговора
+ * по поручению.
  */
-export async function tellChat(chatId, text, { userId = null, buttons, source = null, roundTargetId = null } = {}) {
+export async function tellChat(chatId, text, { userId = null, buttons, source = 'notice', roundTargetId = null } = {}) {
   const res = await sendMessage(chatId, text, { buttons })
   if (res.ok) await logMessage({ userId, chatId, direction: 'out', text, source, roundTargetId })
   return res
@@ -104,12 +105,18 @@ export async function tellOwners(text, opts = {}) {
   }
   let ok = false
   let retry = false
+  let unsure = false
+  // Хоть одному владельцу точно не дошло (ошибка, а не таймаут) — повторять
+  // надо, даже если другому, может быть, дошло.
+  let failed = false
   for (const id of ids) {
     const res = await tell(id, text, opts)
     ok ||= res.ok
     retry ||= Boolean(res.retry)
+    unsure ||= Boolean(res.unsure)
+    failed ||= Boolean(!res.ok && res.retry && !res.unsure)
   }
-  return { ok, retry: !ok && retry }
+  return { ok, retry: !ok && retry, unsure: !ok && unsure && !failed }
 }
 
 /**
@@ -143,7 +150,9 @@ export async function sendOnce(key, send) {
   if ((await hasNotice(key)) || !(await claimNotice(key))) return { ok: false, skipped: true }
   try {
     const res = await send()
-    if (!res?.ok && res?.retry) await releaseNotice(key)
+    // Не дождались ответа телеграма (unsure): сообщение могло дойти, ключ
+    // не отпускаем, иначе следующий проход отправит его второй раз.
+    if (!res?.ok && res?.retry && !res?.unsure) await releaseNotice(key)
     return res
   } catch (e) {
     await releaseNotice(key)

@@ -90,16 +90,16 @@ export const env = {
   // Деньги на ИИ: основная модель — пока за день потрачено меньше
   // AI_DAILY_USD; потом запасная, ещё до AI_FALLBACK_DAILY_USD сверху; за
   // месяц всего не больше AI_MONTHLY_USD, дальше бот работает по правилам.
-  // 30 × ($2,5 + $0,3) = $84 больше месячного, поэтому месячный и держит
-  // итог: $58 при лимите $60 в консоли Anthropic.
-  aiDailyUsd: usd(process.env.AI_DAILY_USD, 2.5),
+  // 30 × ($3,5 + $0,3) = $114 больше месячного, поэтому месячный и держит
+  // итог: $80, лимит в консоли Anthropic ставить немного выше.
+  aiDailyUsd: usd(process.env.AI_DAILY_USD, 3.5),
   aiFallbackDailyUsd: usd(process.env.AI_FALLBACK_DAILY_USD, 0.3),
-  aiMonthlyUsd: usd(process.env.AI_MONTHLY_USD, 58),
+  aiMonthlyUsd: usd(process.env.AI_MONTHLY_USD, 80),
   // 0 — ИИ выключен совсем (аварийный выключатель без удаления ключа).
   aiDailyCap: /^\d+$/.test(process.env.AI_DAILY_CAP ?? '') ? Number(process.env.AI_DAILY_CAP) : 600,
   // Ещё один потолок — по объёму текста за день на всех (вход + выход),
   // на случай ошибки в подсчёте денег. Деньгами день кончается раньше:
-  // $2,5 на Sonnet — это около миллиона единиц текста.
+  // $3,5 на Sonnet — это около полутора миллионов единиц текста.
   aiDailyTokens: /^\d+$/.test(process.env.AI_DAILY_TOKENS ?? '') ? Number(process.env.AI_DAILY_TOKENS) : 6_000_000,
 
   // За сколько минут до звонка предупреждать.

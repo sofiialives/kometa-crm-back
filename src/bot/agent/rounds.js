@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { escapeHtml, sendAlbum, sendFileById } from '../telegram.js'
 import { isQuietHour } from '../plan.js'
 import { aiReport } from '../ai/report.js'
-import { plainStyle } from '../ai/style.js'
+import { noLinks, plainStyle } from '../ai/style.js'
 import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
@@ -67,7 +67,7 @@ const BUTTONS = (id) => [[{ text: 'Отправить', data: `rd:go:${id}` }, {
 export function draftText({ people, skipped }) {
   const lines = ['<b>Черновик, кому и что написать</b>']
   for (const p of people) lines.push('', `<b>${escapeHtml(p.label)}</b>`, escapeHtml(p.text))
-  if (skipped.length) lines.push('', '<b>Не уйдёт</b>', ...skipped.map((s) => `• ${escapeHtml(s)}`))
+  if (skipped.length) lines.push('', '<b>Не уйдёт</b>', ...skipped.map((s) => escapeHtml(s)))
   return lines.join('\n')
 }
 
@@ -75,9 +75,9 @@ export function draftText({ people, skipped }) {
 export function confirmText({ topic, collect, deadlineAt, count, links, unchecked = false }) {
   const lines = [
     `<b>Тема</b> ${escapeHtml(cut(topic, 300))}`,
-    collect ? `Кому ${count}, ответы соберу до ${hm(deadlineAt)} и пришлю отчёт.` : `Кому ${count}, просто напишу, отчёт не нужен.`,
+    collect ? `Кому ${count}, ответы соберу до ${hm(deadlineAt)} и пришлю отчёт` : `Кому ${count}, просто напишу, отчёт не нужен`,
   ]
-  if (links.length) lines.push(`В сообщениях есть ссылки, проверь их\n${links.slice(0, 10).map((l) => `• ${escapeHtml(cut(l, 80))}`).join('\n')}`)
+  if (links.length) lines.push(`В сообщениях есть ссылки, проверь их\n${links.slice(0, 10).map((l) => escapeHtml(cut(l, 80))).join('\n')}`)
   // Проверка чужих задач прошла не по всем: решает человек, глядя на тексты.
   if (unchecked) lines.push('Задач очень много, проверил не все названия\nПосмотри, что каждому написаны его задачи')
   lines.push('Отправить сообщения выше?')
@@ -268,7 +268,7 @@ export async function decideDraft(user, roundId, go, now = new Date()) {
 /** Что дописать под черновиком после кнопки «Отправить». */
 export function sentNote({ sent, failed, skipped, collect, deadlineAt }) {
   const tail = failed ? `, не дошло ${failed}` : ''
-  const head = collect ? `Отправил ${sent}${tail}. Отчёт пришлю к ${hm(deadlineAt)}` : `Отправил ${sent}${tail}`
+  const head = collect ? `Отправил ${sent}${tail}\nОтчёт пришлю к ${hm(deadlineAt)}` : `Отправил ${sent}${tail}`
   if (!skipped.length) return head
   const lines = skipped.map((label) => `Не отправил ${escapeHtml(label)}, задачи уже сделаны`)
   return [sent || failed ? head : 'Никому не отправил', ...lines].join('\n')
@@ -363,12 +363,18 @@ function plainReport(p) {
   return { points: p.summary ? [p.summary] : [], quote: first ? cut(first.text, 200) : null }
 }
 
-/** Текст отчёта для того, кто поручил. ai — { [userId]: { points, quote } } или null. */
+/**
+ * Текст отчёта для того, кто поручил. ai — { [userId]: { points, quote } } или null.
+ * Сначала одна строка о главном, дальше по человеку абзацем: «Николай,
+ * дизайн», суть короткими строками, его слова курсивом, задачи сейчас. Кто не
+ * ответил, одной строкой в конце. Без маркеров, двоеточий и скобок.
+ */
 export function reportText({ round, answered, silent, failed, skipped = [], ai, states = null }) {
+  const written = answered.length + silent.length
   const lines = [
     '<b>Отчёт по опросу</b>',
     escapeHtml(cut(round.topic, 300)),
-    `Написал ${answered.length + silent.length} в ${hm(round.sentAt)}, ответили ${answered.length}.`,
+    `Ответили ${answered.length} из ${written}, написал в ${hm(round.sentAt)}`,
   ]
   for (const p of answered) {
     // Модель вернула пустые пункты — берём суть из разговора, а не пустоту.
@@ -376,31 +382,27 @@ export function reportText({ round, answered, silent, failed, skipped = [], ai, 
     const got = ai?.[p.userId]
     const r = got?.points?.length ? got : { points: fallback.points, quote: got?.quote ?? fallback.quote }
     lines.push('', `<b>${escapeHtml(p.label)}</b>`)
-    // Пункты пишет модель — в стиле бота; цитата — слово в слово.
-    for (const point of (r.points ?? []).slice(0, 4)) lines.push(`• ${escapeHtml(plainStyle(cut(String(point).replace(/^\s*[-—–*•]\s*/, ''), 300)))}`)
+    // Строки пишет модель — в стиле бота; цитата — слово в слово.
+    for (const point of (r.points ?? []).slice(0, 4)) lines.push(escapeHtml(noLinks(plainStyle(cut(String(point), 300)))))
     if (r.quote) lines.push(`<i>«${escapeHtml(cut(r.quote, 200))}»</i>`)
     // Задачи на момент отчёта рядом с ответом: слова человека и CRM могут расходиться.
     const st = states?.get(p.userId)
-    if (st?.named.length) lines.push('Задачи сейчас', ...st.named.map((n) => `• ${escapeHtml(plain(n.title, 90))}, ${n.state}`))
+    if (st?.named.length) lines.push('Задачи сейчас', ...st.named.map((n) => `«${escapeHtml(plain(n.title, 90))}», ${n.state}`))
     else if (st) lines.push(`Задачи сейчас, ${st.summary}`)
     const files = p.messages.filter((m) => IN.includes(m.direction) && m.fileId).length
     if (files) lines.push(`Прислал файлов ${files}, они ниже`)
   }
+  if (skipped.length) lines.push('', 'Не писал, задачи уже сделаны', skipped.map((p) => escapeHtml(p.label)).join('; '))
   if (silent.length || failed.length) {
-    lines.push('', '<b>Не ответили</b>')
-    for (const p of silent) lines.push(`• ${escapeHtml(p.label)}`)
-    for (const p of failed) lines.push(`• ${escapeHtml(p.label)}, сообщение не дошло`)
-  }
-  if (skipped.length) {
-    lines.push('', '<b>Не писал, задачи уже сделаны</b>')
-    for (const p of skipped) lines.push(`• ${escapeHtml(p.label)}`)
+    const who = [...silent.map((p) => escapeHtml(p.label)), ...failed.map((p) => `${escapeHtml(p.label)}, сообщение не дошло`)]
+    lines.push('', `<b>Не ответили</b> ${who.join('; ')}`)
   }
   return lines.join('\n')
 }
 
 /**
- * Фото и видео — альбомами до 10, остальное по одному, с подписью «(Отдел)
- * Имя». У кружка подписи не бывает — перед ним имя отдельной строкой.
+ * Фото и видео — альбомами до 10, остальное по одному, с подписью «Имя,
+ * отдел». У кружка подписи не бывает — перед ним имя отдельной строкой.
  */
 async function sendFiles(chatId, ownerId, label, messages) {
   const all = messages.filter((m) => IN.includes(m.direction) && m.fileId)
@@ -428,12 +430,12 @@ async function sendFiles(chatId, ownerId, label, messages) {
     await send(() => sendFileById(chatId, m.fileKind, m.fileId, { caption }), 1)
   }
   const notes = []
-  if (all.length > files.length) notes.push(`И ещё файлов ${all.length - files.length}, больше 20 за раз не пересылаю.`)
-  if (lost) notes.push(`Не дошло файлов ${lost}, телеграм не принял. Можно попросить прислать их ещё раз.`)
+  if (all.length > files.length) notes.push(`И ещё файлов ${all.length - files.length}, больше 20 за раз не пересылаю`)
+  if (lost) notes.push(`Не дошло файлов ${lost}, телеграм не принял\nМожно попросить прислать их ещё раз`)
   if (notes.length) await tellChat(chatId, `${caption}\n${notes.join('\n')}`, { userId: ownerId, source: 'report' })
 }
 
-/** Кто ответил, кто молчит, у кого не дошло — с подписями «(Отдел) Имя». */
+/** Кто ответил, кто молчит, у кого не дошло — с подписями «Имя, отдел». */
 async function gather(round) {
   const targets = await targetsWithMessages(round.id)
   const labels = labelsFor(targets.map((t) => t.user))
@@ -613,7 +615,7 @@ export async function tickRounds(now = new Date()) {
       for (const t of live.filter((x) => x.status === 'sent' && x._count.messages === 0)) {
         // Отошёл или на форс-мажоре — не дёргаем.
         if (await activeAway(t.userId, now)) continue
-        await tell(t.userId, `Напомню про вопрос выше.\nОтветь, пожалуйста, до ${hm(r.deadlineAt)}, пары строк хватит.`, { source: 'round', roundTargetId: t.id })
+        await tell(t.userId, `Напомню про вопрос выше\nОтветь, пожалуйста, до ${hm(r.deadlineAt)}, пары строк хватит`, { source: 'round', roundTargetId: t.id })
       }
     }
   }
@@ -628,7 +630,7 @@ export async function askReportNow(owner, chatId, roundId = null) {
   if (!round) return { shown: false, text: 'Поручений ещё не было.' }
   if (!round.collect) return { shown: false, text: 'По этому поручению ответы не собирали, отчёта не будет.' }
   if (round.status !== 'sent') return { shown: false, text: 'Отчёт по последнему поручению уже отправлен. Если нужно, перескажи его по get_round.' }
-  const res = await tellChat(chatId, `Прислать отчёт сейчас и закончить сбор?\nКто ещё не ответил, в отчёт уже не попадёт.`, {
+  const res = await tellChat(chatId, `Прислать отчёт сейчас и закончить сбор?\nКто ещё не ответил, в отчёт уже не попадёт`, {
     userId: owner.id,
     buttons: [[{ text: 'Прислать', data: `rd:rp:${round.id}` }, { text: 'Подождать', data: `rd:wait:${round.id}` }]],
   })

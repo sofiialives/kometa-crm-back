@@ -13,7 +13,8 @@ import { recentRows, toMessages } from './memory.js'
 import { taskPrompt, TASK_SCHEMA } from './prompts.js'
 import { noLinks, plainStyle } from './style.js'
 import { currentTurn, ownerSystem, roundSection, staffSystem } from './system.js'
-import { roundTools, staffTools, teamTools } from './tools.js'
+import { personalNotesBlock, sharedNotesBlock } from './styleNotes.js'
+import { roundTools, staffTools, styleTools, teamTools } from './tools.js'
 
 export { untilFrom } from './tools.js'
 export { noLinks, plainStyle } from './style.js'
@@ -38,12 +39,12 @@ const OWNER_REPLY_MAX = 3500
 const NOTE_EVERY_MS = 10 * 60000
 const NOTES_PER_DAY = 5
 
-export const AI_LIMIT_TEXT = 'Лимит вопросов на сегодня закончился.\nОн обновится в 00:00 по Москве.'
-export const AI_MONTH_TEXT = 'Бюджет на ИИ в этом месяце закончился.\nДо 1-го числа я понимаю только команды.'
-const AI_FAIL_TEXT = 'Не получилось ответить, сбой у ИИ.\nПопробуй ещё раз через минуту.'
-const ROUND_ACK = 'Спасибо, записал и передам.'
+export const AI_LIMIT_TEXT = 'Лимит вопросов на сегодня закончился\nОн обновится в 00:00 по Москве'
+export const AI_MONTH_TEXT = 'Бюджет на ИИ в этом месяце закончился\nДо 1-го числа я понимаю только команды'
+const AI_FAIL_TEXT = 'Не получилось ответить, сбой у ИИ\nПопробуй ещё раз через минуту'
+const ROUND_ACK = 'Спасибо, записал и передам'
 // В разговоре по поручению данные CRM главнее текста сообщения, которое писалось раньше.
-const FRESH_NOTE = '\nЭто свежие данные на сейчас. Если они расходятся с текстом сообщения по поручению, верь им.'
+const FRESH_NOTE = '\nЭто свежие данные на сейчас. Если они расходятся с текстом сообщения по поручению, верь им'
 
 /**
  * Важное — Яну: не ночью, не чаще раза в 10 минут и не больше пяти в день
@@ -58,7 +59,7 @@ async function noteToOwner(user, note, text, now = new Date()) {
   await prisma.botNotice.create({ data: { key: `ai-note:${user.id}:${day}:${today.length + 1}` } })
   const person = await prisma.user.findUnique({ where: { id: user.id }, select: { id: true, name: true, role: true, department: { select: { name: true } } } })
   const res = await tellOwners(
-    `<b>Важное от агента</b>\n${escapeHtml(person ? labelOf(person) : nameOf(user))}\n${escapeHtml(plainStyle(noLinks(cut(note, 300))))}\n\n<i>${escapeHtml(noLinks(cut(text, 300)))}</i>`,
+    `<b>Важное от агента</b>\n${escapeHtml(person ? labelOf(person) : nameOf(user))}\n${escapeHtml(noLinks(plainStyle(cut(note, 300))))}\n\n<i>${escapeHtml(noLinks(cut(text, 300)))}</i>`,
   )
   return res.ok
 }
@@ -72,7 +73,7 @@ function typing(chatId) {
 
 // Инструменты, которые только читают. Если модель вызвала лишь их и
 // ничего не сказала, человек остался бы без ответа.
-const READ_ONLY = new Set(['get_team', 'get_person', 'get_works', 'get_round'])
+const READ_ONLY = new Set(['get_team', 'get_person', 'get_works', 'get_round', 'get_style_notes'])
 const acted = (tools = []) => tools.some((t) => !READ_ONLY.has(t))
 // Действия, которые сами отвечают человеку стандартной фразой. tell_owner
 // сюда не входит: человеку он ничего не пишет, только Яну.
@@ -101,14 +102,15 @@ export async function agentReady(user, kind = 'own') {
 /** Что сказать, когда ИИ сейчас недоступен по деньгам или лимиту. */
 export function limitText({ status, why }, owner) {
   const base = status === 'budget' && why === 'month' ? AI_MONTH_TEXT : AI_LIMIT_TEXT
-  return owner ? base : `${base}\n\nОтлучки, напоминания и списки задач работают как обычно.`
+  return owner ? base : `${base}\n\nОтлучки, напоминания и списки задач работают как обычно`
 }
 
 /** Инструменты по тому, кто пишет и идёт ли разговор по поручению. */
 function toolsFor(ctx, { owner, lead, target }) {
-  if (owner) return teamTools(ctx)
+  if (owner) return [...teamTools(ctx), ...styleTools(ctx)]
   return [
     ...staffTools(ctx),
+    ...styleTools(ctx),
     ...(lead ? teamTools(ctx, { team: true }) : []),
     ...(target && target.status !== 'answered' ? roundTools(ctx, target) : []),
   ]
@@ -158,12 +160,14 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
   }
   const stop = typing(chatId)
   try {
-    const [brief, rows, media] = await Promise.all([
+    const [brief, rows, media, shared, personal] = await Promise.all([
       owner ? teamBrief(user, now) : staffBrief(user.id, now),
       recentRows(user.id, { exceptIds: ids, now }),
       fileBlocks(files),
+      sharedNotesBlock(),
+      personalNotesBlock(user.id),
     ])
-    const dynamic = target
+    const round = target
       ? roundSection({
         ownerLabel: target.round.owner.role === 'admin' ? 'Яна' : `руководителя ${labelOf(target.round.owner)}`,
         topic: target.round.topic,
@@ -174,14 +178,15 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
         replies: target.replies,
         maxReplies: ROUND_REPLIES_MAX,
       })
-      : null
+      : ''
+    const dynamic = [personal, round].filter(Boolean).join('\n\n') || null
     const res = await runAgent({
       userId: user.id,
       role: user.role,
       kind: target ? 'round' : kind,
-      system: [owner ? ownerSystem() : staffSystem({ lead }), dynamic],
+      system: [owner ? ownerSystem({ notes: shared }) : staffSystem({ lead, notes: shared }), dynamic],
       tools: toolsFor(ctx, { owner, lead, target }),
-      messages: toMessages(rows, currentTurn({ brief: cut(brief, MAX_INPUT_CHARS) + (target ? FRESH_NOTE : ''), text, notes: media.notes, media: media.blocks }), { strict: team }),
+      messages: toMessages(rows, currentTurn({ brief: cut(brief, MAX_INPUT_CHARS) + (target ? FRESH_NOTE : ''), text, notes: media.notes, media: media.blocks })),
       maxTokens: team ? MAX_OUTPUT_TOKENS_TEAM : MAX_OUTPUT_TOKENS,
       maxSteps: team ? 8 : 4,
       effort: owner ? 'medium' : 'low',
@@ -195,7 +200,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
     if (res.status === 'ok' && res.text) {
       // Черновик, файл или отчёт бот уже показал — «Готово, жми Отправить» лишнее.
       if (ctx.quiet && res.text.length <= 200) return true
-      await tellChat(chatId, escapeHtml(plainStyle(cut(res.text, team ? OWNER_REPLY_MAX : REPLY_MAX))), { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null })
+      await tellChat(chatId, escapeHtml(noLinks(plainStyle(cut(res.text, team ? OWNER_REPLY_MAX : REPLY_MAX)))), { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null })
       if (target) await countReply(target.id)
       return true
     }

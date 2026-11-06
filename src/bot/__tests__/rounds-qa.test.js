@@ -35,7 +35,7 @@ describe('находки QA', () => {
     const at = new Date('2026-10-16T12:30:00Z')
     const text = reportText({
       round: { topic: 'т', sentAt: at },
-      answered: [{ userId: 'a', label: '(Дизайн) Роман', summary: 'Делает баннер, готов наполовину', messages: [{ direction: 'in', text: 'Делаю баннер', createdAt: at }] }],
+      answered: [{ userId: 'a', label: 'Роман, дизайн', summary: 'Делает баннер, готов наполовину', messages: [{ direction: 'in', text: 'Делаю баннер', createdAt: at }] }],
       silent: [],
       failed: [],
       ai: { a: { points: [], quote: null } },

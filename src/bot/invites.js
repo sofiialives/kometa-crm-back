@@ -1,6 +1,7 @@
 import { prisma } from '../config/prisma.js'
 import { env } from '../config/env.js'
-import { escapeHtml, sendMessage } from './telegram.js'
+import { tellChat } from './agent/notify.js'
+import { escapeHtml } from './telegram.js'
 
 /**
  * Сообщения о самом факте звонка: позвали, перенесли, отменили, сняли.
@@ -45,7 +46,7 @@ async function chatsOf(userIds) {
 
   const links = await prisma.telegramLink.findMany({
     where: { userId: { in: ids }, chatId: { not: null }, user: { active: true } },
-    select: { chatId: true, user: { select: { name: true } } },
+    select: { chatId: true, userId: true, user: { select: { name: true } } },
   })
   return links
 }
@@ -53,7 +54,7 @@ async function chatsOf(userIds) {
 async function send(userIds, text) {
   if (!env.telegramBotToken) return
   const links = await chatsOf(userIds)
-  for (const l of links) await sendMessage(l.chatId, text)
+  for (const l of links) await tellChat(l.chatId, text, { userId: l.userId })
 }
 
 const fireAndForget = (promise, what) =>
@@ -75,7 +76,7 @@ function others(call, exceptId) {
   const people = (call.participants || [])
     .filter((p) => p && p.id !== exceptId)
     .map((p) => escapeHtml(p.name))
-  return people.length ? `\n\nВместе с вами: ${people.join(', ')}` : ''
+  return people.length ? `\n\nВместе с тобой ${people.join(', ')}` : ''
 }
 
 /**
@@ -88,10 +89,10 @@ export function notifyInvited(call, invitedIds) {
   fireAndForget((async () => {
     for (const id of invitedIds) {
       const text =
-        `<b>${escapeHtml(call.owner?.name || 'Коллега')}</b> зовёт вас на звонок\n\n` +
+        `<b>${escapeHtml(call.owner?.name || 'Коллега')}</b> зовёт тебя на звонок\n\n` +
         `${callBlock(call)}` +
         `${others(call, id)}\n\n` +
-        `<i>Напомню ещё раз за ${env.remindBeforeMin} минут до начала.</i>`
+        `<i>Напомню ещё раз за ${env.remindBeforeMin} минут до начала</i>`
       await send([id], text)
     }
   })(), 'приглашение на звонок')
@@ -110,9 +111,9 @@ export function notifyTimeChanged(call, previousAt, skipIds = []) {
   fireAndForget(send(ids,
     `<b>Звонок перенесли</b>\n\n` +
     `<b>${escapeHtml(call.title)}</b>\n` +
-    `было: ${whenText(previousAt)}\n` +
-    `стало: ${whenText(call.scheduledAt)}\n\n` +
-    `<i>Перенёс ${escapeHtml(call.owner?.name || 'организатор')}.</i>`,
+    `было ${whenText(previousAt)}\n` +
+    `стало ${whenText(call.scheduledAt)}\n\n` +
+    `<i>Перенёс ${escapeHtml(call.owner?.name || 'организатор')}</i>`,
   ), 'перенос звонка')
 }
 
@@ -124,7 +125,7 @@ export function notifyCancelled(call) {
     `<b>Звонок отменили</b>\n\n` +
     `<b>${escapeHtml(call.title)}</b>\n` +
     `${whenText(call.scheduledAt)}\n\n` +
-    `<i>Отменил ${escapeHtml(call.owner?.name || 'организатор')}.</i>`,
+    `<i>Отменил ${escapeHtml(call.owner?.name || 'организатор')}</i>`,
   ), 'отмена звонка')
 }
 
@@ -132,9 +133,9 @@ export function notifyCancelled(call) {
 export function notifyRemoved(call, removedIds) {
   if (!removedIds?.length) return
   fireAndForget(send(removedIds,
-    `<b>Вас сняли со звонка</b>\n\n` +
+    `<b>Тебя сняли со звонка</b>\n\n` +
     `<b>${escapeHtml(call.title)}</b>\n` +
     `${whenText(call.scheduledAt)}\n\n` +
-    `<i>Звонок остаётся, но без вас. Напоминание не придёт.</i>`,
+    `<i>Звонок остаётся, но без тебя\nНапоминание не придёт</i>`,
   ), 'снятие со звонка')
 }

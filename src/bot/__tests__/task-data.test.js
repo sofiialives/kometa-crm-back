@@ -97,8 +97,8 @@ describe('как называем состояние задачи', () => {
 
 describe('данные задач для агента', () => {
   test('строка: владелец первым, просроченная помечена, у Иерархии клиент и работа', () => {
-    const line = taskLine(task({ origin: 'hierarchy', status: 'progress', deadline: at('2026-11-03T09:00:00Z'), work: { title: 'Лендинг', client: { name: 'Румикс' } } }), NOW, { owner: '(Дизайн) Роман' })
-    assert.equal(line, '- (Дизайн) Роман, «Макет», в процессе, просрочена, срок 3 ноября, клиент Румикс, работа «Лендинг»')
+    const line = taskLine(task({ origin: 'hierarchy', status: 'progress', deadline: at('2026-11-03T09:00:00Z'), work: { title: 'Лендинг', client: { name: 'Румикс' } } }), NOW, { owner: 'Роман, дизайн' })
+    assert.equal(line, '- Роман, дизайн, «Макет», в процессе, просрочена, срок 3 ноября, клиент Румикс, работа «Лендинг»')
   })
 
   test('у задачи на завтра нет слов «не начата» и «просрочена»', () => {
@@ -146,9 +146,9 @@ describe('работы в Иерархии: у каждого его задач�
     patch(t, prisma.user, 'findMany', async () => [roman, igor])
     const text = await worksBrief({ role: 'admin' }, null, NOW)
     assert.match(text, /открыто задач 9, в процессе 2, просрочено 1/)
-    assert.match(text, /\n  \(Дизайн\) Роман, открыто 8, в процессе 2, просрочено 0/)
-    assert.match(text, /\n  \(Разработка\) Игорь, открыто 1, в процессе 0, просрочено 1/)
-    assert.match(text, /\n  - \(Дизайн\) Роман, «Задача 0», открыта, срок сегодня 19:00/)
+    assert.match(text, /\n  Роман, дизайн, открыто 8, в процессе 2, просрочено 0/)
+    assert.match(text, /\n  Игорь, разработка, открыто 1, в процессе 0, просрочено 1/)
+    assert.match(text, /\n  - Роман, дизайн, «Задача 0», открыта, срок сегодня 19:00/)
     assert.match(text, /и ещё 3$/)
   })
 
@@ -169,9 +169,9 @@ describe('работы в Иерархии: у каждого его задач�
     assert.deepEqual(resolved[0][0].where.AND[1].OR, [{ role: 'staff', active: true, departmentId: 'd', id: { not: 'lead' } }, { id: 'lead' }])
     assert.deepEqual(samples[0][0].where.ownerId, { in: ['r'] })
     assert.match(text, /открыто задач 5, в процессе 1, просрочено 2/)
-    assert.match(text, /\n  \(Дизайн\) Роман, открыто 2/)
+    assert.match(text, /\n  Роман, дизайн, открыто 2/)
     assert.match(text, /\n  другие отделы, открыто 3, в процессе 1, просрочено 2\n/)
-    assert.match(text, /\n  - \(Дизайн\) Роман, «Свой макет»/)
+    assert.match(text, /\n  - Роман, дизайн, «Свой макет»/)
     assert.doesNotMatch(text, /Сотрудник|igor/)
     // «и ещё» считает только задачи видимых людей: его вторая, а чужие три уже в сумме.
     assert.match(text, /и ещё 1$/)
@@ -187,7 +187,7 @@ describe('работы в Иерархии: у каждого его задач�
     patch(t, prisma.task, 'findMany', async () => [])
     patch(t, prisma.user, 'findMany', async () => [])
     const lead = await worksBrief({ id: 'lead', role: 'lead', departmentId: 'd' }, null, NOW)
-    assert.match(lead, /ведут \(Дизайн\) Роман, и ещё 2 не из твоей команды;/)
+    assert.match(lead, /ведут Роман, дизайн, и ещё 2 не из твоей команды;/)
     assert.doesNotMatch(lead, /Игорь|Ян/)
     const admin = await worksBrief({ role: 'admin' }, null, NOW)
     assert.match(admin, /Игорь/)

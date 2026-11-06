@@ -107,6 +107,8 @@ model User {
   botEvents                 BotEvent[]
   aiUsage                   AiUsage[]
   botReminders              BotReminder[]
+  botStyleNotes             BotStyleNote[]   @relation("BotStyleNoteFor")
+  botStyleNotesMade         BotStyleNote[]   @relation("BotStyleNoteAuthor")
   botRounds                 BotRound[]       @relation("BotRoundOwner")
   botRoundTargets           BotRoundTarget[]
 
@@ -1167,7 +1169,8 @@ model BotMessage {
   fileMime String?
 
   // Кто написал от имени бота: ai — ответ агента, round — сообщение по
-  // поручению Яна. Пусто — шаблон бота или человек.
+  // поручению Яна, notice — шаблон бота (рассылка, напоминание, приглашение).
+  // Пусто — человек или старая запись.
   source String?
 
   // Сообщение из разговора по поручению: ответ человека или вопрос агента.
@@ -1323,6 +1326,28 @@ model BotReminder {
 
   @@index([at])
   @@index([userId, at])
+}
+
+// Просьба о стиле: «пиши короче», «не называй меня по фамилии». Живёт,
+// пока её не снимут. userId пуст, если просьба для всех (так просит
+// только владелец); иначе она про разговор с этим человеком.
+model BotStyleNote {
+  id String @id @default(cuid())
+
+  userId String?
+  user   User?   @relation("BotStyleNoteFor", fields: [userId], references: [id], onDelete: Cascade)
+
+  text String
+
+  createdById String
+  createdBy   User     @relation("BotStyleNoteAuthor", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  // Пока пусто, заметка только предложена: просьбу «для всех» владелец
+  // подтверждает кнопкой, личная действует сразу.
+  approvedAt  DateTime?
+  removedAt   DateTime?
+
+  @@index([userId, removedAt])
 }
 
 // Что бот уже отправил: «напомнил о задаче X», «написал про заявку Y».

@@ -24,17 +24,29 @@ const dollars = (cents) => `$${(cents / 100).toLocaleString('ru-RU', { maximumFr
 const firstName = (name) => String(name || '').trim().split(/\s+/)[0] || 'Сотрудник'
 
 /**
- * Как называть людей в ответах и отчётах — «(Отдел) Имя», как просил Ян.
- * Два Александра в одном отделе — с первой буквой фамилии.
+ * Отдел в подписи с маленькой буквы: «Дизайн» → «дизайн». Аббревиатуры не
+ * трогаем: «SEO статьи» остаётся как есть.
+ */
+export function departmentWord(name) {
+  const text = plain(name, 40)
+  const first = text.split(' ')[0]
+  const abbreviation = Array.from(first).length < 2 || first.slice(1) !== first.slice(1).toLowerCase()
+  return abbreviation ? text : `${first[0].toLowerCase()}${text.slice(1)}`
+}
+
+/**
+ * Как называть людей в ответах и отчётах: «Имя, отдел», например
+ * «Александр, дизайн». Нет отдела, просто имя. Два Александра в одном
+ * отделе получают первую букву фамилии: «Александр П., дизайн».
  */
 export function labelsFor(users) {
-  const base = (u) => `${u.department?.name ? `(${plain(u.department.name, 40)}) ` : u.role === 'admin' ? '(Владелец) ' : ''}${plain(firstName(u.name), 30)}`
+  const dept = (u) => (u.department?.name ? `, ${departmentWord(u.department.name)}` : '')
+  const base = (u) => `${plain(firstName(u.name), 30)}${dept(u)}`
   const counts = new Map()
   for (const u of users) counts.set(base(u), (counts.get(base(u)) ?? 0) + 1)
   return new Map(users.map((u) => {
-    const b = base(u)
     const surname = String(u.name || '').trim().split(/\s+/)[1]
-    return [u.id, counts.get(b) > 1 && surname ? `${b} ${Array.from(surname)[0]}.` : b]
+    return [u.id, counts.get(base(u)) > 1 && surname ? `${plain(firstName(u.name), 30)} ${Array.from(surname)[0]}.${dept(u)}` : base(u)]
   }))
 }
 
@@ -104,7 +116,7 @@ export function countsText(kind, c, { later = true } = {}) {
   return parts.join(', ')
 }
 
-/** Строка задачи. owner — «(Отдел) Имя», если в одном списке бывают чужие задачи. */
+/** Строка задачи. owner — «Имя, отдел», если в одном списке бывают чужие задачи. */
 export function taskLine(t, now, { owner = null } = {}) {
   const parts = []
   if (owner) parts.push(owner)
@@ -339,7 +351,7 @@ const WORKS_MAX = 40
 
 /**
  * Клиенты и работы в Иерархии: кто ведёт, а у кого какие открытые задачи.
- * Задачи названы по людям: у каждой строки владелец «(Отдел) Имя», числа
+ * Задачи названы по людям: у каждой строки владелец «Имя, отдел», числа
  * считает база. Ведёт и владеет задачами не всегда одни и те же люди.
  */
 export async function worksBrief(viewer, query = null, now = new Date()) {
