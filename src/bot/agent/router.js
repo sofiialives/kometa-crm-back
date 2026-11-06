@@ -95,6 +95,9 @@ async function onWaiting(user, waiting, text, logged, now) {
     return true
   }
   if (waiting.type === 'task_late') {
+    // «Отхожу на 30 минут», «напомни…», «мои задачи» после «Не успеваю» — это
+    // команда, а не причина опоздания: ожидание снято, дальше как обычно.
+    if (parseIntent(text, now) || listIntent(text)) return false
     await reportTaskLate(user, waiting.payload.taskId, text, now, waiting.payload.taskIds)
     return true
   }

@@ -1,7 +1,8 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { onCallback } from '../agent/router.js'
+import { onCallback, onText } from '../agent/router.js'
+import * as state from '../agent/state.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
 
@@ -84,5 +85,49 @@ describe('кнопка «Запомнить для всех»', () => {
     await onCallback(cb('sn:y:n1', rows, { date: old }), yan, now)
     assert.equal(writes.length, 0)
     assert.match(h.edits[0].text, /Кнопка устарела/)
+  })
+})
+
+describe('ответ после «Не успеваю»', () => {
+  const user = { id: 'u1', name: 'Антон', role: 'staff', active: true, departmentId: null }
+  const now = new Date('2026-11-03T09:00:00Z')
+
+  function setupText(t) {
+    const h = botHarness(t)
+    patch(t, prisma.botMessage, 'count', async () => 0)
+    patch(t, prisma.botCheckinAnswer, 'findFirst', async () => null)
+    patch(t, prisma.botRoundTarget, 'findFirst', async () => null)
+    patch(t, prisma.user, 'findMany', async () => [{ id: 'owner' }])
+    const created = []
+    const tx = {
+      $executeRaw: async () => 0,
+      motivationAway: { findFirst: async () => null, create: async ({ data }) => { created.push(data); return { id: 'aw1', ...data } }, update: async () => ({}) },
+    }
+    patch(t, prisma, '$transaction', async (fn) => fn(tx))
+    patch(t, prisma.motivationAway, 'findFirst', async () => null)
+    const late = []
+    patch(t, prisma.botEvent, 'create', async ({ data }) => { late.push(data); return data })
+    patch(t, prisma.task, 'findMany', async () => [{ id: 'a', title: 'Задача a', startAt: now }])
+    patch(t, prisma.user, 'findUnique', async () => ({ id: 'u1', name: 'Антон', role: 'staff', department: null }))
+    return { h, created, late }
+  }
+
+  test('«Не успеваю», потом «отхожу на 30 минут» даёт отлучку, а не отчёт об опоздании', async (t) => {
+    const { h, created, late } = setupText(t)
+    state.expect('u1', 'task_late', { taskId: 'a', taskIds: ['a'] })
+    await onText(user, 1001, 'отхожу на 30 минут', now)
+    assert.equal(created.length, 1)
+    assert.equal(created[0].kind, 'break')
+    assert.equal(late.length, 0)
+    assert.ok(!h.sent.some((m) => /Не успевает/.test(m.text)))
+    assert.equal(state.peek('u1'), null, 'ожидание снято')
+  })
+
+  test('обычная причина всё так же уходит Яну', async (t) => {
+    const { h, late } = setupText(t)
+    state.expect('u1', 'task_late', { taskId: 'a', taskIds: ['a'] })
+    await onText(user, 1001, 'застрял на правках у клиента', now)
+    assert.equal(late.length, 1)
+    assert.ok(h.sent.some((m) => /Не успевает начать задачу/.test(m.text)))
   })
 })
