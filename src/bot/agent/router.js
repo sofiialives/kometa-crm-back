@@ -24,24 +24,24 @@ import { listIntent, listText } from './lists.js'
 
 const PHRASES =
   'Я понимаю такие фразы\n' +
-  '• <i>отхожу на 30 минут</i>\n' +
-  '• <i>буду в 16:30</i>\n' +
-  '• <i>вернулся</i>\n' +
-  '• <i>задерживаюсь до 17</i>\n' +
-  '• <i>заболел, форс-мажор</i>\n' +
-  '• <i>напомни в 15:00 позвонить клиенту</i>\n\n' +
+  '<i>отхожу на 30 минут</i>\n' +
+  '<i>буду в 16:30</i>\n' +
+  '<i>вернулся</i>\n' +
+  '<i>задерживаюсь до 17</i>\n' +
+  '<i>заболел, форс-мажор</i>\n' +
+  '<i>напомни в 15:00 позвонить клиенту</i>\n\n' +
   'Или нажми кнопку ниже'
-const STAFF_MENU = `Я на связи.\n\n${PHRASES}`
+const STAFF_MENU = `Я на связи\n\n${PHRASES}`
 // Не понял — коротко, без всего списка: несколько непонятых подряд не
 // должны превращаться в простыню. Полный список — в /menu.
 const STAFF_HELP =
-  'Не понял тебя.\n' +
-  'Напиши, например, <i>отхожу на 30 минут</i>, или нажми кнопку ниже.\n\n' +
+  'Не понял тебя\n' +
+  'Напиши, например, <i>отхожу на 30 минут</i>, или нажми кнопку ниже\n\n' +
   'Все фразы, которые я понимаю, есть в /menu'
-// Вопрос без ИИ (нет ключа, кончился лимит) — честно, что пока не отвечаю.
+// Вопрос без ИИ (нет ключа, кончился лимит) — честно, что отвечать сейчас не могу.
 const STAFF_QUESTION =
-  'На такие вопросы я пока не отвечаю.\n' +
-  'Могу отметить отлучку, задержку или форс-мажор, кнопки ниже.\n\n' +
+  'Сейчас я не могу ответить на такой вопрос, умный помощник недоступен\n' +
+  'Отлучку, задержку, форс-мажор, напоминание и списки задач сделаю как обычно\n\n' +
   'Все фразы, которые я понимаю, есть в /menu'
 
 // Сколько сообщений в день человек может написать боту сам. Ответы на
@@ -51,8 +51,8 @@ const STAFF_QUESTION =
 // отдельно (AI_LIMITS), команды по правилам ничего не стоят.
 const DAILY_LIMIT = 200
 const LIMIT_TEXT =
-  'Лимит сообщений на сегодня закончился.\nОн обновится в 00:00 по Москве.\n\n' +
-  'Кнопки «Отхожу», «Я на месте» и «Форс-мажор» работают без лимита.'
+  'Лимит сообщений на сегодня закончился\nОн обновится в 00:00 по Москве\n\n' +
+  'Кнопки «Отхожу», «Я на месте» и «Форс-мажор» работают без лимита'
 const PER_MINUTE = 10
 const BUTTONS_PER_MINUTE = 20
 
@@ -62,11 +62,8 @@ async function recentCount(userId, directions, since) {
 
 const OWNER_HELP =
   'Сюда приходят отчёты по команде\n' +
-  '• кто отходит и возвращается\n' +
-  '• форс-мажоры\n' +
-  '• внезапные чек-ины\n' +
-  '• заявки на баллы\n\n' +
-  'Решения принимаются кнопками под сообщениями.'
+  'Кто отходит и возвращается, форс-мажоры, внезапные чек-ины, заявки на баллы\n\n' +
+  'Решения принимаются кнопками под сообщениями'
 
 async function onIntent(user, intent, text, logged, now) {
   if (intent.type === 'away') return startBreak(user, { until: intent.until, note: text }, now)
@@ -115,7 +112,7 @@ async function onWaiting(user, waiting, text, logged, now) {
     }
     // Правила время не нашли («минут через сорок», «к концу обеда») — ИИ.
     if (await agentReply({ user, chatId: user.chatId, text, logged, kind: 'reply', extend: Boolean(waiting.payload.extend) }, now)) return true
-    await tellChat(user.chatId, 'Не понял время, оставляю как было.\nПоправить можно кнопкой или написать, например, <i>до 16:30</i>', { userId: user.id })
+    await tellChat(user.chatId, 'Не понял время, оставляю как было\nПоправить можно кнопкой или написать, например, <i>до 16:30</i>', { userId: user.id })
     return true
   }
   return false
@@ -140,7 +137,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   if ((await recentCount(user.id, ['in', 'reply'], new Date(real.getTime() - 60000))) >= PER_MINUTE) {
     // Не молча: человек должен знать, что сообщение не принято. Раз в минуту.
     const bucket = Math.floor(real.getTime() / 60000)
-    await sendOnce(`flood:${user.id}:${bucket}`, () => tellChat(chatId, 'Слишком много сообщений подряд.\nПодожди минуту и напиши ещё раз.', { userId: user.id }))
+    await sendOnce(`flood:${user.id}:${bucket}`, () => tellChat(chatId, 'Слишком много сообщений подряд\nПодожди минуту и напиши ещё раз', { userId: user.id }))
     return
   }
 
@@ -175,7 +172,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   }
   // Идёт опрос по поручению — сообщение уйдёт в отчёт.
   const target = await activeTarget(user.id, now)
-  const thanks = () => tellChat(chatId, 'Записал, спасибо.', { userId: user.id })
+  const thanks = () => tellChat(chatId, 'Записал, спасибо', { userId: user.id })
   if (command) {
     if (answered) return thanks()
     await tellChat(chatId, STAFF_MENU, { userId: user.id, buttons: MENU })
@@ -218,7 +215,9 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   // «Что у меня на сегодня», «мои задачи», «что по звонкам» — список из CRM
   // столбиком, без ИИ: бесплатно и не превращается в сплошной абзац.
   // В разговоре по поручению «мои задачи на сегодня такие» — ответ, а не просьба о списке.
-  const list = target ? null : listIntent(text)
+  const found = target ? null : listIntent(text)
+  // Список по отделу собирает агент: другим, кроме руководителя, это просто их задачи.
+  const list = found === 'team' && user.role !== 'lead' ? 'tasks' : found
   if (list) {
     await tellChat(chatId, await listText(list, user.id, now), { userId: user.id })
     return
@@ -227,7 +226,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   // Незнакомые команды (/что-то) на ИИ не тратим.
   if (!isCommandText && (await ask())) return
   if (!text && files.length) {
-    await tellChat(chatId, 'Файл получил, но открыть его сейчас не могу.', { userId: user.id })
+    await tellChat(chatId, 'Файл получил, но открыть сейчас не могу', { userId: user.id })
     return
   }
   await tellChat(chatId, text.includes('?') ? STAFF_QUESTION : STAFF_HELP, { userId: user.id, buttons: MENU })
@@ -292,7 +291,7 @@ export async function onCallback(cb, user, now = new Date()) {
     if (result.rejectedUserId) {
       // Из-за заявки человека не оштрафовали на чек-ине — теперь штраф ложится.
       const penalty = await penalizeIfDeferred(result.rejectedUserId, now)
-      if (penalty !== null) text += `\n\nЗа чек-ин ${points(penalty)}, штраф ждал вашего решения.`
+      if (penalty !== null) text += `\n\nЗа чек-ин ${points(penalty)}, штраф ждал твоего решения`
     }
     if (text) await editMessage(chatId, cb.message.message_id, text)
     return null
@@ -304,7 +303,7 @@ export async function onCallback(cb, user, now = new Date()) {
   if (kind === 'm' && action === 'back') return comeBack(user, now)
   if (kind === 'm' && action === 'fm') {
     state.expect(user.id, 'fm_text')
-    return tellChat(chatId, 'Что случилось и до какого времени?\nНапиши одной строкой, я передам Яну.', { userId: user.id })
+    return tellChat(chatId, 'Что случилось и до какого времени?\nНапиши одной строкой, я передам Яну', { userId: user.id })
   }
   if (kind === 'rm') {
     const ok = await cancelReminder(user, id, now)
