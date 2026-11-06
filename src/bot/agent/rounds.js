@@ -61,11 +61,6 @@ export function clampMinutes(minutes) {
 export const DIRECT_PEOPLE_MAX = 3
 export const DIRECT_PER_DAY = 20
 
-// Падежи: от имени отбрасываем последнюю гласную, «й» или «ь» («Никола» для
-// «Николаю»), основа не короче трёх букв, а после неё допустимо только
-// падежное окончание. Так «Роману» и «Романом» находятся, «ромашки» нет.
-const CASE_END = /^(?:[аяуюеиыойь]|ом|ем|ой|ей|ою|ею|ии|ию|ью|ым|им|ам|ям|ах|ях|ами|ями)?$/
-const wordsOf = (text) => String(text ?? '').toLowerCase().replace(/ё/g, 'е').match(/[\p{L}]+/gu) ?? []
 
 function nameBase(token) {
   const t = token.toLowerCase().replace(/ё/g, 'е')
@@ -76,12 +71,38 @@ function nameBase(token) {
 
 const nameTokens = (person) => String(person?.name ?? '').split(/\s+/).flatMap((w) => w.match(/[\p{L}]+/gu) ?? [])
 
-/** Какие части имени человека («Николай», «Волков») есть в тексте просьбы, в любом падеже. */
+// Падежные окончания по последней букве имени: у «Николай» только й, я, ю,
+// ем, е, у «Надя» только я, и, е, ю, ей, ею. Общий список окончаний пускал
+// «надо» за Надю и «верим» за Веру.
+function caseForms(token) {
+  const t = token.toLowerCase().replace(/ё/g, 'е')
+  const last = t.at(-1)
+  const stem = t.slice(0, -1)
+  if (last === 'й') return { base: stem, ends: ['й', 'я', 'ю', 'ем', 'е'] }
+  if (last === 'ь') return { base: stem, ends: ['ь', 'я', 'ю', 'ем', 'е', 'и', 'ью'] }
+  if (last === 'а') return { base: stem, ends: ['а', 'ы', 'и', 'е', 'у', 'ой', 'ою'] }
+  if (last === 'я') return { base: stem, ends: ['я', 'и', 'е', 'ю', 'ей', 'ею'] }
+  if (/[еиоуыэю]/.test(last)) return { base: t, ends: [''] }
+  const ends = ['', 'а', 'у', 'ом', 'е', 'ы']
+  if (/(?:ов|ев|ин|ын)$/.test(t)) ends.push('ым')
+  return { base: t, ends }
+}
+
+/**
+ * Какие части имени человека («Николай», «Волков») есть в тексте просьбы, в
+ * любом падеже. Короткая основа («Люба», «Света») засчитывается только с
+ * большой буквы: иначе «любой» и «в свете» назвали бы человека.
+ */
 export function namedTokens(person, texts) {
-  const words = texts.flatMap(wordsOf)
+  const words = texts.flatMap((text) => String(text ?? '').replace(/ё/g, 'е').replace(/Ё/g, 'Е').match(/[\p{L}]+/gu) ?? [])
   return nameTokens(person).filter((token) => {
-    const base = nameBase(token)
-    return base && words.some((w) => w.startsWith(base) && CASE_END.test(w.slice(base.length)))
+    const { base, ends } = caseForms(token)
+    if (base.length < 3) return false
+    return words.some((word) => {
+      const w = word.toLowerCase()
+      if (!w.startsWith(base) || !ends.includes(w.slice(base.length))) return false
+      return base.length > 4 || /^\p{Lu}/u.test(word)
+    })
   })
 }
 
@@ -113,7 +134,7 @@ async function hasNamesake(owner, people, texts) {
 // Просьбы о данных и деньгах уходят людям только через черновик. Текст
 // сначала приводим к одному виду: NFKC, латинские двойники кириллицы, ё как е.
 // Самые опасные слова ищем и в тексте без разделителей («п.а.р.о.л.ь»).
-const SENSITIVE = /парол|логин|код из|коды|доступ|карт(?!ин)|реквизит|перевед|перевод|оплат|деньг|паспорт|телефон|почт(?!и(?![\p{L}]))|ключ|токен|кошел|снилс|выписк|скан(?!д)|cvv|otp|2fa|смс|(?<![\p{L}])(?:инн|сч[её]т(?:[ауе]|ом|ов|ам|ами|ах)?|code)(?![\p{L}])/iu
+const SENSITIVE = /парол|логин|(?<![\p{L}])(?:код(?!екс|ир)|пин)|доступ(?!н)|карт(?!ин|очк)|реквизит|перевед|перевод|оплат|деньг|паспорт|телефон|почт(?!и(?![\p{L}]))|ключ(?!ев|ик)|токен|кошел|снилс|выписк|скан(?!д)|cvv|otp|2fa|смс|(?<![\p{L}])(?:инн|сч[её]т(?:[ауе]|ом|ов|ам|ами|ах)?|code)(?![\p{L}])/iu
 const SENSITIVE_TIGHT = /парол|логин|реквизит|паспорт|токен|кошел|снилс|cvv/iu
 const LOOKALIKE = { a: 'а', e: 'е', o: 'о', p: 'р', c: 'с', x: 'х', y: 'у', k: 'к', m: 'м', t: 'т', h: 'н', b: 'в', '0': 'о', '3': 'з' }
 
@@ -258,7 +279,7 @@ export function foreignText(problems, labels, viewer) {
 
 /**
  * Поручение от агента. messages — [{ person_id, text }]. texts — слова
- * просящего (это сообщение и предыдущее): назвал всех по имени и условия
+ * просящего (только текущее сообщение): назвал всех по имени и условия
  * выполнены, сообщения уходят сразу, иначе показан черновик.
  * Возвращает { shown, text, direct }: показано ли сообщение просящему
  * (черновик или «Написал») и текст для модели.
@@ -326,7 +347,17 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   })
 
   if (direct) {
-    const out = await deliverRound(owner, round, labels)
+    let out
+    try {
+      out = await deliverRound(owner, round, labels)
+    } catch (e) {
+      // Сбой посередине: часть людей могла уже получить сообщение. Повторять
+      // нельзя, иначе им придёт второй раз; просящему честно говорим.
+      console.error(`[агент] прямая отправка: ${e.name}`)
+      await prisma.botRoundTarget.updateMany({ where: { roundId: round.id, status: 'pending' }, data: { status: 'failed' } }).catch(() => {})
+      await tellChat(chatId, 'Отправка сорвалась посередине\nКому-то могло уже дойти, повторять не буду', { userId: owner.id }).catch(() => {})
+      return { shown: true, direct: true, text: 'Отправка сорвалась посередине, часть людей могла получить сообщение. Повторно не отправляй, просящему бот уже сказал.' }
+    }
     const note = directNote({ sent: out.sentPeople, failed: out.failedLabels, skipped: out.skipped, notSent: skipped, collect: round.collect, deadlineAt })
     const shown = await tellChat(chatId, note, { userId: owner.id })
     const summary = directSummary({ sent: out.sent, failed: out.failedLabels.length, skipped: out.skipped.length, notSent: skipped.length })

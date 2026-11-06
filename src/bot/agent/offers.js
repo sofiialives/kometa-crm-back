@@ -99,7 +99,7 @@ export function offerText({ assignee, title, description, deadline, startAt = nu
 /** Сообщение исполнителю. */
 export function assigneeText({ requester, title, deadline, work, note, now = new Date() }) {
   const from = requester.role === 'admin' ? 'Яна' : `руководителя ${labelOf(requester)}`
-  const lines = [`Новая задача от ${from}`, `«${noLinks(title)}»`, `Срок ${dueText(deadline, now, { on: true })}`]
+  const lines = [`Новая задача от ${from}`, `«${noLinks(plainStyle(title))}»`, `Срок ${dueText(deadline, now, { on: true })}`]
   if (work) lines.push(`Клиент ${plain(work.client?.name, 60)}, работа ${plain(work.title, 80)}`)
   if (note) lines.push(note)
   return lines.map((l) => escapeHtml(l)).join('\n')

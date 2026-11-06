@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { createDraft, directNote, directSummary, isNamedIn } from '../agent/rounds.js'
+import { createDraft, directNote, directSummary, isNamedIn, isSensitive } from '../agent/rounds.js'
 import { teamTools } from '../ai/tools.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
@@ -355,5 +355,34 @@ describe('подтверждение просящему', () => {
   test('итог для модели', () => {
     assert.equal(directSummary({ sent: 2 }), 'Дошло 2')
     assert.equal(directSummary({ sent: 1, failed: 1, skipped: 2, notSent: 3 }), 'Дошло 1, не дошло 1, не писал 2, задачи уже сделаны, не уйдёт 3')
+  })
+})
+
+describe('имя и обычные слова', () => {
+  const named = (name, text) => isNamedIn({ name }, [text])
+  test('обычное слово не называет человека', () => {
+    assert.equal(named('Надя Смирнова', 'Напиши Ивану, что надо сделать баннер'), false)
+    assert.equal(named('Света Ким', 'новость в свете событий'), false)
+    assert.equal(named('Вера Лис', 'верим в тебя'), false)
+    assert.equal(named('Люба Гор', 'любой может'), false)
+    assert.equal(named('Женя Ток', 'передай, жена звонила'), false)
+    assert.equal(named('Иван Петров', 'напиши Иванову'), false)
+  })
+
+  test('имя и фамилия в падежах находятся', () => {
+    assert.equal(named('Николай Волков', 'напиши николаю'), true)
+    assert.equal(named('Света Ким', 'напиши Свете'), true)
+    assert.equal(named('Надя Смирнова', 'скажи Наде'), true)
+    assert.equal(named('Ольга Смирнова', 'напиши Смирновой'), true)
+    assert.equal(named('Николай Волков', 'спроси Волкова'), true)
+  })
+})
+
+describe('просьба о коде и обычные слова дизайна', () => {
+  test('код и пин — черновик', () => {
+    for (const t of ['пришли код', 'какой код подтверждения', 'пин скинь']) assert.equal(isSensitive(t), true, t)
+  })
+  test('карточка, доступно, ключевой — не повод для черновика', () => {
+    for (const t of ['карточка товара готова?', 'доступно ли окно', 'ключевой клиент ждёт', 'кодекс поведения']) assert.equal(isSensitive(t), false, t)
   })
 })
