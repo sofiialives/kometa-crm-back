@@ -5,6 +5,7 @@ import { bankLine, eventLine, reviewText } from '../agent/feed.js'
 import { confirmText, directNote, draftText, reportText } from '../agent/rounds.js'
 import { assigneeText, offerText } from '../agent/offers.js'
 import { eveningText, notStartedText, startText } from '../agent/tasks.js'
+import { morningReportText, morningTemplate, personTemplate } from '../agent/morning.js'
 import { DAILY } from '../index.js'
 import { limitText } from '../ai/agent.js'
 
@@ -31,6 +32,22 @@ describe('шаблоны бота в новом стиле', () => {
     assertPlain(startText({ startAt: T, tasks: tasks.slice(0, 1) }), 'начало задачи')
     assertPlain(notStartedText(tasks, T), 'неначатые')
     assertPlain(notStartedText(tasks.slice(0, 1), T), 'неначатая')
+  })
+
+  test('утренний обход, сообщение и отчёт', () => {
+    for (const offer of [null, { title: 'Макет', why: 'overdue' }, { title: 'Лендинг', why: 'hierarchy' }]) {
+      assertPlain(morningTemplate({ name: 'Антон Иванов', today: 3, overdue: 2, hierarchy: 4, offer }), 'утро')
+      assertPlain(morningTemplate({ name: 'Антон Иванов', offer }), 'утро без задач')
+    }
+    const tasks = { count: 4, titles: [{ title: 'Макет' }, { title: 'Баннер' }], offer: { title: 'Аудит', state: 'untouched' } }
+    const people = [
+      { userId: 'a', label: 'Роман, дизайн', status: 'answered', summary: 'Не возьмёт, сегодня в больницу', messages: [], answered: true, tasks },
+      { userId: 'b', label: 'Олег, SEO', status: 'sent', messages: [], answered: false, tasks: { count: 0, titles: [], offer: null } },
+      { userId: 'c', label: 'Игорь, SMM', status: 'failed', messages: [], answered: false, tasks: { count: 0, titles: [], offer: null } },
+    ]
+    assertPlain(morningReportText({ people }), 'отчёт обхода')
+    assertPlain(personTemplate(people[0]).join('\n'), 'строки про человека')
+    for (const text of [morningTemplate({ name: 'Антон', today: 1 }), morningReportText({ people })]) assert.doesNotMatch(text, /до 10:00/)
   })
 
   test('напоминание о звонке', () => {
