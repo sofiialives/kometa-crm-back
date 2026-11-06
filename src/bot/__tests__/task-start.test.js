@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
-import { lateForTask, reportTaskLate, startGroups, startText, taskButtons, tickTaskStarts } from '../agent/tasks.js'
+import { lateForTask, reportTaskLate, startGroups, startLead, startText, taskButtons, tickTaskStarts } from '../agent/tasks.js'
 import { peek } from '../agent/state.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
@@ -65,33 +65,72 @@ describe('«Не успеваю» на несколько задач', () => {
   })
 })
 
-describe('группа по минуте начала', () => {
-  test('12:00:00 и 12:00:30 — одно сообщение, один ключ', async (t) => {
+describe('группа по минуте начала и ключ на задачу', () => {
+  const A = { ...task('a', '12:00'), startAt: new Date(T('12:00').getTime()) }
+  const B = { ...task('b', '12:00'), startAt: new Date(T('12:00').getTime() + 30000) }
+
+  test('12:00:00 и 12:00:30 — одно сообщение; второй проход их не повторяет', async (t) => {
     const h = botHarness(t)
-    const a = { ...task('a', '12:00'), startAt: new Date(T('12:00').getTime()) }
-    const b = { ...task('b', '12:00'), startAt: new Date(T('12:00').getTime() + 30000) }
-    assert.equal(startGroups([a, b]).length, 1)
+    assert.equal(startGroups([A, B]).length, 1)
     patch(t, prisma.motivationAway, 'findFirst', async () => null)
-    patch(t, prisma.task, 'findMany', async () => [a, b])
+    patch(t, prisma.task, 'findMany', async () => [A, B])
     await tickTaskStarts(T('11:56'))
     await tickTaskStarts(T('11:57'))
     assert.equal(h.sent.length, 1)
     assert.match(h.sent[0].text, /«Задача a»\n«Задача b»/)
-    assert.ok([...h.notices].some((k) => k === `task-start:u1:${Math.floor(T('12:00').getTime() / 60000)}`))
+    assert.deepEqual([...h.notices].sort(), ['task-start:t:a', 'task-start:t:b'])
+  })
+
+  test('в 11:55:10 задача на 12:00:30 попадает в окно: оно до конца минуты', async (t) => {
+    botHarness(t)
+    const seen = []
+    patch(t, prisma.task, 'findMany', async (q) => { seen.push(q.where.startAt); return [] })
+    await tickTaskStarts(new Date(T('11:55').getTime() + 10000))
+    assert.ok(B.startAt.getTime() > seen[0].gt.getTime() && B.startAt.getTime() < seen[0].lt.getTime())
+    assert.equal(seen[0].lt.getTime(), T('12:01').getTime())
+  })
+
+  test('задача, заведённая после отправки на ту же минуту, получает своё напоминание', async (t) => {
+    const h = botHarness(t)
+    patch(t, prisma.motivationAway, 'findFirst', async () => null)
+    let list = [A]
+    patch(t, prisma.task, 'findMany', async () => list)
+    await tickTaskStarts(T('11:56'))
+    list = [A, B]
+    await tickTaskStarts(T('11:57'))
+    assert.equal(h.sent.length, 2)
+    assert.match(h.sent[1].text, /«Задача b»/)
+    assert.doesNotMatch(h.sent[1].text, /Задача a/)
+  })
+
+  test('временный сбой телеграма освобождает ключи, следующий проход повторит', async (t) => {
+    const h = botHarness(t)
+    patch(t, prisma.motivationAway, 'findFirst', async () => null)
+    patch(t, prisma.task, 'findMany', async () => [A])
+    const ok = globalThis.fetch
+    let fail = true
+    globalThis.fetch = async (url, init) => (fail && String(url).endsWith('sendMessage')
+      ? new Response(JSON.stringify({ ok: false }), { status: 500 })
+      : ok(url, init))
+    t.after(() => { globalThis.fetch = ok })
+    await tickTaskStarts(T('11:56'))
+    assert.equal(h.notices.size, 0)
+    fail = false
+    await tickTaskStarts(T('11:57'))
+    assert.equal(h.sent.length, 1)
   })
 })
 
-describe('напоминание не теряется, если проход пропустили', () => {
-  test('окно — все оставшиеся 5 минут, а не одна минута; текст «скоро», если осталось меньше', async (t) => {
-    const h = botHarness(t)
-    const seen = []
-    patch(t, prisma.task, 'findMany', async (q) => { seen.push(q.where.startAt); return [task('a', '12:03')] })
-    patch(t, prisma.motivationAway, 'findFirst', async () => null)
-    await tickTaskStarts(T('12:00'))
-    assert.equal(seen[0].gt.getTime(), T('12:00').getTime())
-    assert.equal(seen[0].lte.getTime(), T('12:05').getTime())
-    assert.match(h.sent[0].text, /^Скоро, в <b>12:03<\/b>/)
-    assert.match(startText({ startAt: T('12:05'), tasks: [task('a', '12:05')] }, T('12:00')), /^Через 5 минут/)
+describe('заголовок напоминания', () => {
+  test('«Через 5 минут» только когда реально пять, иначе честно; меньше двух — «Сейчас»', () => {
+    const lead = (min) => startLead(T('12:00'), new Date(T('12:00').getTime() - min * 60000))
+    assert.equal(lead(5), 'Через 5 минут')
+    assert.equal(lead(4), 'Через 4 минуты')
+    assert.equal(lead(3), 'Через 3 минуты')
+    assert.equal(lead(2), 'Через 2 минуты')
+    assert.equal(lead(1), 'Сейчас')
+    assert.equal(lead(6), 'Через 6 минут')
+    assert.match(startText({ startAt: T('12:00'), tasks: [task('a', '12:00')] }, new Date(T('12:00').getTime() - 30000)), /^Сейчас, в <b>12:00<\/b>, начинается/)
   })
 })
 

@@ -9,7 +9,7 @@ import { labelOf } from '../ai/context.js'
 import { nudgeText } from '../ai/nudge.js'
 import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
-import { crmButton, firstName, hasNotice, logEvent, row, sendOnce, tell, tellOwners } from './notify.js'
+import { claimNotice, crmButton, firstName, hasNotice, logEvent, releaseNotice, row, sendOnce, tell, tellOwners, unsentKeys } from './notify.js'
 import * as state from './state.js'
 import { dueTodayWhere, VISIBLE } from './taskScope.js'
 
@@ -103,11 +103,18 @@ export function startGroups(tasks) {
   return [...groups.values()]
 }
 
+const minutesWord = (n) => (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'минуты' : n % 10 === 1 && n % 100 !== 11 ? 'минуту' : 'минут')
+
+/** Заголовок: «Через 5 минут» только когда осталось пять, иначе по-честному; совсем скоро — «Сейчас». */
+export function startLead(startAt, now) {
+  const left = now ? Math.round((new Date(startAt).getTime() - now.getTime()) / 60000) : TASK_START_BEFORE_MIN
+  if (left < 2) return 'Сейчас'
+  return `Через ${left} ${minutesWord(left)}`
+}
+
 /** Текст за 5 минут до начала: одна задача или все задачи этого времени. */
 export function startText(group, now = null) {
-  // Пропущенный проход мог сдвинуть напоминание: тогда не «через 5 минут», а «скоро».
-  const left = now ? Math.ceil((group.startAt.getTime() - now.getTime()) / 60000) : TASK_START_BEFORE_MIN
-  const lead = left >= TASK_START_BEFORE_MIN - 1 ? 'Через 5 минут' : 'Скоро'
+  const lead = startLead(group.startAt, now)
   const titles = group.tasks.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
   const time = `<b>${hm(group.startAt)}</b>`
   if (titles.length === 1) return `${lead}, в ${time}, начинается ${titles[0]}\nКак начнёшь, жми кнопку или перетащи её в «В процессе»`
@@ -116,24 +123,40 @@ export function startText(group, now = null) {
   return [`${lead}, в ${time}, начинаются задачи`, ...shown, ...more, 'Как начнёшь, жми кнопку или перетащи в «В процессе»'].join('\n')
 }
 
-/** Раз в минуту: задачи, которые начинаются через 5 минут, одним сообщением на человека и время. */
+/**
+ * Раз в минуту: задачи, которые скоро начнутся, одним сообщением на человека
+ * и минуту начала. Окно до конца минуты, в которую попадает now+5 минут, так
+ * что вся минута идёт вместе. Напоминание помнится по задаче
+ * (`task-start:t:<id>`): пропущенный проход его не теряет, а задача, заведённая
+ * после отправки на ту же минуту, получит своё. Ключи занимаются перед
+ * отправкой и освобождаются при временном сбое телеграма.
+ */
 export async function tickTaskStarts(now = new Date()) {
-  // Окно не в одну минуту, а все оставшиеся до начала 5 минут: если проход
-  // пропустили (прошлый ещё шёл), напоминание придёт на следующем, а не потеряется.
-  // Повтор исключает sendOnce.
-  const to = new Date(now.getTime() + TASK_START_BEFORE_MIN * 60000)
-  const tasks = await prisma.task.findMany({
-    where: { status: 'today', startAt: { gt: now, lte: to }, owner: { active: true, role: { in: PARTICIPANT_ROLES } } },
+  const to = new Date((Math.floor((now.getTime() + TASK_START_BEFORE_MIN * 60000) / 60000) + 1) * 60000)
+  const found = await prisma.task.findMany({
+    where: { status: 'today', startAt: { gt: now, lt: to }, owner: { active: true, role: { in: PARTICIPANT_ROLES } } },
     select: { id: true, title: true, startAt: true, ownerId: true },
     orderBy: { startAt: 'asc' },
   })
-  for (const group of startGroups(tasks)) {
+  const keyOf = (task) => `task-start:t:${task.id}`
+  const fresh = await unsentKeys(found.map(keyOf))
+  for (const group of startGroups(found.filter((t) => fresh.has(keyOf(t))))) {
     // Тихие часы 21–9 считаем по времени начала: задача на 9:00 получает
     // напоминание в 8:55, а задача на 21:00 не получает его в 20:55.
     if (isQuietHour(group.startAt)) continue
     if ((await activeAway(group.ownerId, now)) || (await hasEndedDay(group.ownerId, now))) continue
-    await sendOnce(`task-start:${group.ownerId}:${startMinute(group.startAt)}`, () => tell(group.ownerId, startText(group, now),
-      { buttons: taskButtons(group.tasks) }))
+    const claimed = []
+    for (const task of group.tasks) if (await claimNotice(keyOf(task))) claimed.push(task)
+    if (!claimed.length) continue
+    const sending = { ...group, tasks: claimed }
+    let res
+    try {
+      res = await tell(group.ownerId, startText(sending, now), { buttons: taskButtons(claimed) })
+    } catch (e) {
+      for (const task of claimed) await releaseNotice(keyOf(task))
+      throw e
+    }
+    if (!res?.ok && res?.retry) for (const task of claimed) await releaseNotice(keyOf(task))
   }
 }
 
