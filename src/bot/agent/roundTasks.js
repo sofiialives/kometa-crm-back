@@ -16,6 +16,11 @@ const squash = (text) => String(text ?? '').toLowerCase().replace(/ё/g, 'е').r
 const padded = (text) => ` ${squash(text)} `
 // Короткие названия тоже сравниваем, но по границам слов и точно; совсем короткие (одна-две буквы) нет.
 export const MIN_TITLE = 3
+// Название из одного короткого слова («Отчёт», «Сайт») в тексте без кавычек
+// встречается и просто как слово. Без кавычек ищем только названия от двух
+// слов или от стольких букв, иначе «пришли отчёт» сочли бы чужой задачей.
+export const BARE_TITLE_MIN = 10
+const bareMatchable = (low) => low.includes(' ') || low.length >= BARE_TITLE_MIN
 // Упоминание от этого числа букв считаем сокращением названия: «Десять постов» вместо длинного.
 export const MIN_ABBREVIATION = 6
 
@@ -117,14 +122,17 @@ function ownerScope(viewer, addresseeIds) {
 export async function foreignTitles(items, viewer) {
   const read = await prisma.task.findMany({
     where: { AND: [VISIBLE, { status: { in: ['today', 'progress'] } }, { owner: ownerScope(viewer, items.map((i) => i.userId)) }] },
+    orderBy: { updatedAt: 'desc' },
     take: SCAN_MAX,
     select: { id: true, title: true, ownerId: true },
   })
-  if (read.length >= SCAN_MAX) return { problems: [], incomplete: true }
+  // Упёрлись в предел: проверяем свежие задачи, но честно говорим, что не все.
+  const truncated = read.length >= SCAN_MAX
   // Упоминания в кавычках от 6 букв — возможные сокращения; без повторов, не больше MENTIONS_MAX.
-  const all = items.map((i) => quotedTitles(i.text).titles.map(squash).filter((m) => m.length >= MIN_ABBREVIATION))
+  const quoted = items.map((i) => quotedTitles(i.text).titles.map(squash))
+  const all = quoted.map((q) => q.filter((m) => m.length >= MIN_ABBREVIATION))
   const needles = [...new Set(all.flat())].slice(0, MENTIONS_MAX)
-  const prepared = items.map((item, i) => ({ userId: item.userId, said: padded(item.text), mentions: all[i].filter((m) => needles.includes(m)) }))
+  const prepared = items.map((item, i) => ({ userId: item.userId, said: padded(item.text), inQuotes: new Set(quoted[i]), mentions: all[i].filter((m) => needles.includes(m)) }))
   const open = read.map((t) => {
     const low = squash(t.title)
     return { ...t, low, key: ` ${low} ` }
@@ -132,10 +140,10 @@ export async function foreignTitles(items, viewer) {
   // Подозрение: чужая задача, чьё название целиком в тексте или содержит упоминание.
   // Одинаковые названия у нескольких исполнителей — одна запись.
   const suspects = new Map()
-  for (const { userId, said, mentions } of prepared) {
+  for (const { userId, said, inQuotes, mentions } of prepared) {
     for (const t of open) {
       if (t.ownerId === userId) continue
-      const exact = t.low.length >= MIN_TITLE && said.includes(t.key)
+      const exact = t.low.length >= MIN_TITLE && (bareMatchable(t.low) ? said.includes(t.key) : inQuotes.has(t.low))
       const mention = exact ? null : mentions.find((m) => t.low.includes(m))
       if (!exact && !mention) continue
       const id = `${userId}|${t.key}`
@@ -148,7 +156,7 @@ export async function foreignTitles(items, viewer) {
   const excused = (s, titles) => titles.some((title) => padded(title).includes(s.key) || (s.mention && sameTitle(s.mention, title)))
   const mineOpen = (userId) => open.filter((t) => t.ownerId === userId).map((t) => t.title)
   let left = [...suspects.values()].filter((s) => !excused(s, mineOpen(s.userId)))
-  if (!left.length) return { problems: [], incomplete: false }
+  if (!left.length) return { problems: [], incomplete: truncated }
   // Своё название могло быть у сделанной задачи: её среди открытых нет. Но
   // только у недавней: задача, закрытая месяц назад, не должна прикрывать
   // живую чужую с тем же названием.
@@ -160,7 +168,7 @@ export async function foreignTitles(items, viewer) {
   const ids = [...new Set(left.flatMap((s) => [...s.ownerIds]))]
   const users = ids.length ? await prisma.user.findMany({ where: { id: { in: ids } }, select: OWNER.select }) : []
   const byId = new Map(users.map((u) => [u.id, u]))
-  return { problems: left.map((s) => ({ userId: s.userId, title: s.title, owners: [...s.ownerIds].map((id) => byId.get(id)).filter(Boolean) })), incomplete: false }
+  return { problems: left.map((s) => ({ userId: s.userId, title: s.title, owners: [...s.ownerIds].map((id) => byId.get(id)).filter(Boolean) })), incomplete: truncated }
 }
 
 /**

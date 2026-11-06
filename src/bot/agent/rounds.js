@@ -8,7 +8,7 @@ import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
 import { hm } from './format.js'
 import { chatOf, claimNotice, hasNotice, releaseNotice, tell, tellChat } from './notify.js'
-import { allTitlesDone, foreignTitles, taskStates } from './roundTasks.js'
+import { allTitlesDone, foreignTitles, SCAN_MAX, taskStates } from './roundTasks.js'
 
 /**
  * Поручения агенту: «опроси команду, меня не будет два часа», «напиши
@@ -176,8 +176,10 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   }
   // Чужая задача в тексте человека — модель могла перепутать людей. Черновик не создаём.
   const foreign = await foreignTitles(people.map((p) => ({ userId: p.person.id, text: p.text })), owner)
-  if (foreign.incomplete) return { shown: false, text: 'Черновик не создан, проверить названия задач не вышло, их слишком много. Скажи об этом коротко и предложи попробовать позже.' }
   if (foreign.problems.length) return { shown: false, text: foreignText(foreign.problems, labels, owner) }
+  // Проверка вспомогательная: задач стало слишком много — проверили свежие,
+  // остальное видно Яну в черновике. Блокировать поручения из-за этого нельзя.
+  if (foreign.incomplete) console.warn(`[агент] поручение: названия задач проверены не все, их больше ${SCAN_MAX}`)
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
   const subject = cut(plain(String(topic ?? ''), 500) || 'Узнать, как дела', 500)
   // Прежний черновик этого человека больше не нужен: новый его заменяет.

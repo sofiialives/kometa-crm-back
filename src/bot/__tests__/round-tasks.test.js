@@ -83,11 +83,19 @@ describe('чужая задача в сообщении человеку', () =>
     assert.equal((await problemsOf([{ userId: 'denis', text: 'Как макет баннерами?' }], ADMIN)).length, 0)
   })
 
-  test('короткое название чужой задачи сравниваем точно по границам слов', async (t) => {
+  test('короткое название чужой задачи без кавычек это просто слово, в кавычках — чужая задача', async (t) => {
     rows(t, { open: [task({ title: 'Отчёт' })], own: [] })
-    assert.equal((await problemsOf([{ userId: 'denis', text: 'Денис, пришли отчёт по SEO' }])).length, 1)
-    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, пришли отчётность по SEO' }]), [])
+    // Ложный отказ хуже пропуска: «пришли отчёт» не задача Антона.
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, пришли отчёт по SEO' }]), [])
+    assert.equal((await problemsOf([{ userId: 'denis', text: 'Денис, как «Отчёт»?' }])).length, 1)
+    assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, как «Отчётность»?' }]), [])
     assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Денис, привет' }]), [])
+  })
+
+  test('название из двух слов или длинное ищем и без кавычек', async (t) => {
+    rows(t, { open: [task({ title: 'Макет баннера' }), task({ id: 't9', title: 'Документация' })], own: [] })
+    assert.equal((await problemsOf([{ userId: 'denis', text: 'Денис, как макет баннера?' }])).length, 1)
+    assert.equal((await problemsOf([{ userId: 'denis', text: 'Денис, что с документация?' }])).length, 1)
   })
 
   test('короткое название, которое входит в свою задачу адресата, чужим не считается', async (t) => {
@@ -217,14 +225,16 @@ describe('чужая задача в сообщении человеку', () =>
     assert.equal(cancelled.length, 0)
   })
 
-  test('message_people: проверка неполная — черновика нет, модель получает ошибку', async (t) => {
+  test('message_people: проверка неполная — поручение не блокируется, черновик создаётся', async (t) => {
     patch(t, prisma.user, 'findFirst', async () => ({ ...denis, telegram: { chatId: '1002' } }))
     patch(t, prisma.task, 'findMany', async ({ take }) => Array.from({ length: take }, (_, i) => task({ id: `x${i}`, title: `Другая задача ${i}` })))
-    const created = patch(t, prisma.botRound, 'create', async () => ({ id: 'r1' }))
-    const res = await createDraft({ id: 'owner', role: 'admin' }, '9001', { topic: 'Как дела', minutes: 60, collect: true, messages: [{ person_id: 'denis', text: 'Денис, привет. Как дела?' }] })
-    assert.equal(res.shown, false)
-    assert.match(res.text, /проверить названия задач не вышло/)
-    assert.equal(created.length, 0)
+    patch(t, prisma.botRound, 'updateMany', async () => ({ count: 0 }))
+    const created = patch(t, prisma.botRound, 'create', async () => { throw new Error('дошли до создания') })
+    await assert.rejects(
+      createDraft({ id: 'owner', role: 'admin' }, '9001', { topic: 'Как дела', minutes: 60, collect: true, messages: [{ person_id: 'denis', text: 'Денис, привет. Как дела?' }] }),
+      /дошли до создания/,
+    )
+    assert.equal(created.length, 1)
   })
 })
 
