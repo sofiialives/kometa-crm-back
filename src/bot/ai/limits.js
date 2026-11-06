@@ -77,7 +77,7 @@ export function plain(text, max = 300) {
   let clean = String(text ?? '').normalize('NFKC').replace(/[\p{Cf}\p{Co}]/gu, '')
     .replace(/[\u0000-\u001f\u007f«»]+/g, ' ').replace(/\s+/g, ' ').trim()
   // Метку рамки человек знать не должен, а если узнал, повторить её не сможет.
-  clean = clean.replaceAll(FRAME_TAG, '')
+  clean = clean.replaceAll(FRAME_TAG, '…')
   for (const marker of MARKERS) clean = clean.replace(marker, '…')
   return cut(clean, max)
 }

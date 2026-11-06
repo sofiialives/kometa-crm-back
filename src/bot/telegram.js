@@ -1,4 +1,10 @@
 import { env } from '../config/env.js'
+import { FRAME_TAG } from './ai/limits.js'
+
+// Метка рамки данных живёт только в запросе к модели. Если модель всё же
+// повторила её в ответе, людям она не уходит: иначе её можно подставить в
+// своё сообщение и подделать конец блока.
+const hideFrameTag = (text) => text.replaceAll(FRAME_TAG, '…')
 
 // Адрес API можно подменить: локально бот говорит с поддельным телеграмом
 // (src/scripts/fakeTelegram.js), чтобы не трогать боевой токен.
@@ -87,7 +93,7 @@ export function splitText(text, max = MAX_TEXT) {
  * временно, повторять незачем.
  */
 export async function sendMessage(chatId, text, { buttons } = {}) {
-  const parts = splitText(String(text))
+  const parts = splitText(hideFrameTag(String(text)))
   let messageId
   for (let i = 0; i < parts.length; i += 1) {
     const last = i === parts.length - 1
@@ -110,7 +116,7 @@ export async function sendMessage(chatId, text, { buttons } = {}) {
 /** Поменять уже отправленное сообщение — например, убрать кнопки после ответа. */
 export async function editMessage(chatId, messageId, text, { buttons } = {}) {
   const { data } = await call('editMessageText', {
-    chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: keyboard(buttons),
+    chat_id: chatId, message_id: messageId, text: hideFrameTag(String(text)), parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: keyboard(buttons),
   })
   if (!data?.ok && !/not modified/.test(data?.description || '')) {
     console.error(`[бот] сообщение ${messageId} не изменилось:`, data?.description)

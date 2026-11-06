@@ -578,3 +578,24 @@ describe('деньги на ключе', () => {
     assert.equal(isOutOfMoney({ status: 400, message: 'max_tokens: must be positive' }), false)
   })
 })
+
+describe('метка рамки не уходит людям', () => {
+  test('модель повторила метку в ответе — в телеграм уходит без неё', async (t) => {
+    const { FRAME_TAG } = await import('../ai/limits.js')
+    const { sendMessage } = await import('../telegram.js')
+    const bodies = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async (url, init) => {
+      bodies.push(JSON.parse(init.body))
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }))
+    }
+    t.after(() => { globalThis.fetch = realFetch })
+    await sendMessage('1', `вот метка ${FRAME_TAG} и конец`)
+    assert.equal(bodies.length, 1)
+    assert.equal(bodies[0].text.includes(FRAME_TAG), false)
+    // Вырезанная метка не склеивает соседние куски в новую.
+    const half = FRAME_TAG.length / 2
+    const glued = `${FRAME_TAG.slice(0, half)}${FRAME_TAG}${FRAME_TAG.slice(half)}`
+    assert.equal(plain(glued).includes(FRAME_TAG), false)
+  })
+})
