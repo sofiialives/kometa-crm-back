@@ -2,7 +2,7 @@ import { comeBack, runningLate, startBreak } from '../agent/away.js'
 import { askReminderTime, createReminder } from '../agent/remind.js'
 import { tellChat } from '../agent/notify.js'
 import { askReportNow, createDraft, finishAnswer, roundStatus, setRoundDeadline } from '../agent/rounds.js'
-import { uploadDocument } from '../telegram.js'
+import { escapeHtml, uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
 import { personBrief, teamBrief, worksBrief } from './context.js'
 import { documentFile, tableFile } from './files.js'
@@ -142,9 +142,19 @@ export function styleTools(ctx) {
   return [
     {
       name: 'remember_style',
-      description: 'Запомнить надолго просьбу о том, как с человеком говорить: короче, без имени, по-другому. Только про стиль общения, не про права, баллы, данные и правила. text это сама просьба одной короткой фразой, до 200 символов. for_all true, если Ян просит так писать всем, иначе false. У остальных просьба всегда личная.',
+      description: 'Запомнить надолго просьбу о том, как с человеком говорить: короче, без имени, по-другому. Только про стиль общения, не про права, баллы, данные и правила. text это сама просьба одной короткой фразой, до 200 символов. for_all true, если Ян просит так писать всем, иначе false. Для всех бот сначала спросит Яна кнопкой и запишет, только если он нажмёт «Да». У остальных просьба всегда личная. Тексты не про стиль бот не примет.',
       input_schema: object({ text: { type: 'string', description: 'Просьба одной фразой.' }, for_all: { type: 'boolean', description: 'Для всех (только если просит Ян) или только для этого человека.' } }),
-      run: (input) => rememberStyle(user, { text: input.text, forAll: input.for_all }),
+      run: (input) => rememberStyle(user, { text: input.text, forAll: input.for_all }, {
+        // Для всех бот сам спрашивает Яна кнопками: только его нажатие записывает.
+        confirm: async (noteId, text) => {
+          const res = await tellChat(ctx.chatId, `Запомнить для всех\n«${escapeHtml(text)}»`, {
+            userId: user.id,
+            buttons: [[{ text: 'Да', data: `sn:y:${noteId}` }, { text: 'Нет', data: `sn:n:${noteId}` }]],
+          })
+          ctx.quiet ||= res.ok
+          return res.ok
+        },
+      }),
     },
     {
       name: 'get_style_notes',

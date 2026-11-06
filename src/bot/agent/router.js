@@ -12,6 +12,7 @@ import * as state from './state.js'
 import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
 import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES, tooFarReminder } from './remind.js'
 import { agentReady, agentReply } from '../ai/agent.js'
+import { decideStyleNote } from '../ai/styleNotes.js'
 import { activeTarget, decideDraft, decideReport, linkMessages } from './rounds.js'
 import { listIntent, listText } from './lists.js'
 
@@ -271,6 +272,12 @@ export async function onCallback(cb, user, now = new Date()) {
       ? await decideDraft(user, id, action === 'go', now)
       : await decideReport(user, id, action === 'rp', now)
     return closeButtons(cb, note)
+  }
+  if (kind === 'sn') {
+    // Просьба о стиле для всех: решает только владелец, и кнопка живёт три часа.
+    await answerCallback(cb.id)
+    if (cb.message?.date && Date.now() / 1000 - cb.message.date > 3 * 60 * 60) return closeButtons(cb, 'Кнопка устарела, попроси ещё раз')
+    return closeButtons(cb, await decideStyleNote(user, id, action === 'y', now))
   }
   if (kind === 'rv' || kind === 'fm') {
     if (!owner) return answerCallback(cb.id, 'Это решает владелец')

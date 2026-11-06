@@ -1341,6 +1341,9 @@ model BotStyleNote {
   createdById String
   createdBy   User     @relation("BotStyleNoteAuthor", fields: [createdById], references: [id])
   createdAt   DateTime @default(now())
+  // Пока пусто, заметка только предложена: просьбу «для всех» владелец
+  // подтверждает кнопкой, личная действует сразу.
+  approvedAt  DateTime?
   removedAt   DateTime?
 
   @@index([userId, removedAt])
