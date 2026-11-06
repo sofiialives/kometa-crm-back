@@ -75,14 +75,35 @@ function nameBase(token) {
   return t.length >= 3 ? t : null
 }
 
-/** Назван ли человек в тексте просьбы: его имя или фамилия, в любом падеже. */
-export function isNamedIn(person, texts) {
-  const tokens = String(person?.name ?? '').split(/\s+/).flatMap((w) => w.match(/[\p{L}]+/gu) ?? [])
+const nameTokens = (person) => String(person?.name ?? '').split(/\s+/).flatMap((w) => w.match(/[\p{L}]+/gu) ?? [])
+
+/** Какие части имени человека («Николай», «Волков») есть в тексте просьбы, в любом падеже. */
+export function namedTokens(person, texts) {
   const words = texts.flatMap(wordsOf)
-  return tokens.some((token) => {
+  return nameTokens(person).filter((token) => {
     const base = nameBase(token)
     return base && words.some((w) => w.startsWith(base) && CASE_END.test(w.slice(base.length)))
   })
+}
+
+/** Назван ли человек в тексте просьбы: его имя или фамилия, в любом падеже. */
+export function isNamedIn(person, texts) {
+  return namedTokens(person, texts).length > 0
+}
+
+/**
+ * Назван только по имени, а в команде есть тёзка: «напиши Александру» — модель
+ * могла выбрать не того. Тогда черновик, где видно, кому уйдёт.
+ */
+async function hasNamesake(people, texts) {
+  for (const p of people) {
+    const found = namedTokens(p.person, texts)
+    const [first, ...rest] = nameTokens(p.person)
+    if (!first || rest.some((t) => found.includes(t))) continue
+    const same = await prisma.user.count({ where: { active: true, id: { not: p.person.id }, name: { startsWith: first, mode: 'insensitive' } } })
+    if (same) return true
+  }
+  return false
 }
 
 /** Сколько человеко-сообщений без черновика просящий отправил сегодня. */
@@ -100,6 +121,7 @@ async function draftReason({ owner, people, texts, links, now }) {
   if (!['admin', 'lead'].includes(owner.role)) return 'просит не владелец и не руководитель'
   if (people.length > DIRECT_PEOPLE_MAX) return `людей больше ${DIRECT_PEOPLE_MAX}`
   if (!people.every((p) => isNamedIn(p.person, texts))) return 'не все названы по имени в просьбе'
+  if (await hasNamesake(people, texts)) return 'в команде есть тёзки, а фамилию не назвали'
   if (isQuietHour(now)) return 'сейчас ночь, тихие часы'
   if (links.length) return 'в текстах есть ссылки'
   if ((await directToday(owner.id, now)) + people.length > DIRECT_PER_DAY) return `дневной лимит ${DIRECT_PER_DAY} сообщений без черновика исчерпан`

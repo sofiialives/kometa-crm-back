@@ -24,8 +24,9 @@ const msg = (id, text) => ({ person_id: id, text })
 const input = (ids, extra = {}) => ({ topic: 'Передать', minutes: 60, collect: true, messages: ids.map((id) => msg(id, `${PEOPLE[id].name.split(' ')[0]}, привет, пришли макет`)), ...extra })
 
 /** Всё, что трогает createDraft, в памяти. Возвращает вызовы. */
-function setup(t, { used = 0, running = [], viewerWhere = null } = {}) {
+function setup(t, { used = 0, running = [], viewerWhere = null, namesakes = 0 } = {}) {
   const h = botHarness(t)
+  const namesakeAsked = patch(t, prisma.user, 'count', async () => namesakes)
   const asked = patch(t, prisma.user, 'findFirst', async ({ where }) => {
     const id = where.AND[1].id
     viewerWhere?.(where)
@@ -46,7 +47,7 @@ function setup(t, { used = 0, running = [], viewerWhere = null } = {}) {
     targets = args.data.targets.create.map((x, i) => ({ id: `t${i}`, ...x }))
     return origCreate(args)
   }
-  return { ...h, asked, created, counted }
+  return { ...h, asked, created, counted, namesakeAsked }
 }
 
 describe('имя в просьбе: падежи и написание', () => {
@@ -178,6 +179,21 @@ describe('когда вместо этого черновик', () => {
     const { s, res } = await check(t, { people: ['nik', 'rom'], texts: ['напиши Николаю'] })
     assert.match(res.text, /потому что не все названы по имени/)
     assert.equal(draftData(s).direct, false)
+  })
+
+  test('назван только по имени, а в команде есть тёзка', async (t) => {
+    const s = setup(t, { namesakes: 1 })
+    const res = await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Николаю'] })
+    assert.match(res.text, /тёзки/)
+    assert.equal(s.created[0][0].data.direct, false)
+    assert.equal(s.namesakeAsked[0][0].where.name.startsWith, 'Николай')
+  })
+
+  test('тёзка есть, но назвали фамилию — пишет сам', async (t) => {
+    const s = setup(t, { namesakes: 1 })
+    const res = await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Орлову'] })
+    assert.equal(res.direct, true)
+    assert.equal(s.namesakeAsked.length, 0)
   })
 
   test('«ответь ему» без имени', async (t) => {
