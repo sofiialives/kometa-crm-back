@@ -84,11 +84,28 @@ export function plainStyle(text) {
     .trim()
 }
 
-/** Без ссылок и упоминаний: телеграм делает их кликабельными, даже голый домен. */
+// Заглушка с пробелами по краям: иначе вставленное слово прилипает к соседнему
+// тексту, и «evil.comhttps://x» превращается в «evil.comссылка», где домен уже
+// не узнать. Лишние пробелы потом схлопываем.
+function noLinksOnce(text) {
+  return text
+    .replace(/(?:https?|hxxps?|tg):\/\/\S+/gi, ' ссылка ')
+    .replace(/\b(?:t\.me|telegram\.me|www\.)\S*/gi, ' ссылка ')
+    .replace(/(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|be|fm|ws|im|gl|ee|ink|link|page|click|top|club|store|shop)(?![\p{L}\d])\S*/giu, ' ссылка ')
+    .replace(/@\w{3,}/g, ' упоминание ')
+}
+
+/**
+ * Без ссылок и упоминаний: телеграм делает их кликабельными, даже голый домен.
+ * Чистим, пока текст меняется: одна замена не должна прятать от другой то,
+ * что осталось рядом.
+ */
 export function noLinks(text) {
-  return String(text ?? '')
-    .replace(/(?:https?|hxxps?|tg):\/\/\S+/gi, 'ссылка')
-    .replace(/\b(?:t\.me|telegram\.me|www\.)\S*/gi, 'ссылка')
-    .replace(/(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|be|fm|ws|im|gl|ee|ink|link|page|click|top|club|store|shop)(?![\p{L}\d])\S*/giu, 'ссылка')
-    .replace(/@\w{3,}/g, 'упоминание')
+  let out = String(text ?? '')
+  for (let i = 0; i < 5; i += 1) {
+    const next = noLinksOnce(out)
+    if (next === out) break
+    out = next
+  }
+  return out.replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '')
 }

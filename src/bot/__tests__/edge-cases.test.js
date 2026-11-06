@@ -76,3 +76,16 @@ describe('кнопки задач чужого человека', () => {
     assert.equal(h.sent.length, 0)
   })
 })
+
+describe('noLinks: заглушка не прячет соседний домен', () => {
+  test('«evil.comhttps://x» — обе ссылки убраны', () => {
+    assert.equal(noLinks('evil.comhttps://x'), 'ссылка ссылка')
+    assert.equal(noLinks('смотри evil.rut.me/x'), 'смотри ссылка')
+    assert.doesNotMatch(noLinks('a.comhttps://b.comtg://c evil.io@ivan_x'), /\.(com|io)|@/)
+  })
+
+  test('лишних пробелов не остаётся, обычный текст не меняется', () => {
+    assert.equal(noLinks('смотри https://x.com, там'), 'смотри ссылка там')
+    assert.equal(noLinks('пришли ссылку на макет\nи v2.5 тоже'), 'пришли ссылку на макет\nи v2.5 тоже')
+  })
+})
