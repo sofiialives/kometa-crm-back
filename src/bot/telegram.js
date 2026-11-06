@@ -1,4 +1,10 @@
 import { env } from '../config/env.js'
+import { FRAME_TAG } from './ai/limits.js'
+
+// Метка рамки данных живёт только в запросе к модели. Если модель всё же
+// повторила её в ответе, людям она не уходит: иначе её можно подставить в
+// своё сообщение и подделать конец блока.
+const hideFrameTag = (text) => text.replaceAll(FRAME_TAG, '…')
 
 // Адрес API можно подменить: локально бот говорит с поддельным телеграмом
 // (src/scripts/fakeTelegram.js), чтобы не трогать боевой токен.
@@ -51,7 +57,8 @@ async function call(method, body, { timeoutMs = 15000 } = {}) {
       }
       return { data, status: res.status }
     } catch (e) {
-      return { data: null, status: 0, error: e.message }
+      // Таймаут: сообщение могло уже дойти, телеграм просто не успел ответить.
+      return { data: null, status: 0, error: e.message, unsure: e.name === 'TimeoutError' || e.name === 'AbortError' }
     }
   }
   return { data: null, status: 429 }
@@ -79,16 +86,18 @@ export function splitText(text, max = MAX_TEXT) {
 }
 
 /**
- * Отправить сообщение. { ok, messageId } или { ok: false, retry } — retry
- * значит «сбой временный, можно попробовать позже» (сеть, 429, 5xx). Бот
- * заблокирован или чат не найден — не временно, повторять незачем.
+ * Отправить сообщение. { ok, messageId } или { ok: false, retry, unsure } —
+ * retry значит «сбой временный, можно попробовать позже» (сеть, 429, 5xx).
+ * unsure значит «не дождались ответа телеграма»: сообщение могло дойти, и
+ * повтор отправит его второй раз. Бот заблокирован или чат не найден — не
+ * временно, повторять незачем.
  */
 export async function sendMessage(chatId, text, { buttons } = {}) {
-  const parts = splitText(String(text))
+  const parts = splitText(hideFrameTag(String(text)))
   let messageId
   for (let i = 0; i < parts.length; i += 1) {
     const last = i === parts.length - 1
-    const { data, status } = await call('sendMessage', {
+    const { data, status, unsure } = await call('sendMessage', {
       chat_id: chatId, text: parts[i], parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: last ? keyboard(buttons) : undefined,
     })
     if (!data?.ok) {
@@ -97,7 +106,7 @@ export async function sendMessage(chatId, text, { buttons } = {}) {
       console.error(`[бот] сообщение в ${chatId} не ушло:`, data?.description || status)
       // Часть длинного уже ушла — не повторяем, иначе начало придёт дважды.
       if (i > 0) return { ok: true, messageId, partial: true }
-      return { ok: false, retry: status === 0 || status === 429 || status >= 500 }
+      return { ok: false, retry: status === 0 || status === 429 || status >= 500, unsure: Boolean(unsure) }
     }
     messageId = data.result?.message_id
   }
@@ -107,7 +116,7 @@ export async function sendMessage(chatId, text, { buttons } = {}) {
 /** Поменять уже отправленное сообщение — например, убрать кнопки после ответа. */
 export async function editMessage(chatId, messageId, text, { buttons } = {}) {
   const { data } = await call('editMessageText', {
-    chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: keyboard(buttons),
+    chat_id: chatId, message_id: messageId, text: hideFrameTag(String(text)), parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: keyboard(buttons),
   })
   if (!data?.ok && !/not modified/.test(data?.description || '')) {
     console.error(`[бот] сообщение ${messageId} не изменилось:`, data?.description)
@@ -191,9 +200,9 @@ export async function sendFileById(chatId, kind, fileId, { caption } = {}) {
   const [method, field] = SEND_BY_KIND[kind] ?? SEND_BY_KIND.document
   const body = { chat_id: chatId, [field]: fileId }
   if (caption && kind !== 'video_note') Object.assign(body, { caption: String(caption).slice(0, 1024), parse_mode: 'HTML' })
-  const { data, status } = await call(method, body, { timeoutMs: 30000 })
+  const { data, status, unsure } = await call(method, body, { timeoutMs: 30000 })
   if (!data?.ok) console.error(`[бот] файл в ${chatId} не ушёл:`, data?.description || status)
-  return { ok: Boolean(data?.ok), retry: !data?.ok && (status === 0 || status === 429 || status >= 500) }
+  return { ok: Boolean(data?.ok), retry: !data?.ok && (status === 0 || status === 429 || status >= 500), unsure: Boolean(unsure) }
 }
 
 /**
@@ -207,9 +216,9 @@ export async function sendAlbum(chatId, items, { caption } = {}) {
     ...(i === 0 && caption ? { caption: String(caption).slice(0, 1024), parse_mode: 'HTML' } : {}),
   }))
   if (media.length === 1) return sendFileById(chatId, media[0].type, media[0].media, { caption })
-  const { data, status } = await call('sendMediaGroup', { chat_id: chatId, media }, { timeoutMs: 30000 })
+  const { data, status, unsure } = await call('sendMediaGroup', { chat_id: chatId, media }, { timeoutMs: 30000 })
   if (!data?.ok) console.error(`[бот] альбом в ${chatId} не ушёл:`, data?.description || status)
-  return { ok: Boolean(data?.ok), retry: !data?.ok && (status === 0 || status === 429 || status >= 500) }
+  return { ok: Boolean(data?.ok), retry: !data?.ok && (status === 0 || status === 429 || status >= 500), unsure: Boolean(unsure) }
 }
 
 /** Отправить готовый файл: таблицу или документ, который собрал агент. */

@@ -1,7 +1,7 @@
 import { comeBack, runningLate, startBreak } from '../agent/away.js'
 import { askReminderTime, createReminder } from '../agent/remind.js'
 import { tellChat } from '../agent/notify.js'
-import { askReportNow, createDraft, finishAnswer, roundStatus } from '../agent/rounds.js'
+import { askReportNow, createDraft, finishAnswer, roundStatus, setRoundDeadline } from '../agent/rounds.js'
 import { uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
 import { personBrief, teamBrief, worksBrief } from './context.js'
@@ -122,6 +122,8 @@ export function staffTools(ctx) {
       input_schema: object({ note: { type: 'string', description: 'Суть для Яна.' } }),
       run: async (input) => {
         const sent = await ctx.noteToOwner(String(input.note ?? ''))
+        // Агент может промолчать или сорваться: тогда человеку ответит правило.
+        ctx.toldOwner = sent
         return sent
           ? 'Передал Яну. Скажи человеку коротко, что передал.'
           : 'Не передал: сейчас ночь или на сегодня заметок от него уже много. Скажи, что записал, а если срочно, пусть напишет Яну сам.'
@@ -148,13 +150,13 @@ export function teamTools(ctx, { team = false } = {}) {
     }] : []),
     {
       name: 'get_person',
-      description: 'Всё о человеке: личные задачи и задачи из Иерархии с клиентами, работы, звонки, отлучки, баллы, что писал боту за сутки. person_id из сводки.',
+      description: 'Всё о человеке: личные задачи и задачи из Иерархии с клиентами, работы, звонки, отлучки, баллы, переписка с ботом за сутки, и что бот писал ему сам. person_id из сводки.',
       input_schema: object({ person_id: { type: 'string' } }),
       run: (input) => personBrief(user, input.person_id, now),
     },
     {
       name: 'get_works',
-      description: 'Активные работы в Иерархии: клиент, работа, кто ведёт, сколько задач открыто и просрочено. query это часть названия клиента или работы, null для всех.',
+      description: 'Активные работы в Иерархии: клиент, работа, кто ведёт, у кого из людей сколько открытых и просроченных задач и сами задачи с именами. query это часть названия клиента или работы, null для всех.',
       input_schema: object({ query: nullable('string', 'Клиент или работа, или null.') }),
       run: (input) => worksBrief(user, input.query, now),
     },
@@ -165,6 +167,7 @@ export function teamTools(ctx, { team = false } = {}) {
         topic: { type: 'string', description: 'Что нужно узнать или передать, одной строкой, для отчёта.' },
         minutes: nullable('integer', 'Сколько минут собирать ответы, от 10 до 480. null, если не сказали, тогда 60.'),
         collect: { type: 'boolean', description: 'true, если нужны ответы и отчёт. false, если просто передать.' },
+        new_round: { type: 'boolean', description: 'true, только если Ян прямо просит ещё одно поручение, пока этим же людям идёт прежнее. Иначе false.' },
         messages: {
           type: 'array',
           items: object({ person_id: { type: 'string' }, text: { type: 'string', description: 'Сообщение этому человеку.' } }),
@@ -177,8 +180,17 @@ export function teamTools(ctx, { team = false } = {}) {
       },
     },
     {
+      name: 'set_round_deadline',
+      description: 'Поменять срок отчёта у идущего поручения. Когда просят прислать отчёт через столько-то минут, пока поручение идёт, вызови это, а не message_people: новое поручение тем же людям не нужно. Меняет только тот, кто поручил. minutes это через сколько минут от сейчас прислать отчёт, от 10 до 480. round_id null, это последнее идущее поручение.',
+      input_schema: object({
+        minutes: { type: 'integer', description: 'Через сколько минут от сейчас.' },
+        round_id: nullable('string', 'id поручения или null.'),
+      }),
+      run: (input) => setRoundDeadline(user, input.round_id, input.minutes, now),
+    },
+    {
       name: 'get_round',
-      description: 'Что ответили по поручению: кто ответил, что написал, что прислал, кто молчит. round_id null, это последнее поручение.',
+      description: 'Что ответили по поручению: кто ответил, что написал, что прислал, кто молчит, и что бот писал каждому. round_id null, это последнее поручение.',
       input_schema: object({ round_id: nullable('string', 'id поручения или null.') }),
       run: (input) => roundStatus(user, input.round_id),
     },
