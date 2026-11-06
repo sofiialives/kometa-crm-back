@@ -252,7 +252,11 @@ export async function tickNotStarted(now = new Date()) {
   const jobs = []
   for (const group of notStartedGroups(tasks)) {
     const key = `task-nostart:${group.key}`
-    if (await hasNotice(key)) continue
+    // Отчёт Яну и вопрос человеку помнятся отдельно: отчёт ушёл, а вопрос
+    // упал на сбое телеграма, значит, вопрос повторим, а отчёт и баллы нет.
+    const askKey = `task-nostart-ask:${group.key}`
+    const reported = await hasNotice(key)
+    if (reported && (await hasNotice(askKey))) continue
     const userId = group.ownerId
     if ((await activeAway(userId, now)) || (await hasEndedDay(userId, now))) continue
     const lates = await prisma.botEvent.findMany({
@@ -274,19 +278,21 @@ export async function tickNotStarted(now = new Date()) {
     if (!list.length) continue
 
     const minutes = Math.round((now.getTime() - group.startAt.getTime()) / 60000)
-    const titles = list.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
-    const many = list.length > 1
-    const res = await sendOnce(key, () => tellOwners(`<b>${many ? 'Задачи не начаты вовремя' : 'Задача не начата вовремя'}</b>\n${escapeHtml(labelOf(group.owner))}\n${titles.join('\n')}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
-    if (res.skipped) continue
-    // Временный сбой — ключ освобождён, повторим на следующем проходе целиком.
-    if (!res.ok && res.retry) continue
-    for (const t of list) {
-      await logEvent(userId, 'task_not_started', { at: now, data: { taskId: t.id, taskTitle: t.title, startAt: t.startAt.toISOString(), told: res.ok } })
-      // Баллы по событию «Задача не начата вовремя», если оно есть в профиле:
-      // сразу или заявкой владельцу. Сбой баллов не должен сорвать сообщения.
-      await chargeNotStarted(t, now).catch((e) => console.error('[бот] баллы за неначатую задачу:', e.message))
+    if (!reported) {
+      const titles = list.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
+      const many = list.length > 1
+      const res = await sendOnce(key, () => tellOwners(`<b>${many ? 'Задачи не начаты вовремя' : 'Задача не начата вовремя'}</b>\n${escapeHtml(labelOf(group.owner))}\n${titles.join('\n')}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
+      if (res.skipped) continue
+      // Временный сбой — ключ освобождён, повторим на следующем проходе целиком.
+      if (!res.ok && res.retry) continue
+      for (const t of list) {
+        await logEvent(userId, 'task_not_started', { at: now, data: { taskId: t.id, taskTitle: t.title, startAt: t.startAt.toISOString(), told: res.ok } })
+        // Баллы по событию «Задача не начата вовремя», если оно есть в профиле:
+        // сразу или заявкой владельцу. Сбой баллов не должен сорвать сообщения.
+        await chargeNotStarted(t, now).catch((e) => console.error('[бот] баллы за неначатую задачу:', e.message))
+      }
     }
-    jobs.push({ userId, owner: group.owner, list, startAt: group.startAt, minutes })
+    jobs.push({ userId, owner: group.owner, list, startAt: group.startAt, minutes, askKey })
   }
   await askAll(jobs, now)
 }
@@ -317,7 +323,9 @@ export async function askAll(jobs, now = new Date(), deps = {}) {
           timeoutAfter(Math.min(deps.eachMs ?? NUDGE_EACH_MS, left)),
         ])
         : null
-      await tell(job.userId, text ? escapeHtml(text) : notStartedText(job.list, job.startAt), { buttons: taskButtons(job.list) })
+      const send = () => tell(job.userId, text ? escapeHtml(text) : notStartedText(job.list, job.startAt), { buttons: taskButtons(job.list) })
+      // Вопрос помнится своим ключом: временный сбой его освобождает, повторим на следующем проходе.
+      await (job.askKey ? sendOnce(job.askKey, send) : send())
         .catch((e) => console.error('[бот] вопрос о неначатых задачах:', e.message))
     }
   }

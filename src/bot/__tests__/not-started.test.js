@@ -123,3 +123,35 @@ describe('вопросы агента не держат проход', () => {
     assert.equal(h.sent.length, 4)
   })
 })
+
+describe('вопрос человеку не теряется при сбое', () => {
+  test('вопрос упал на сбое телеграма: отчёт Яну и баллы один раз, вопрос повторяется отдельным ключом', async (t) => {
+    const { h } = setup(t)
+    const charges = patch(t, prisma.botEvent, 'create', async () => ({}))
+    const ok = globalThis.fetch
+    let failUser = true
+    globalThis.fetch = async (url, init) => {
+      if (failUser && String(url).endsWith('sendMessage') && JSON.parse(init.body).chat_id === 'chat-u1') return new Response(JSON.stringify({ ok: false }), { status: 500 })
+      return ok(url, init)
+    }
+    t.after(() => { globalThis.fetch = ok })
+
+    await tickNotStarted(NOW)
+    const toOwner = () => h.sent.filter((m) => m.chatId === 'chat-owner').length
+    assert.equal(toOwner(), 1)
+    assert.ok(h.notices.has('task-nostart:u1:' + T('12:00').getTime()))
+    assert.ok(![...h.notices].some((k) => k.startsWith('task-nostart-ask:')), 'ключ вопроса освобождён')
+    const eventsAfterFirst = charges.length
+
+    failUser = false
+    await tickNotStarted(new Date(NOW.getTime() + 60000))
+    assert.equal(toOwner(), 1, 'отчёт Яну второй раз не уходит')
+    assert.equal(charges.length, eventsAfterFirst, 'события и баллы второй раз не пишутся')
+    const toUser = h.sent.filter((m) => m.chatId === 'chat-u1')
+    assert.equal(toUser.length, 1)
+    assert.match(toUser[0].text, /должны были начаться/)
+
+    await tickNotStarted(new Date(NOW.getTime() + 120000))
+    assert.equal(h.sent.filter((m) => m.chatId === 'chat-u1').length, 1, 'вопрос ушёл — больше не повторяем')
+  })
+})
