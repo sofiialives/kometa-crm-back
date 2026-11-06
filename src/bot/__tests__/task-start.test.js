@@ -35,33 +35,33 @@ describe('за 5 минут до начала', () => {
 describe('«Не успеваю» на несколько задач', () => {
   const user = { id: 'u1', name: 'Антон' }
 
-  test('выборка и события ограничены пятью, Яну названия и «и ещё N»', async (t) => {
+  test('извиняет все задачи минуты (до 50), Яну названия до пяти и «и ещё N», подпись «Имя, отдел»', async (t) => {
     const h = botHarness(t)
     const taken = []
     patch(t, prisma.task, 'findUnique', async () => ({ id: 't0', title: 'Задача 0', ownerId: 'u1', status: 'today', startAt: T('12:00') }))
-    patch(t, prisma.task, 'count', async () => 9)
     patch(t, prisma.task, 'findMany', async (q) => {
       if (q.where.id) return q.where.id.in.slice(0, q.take).map((id) => ({ id, title: `Задача ${id}`, startAt: T('12:00') }))
-      taken.push(q.take)
-      return Array.from({ length: q.take }, (_, i) => ({ id: `t${i}` }))
+      taken.push([q.take, q.where.startAt])
+      return Array.from({ length: 12 }, (_, i) => ({ id: `t${i}` }))
     })
     const events = []
     patch(t, prisma.botEvent, 'create', async ({ data }) => { events.push(data); return data })
     patch(t, prisma.user, 'findMany', async () => [{ id: 'owner' }])
-    patch(t, prisma.telegramLink, 'findFirst', async ({ where }) => ({ chatId: `chat-${where.userId}` }))
+    patch(t, prisma.user, 'findUnique', async () => ({ id: 'u1', name: 'Антон Иванов', role: 'staff', department: { name: 'Дизайн' } }))
 
     await lateForTask(user, 't0')
-    assert.deepEqual(taken, [5])
+    assert.equal(taken[0][0], 50)
+    assert.equal(taken[0][1].gte.getTime(), T('12:00').getTime())
+    assert.equal(taken[0][1].lt.getTime(), T('12:01').getTime())
     const state = peek('u1')
-    assert.equal(state.payload.taskIds.length, 5)
-    assert.equal(state.payload.total, 9)
+    assert.equal(state.payload.taskIds.length, 12)
 
-    await reportTaskLate(user, 't0', 'Застрял на правках', new Date(), state.payload.taskIds, state.payload.total)
-    assert.equal(events.length, 5)
+    await reportTaskLate(user, 't0', 'Застрял на правках', new Date(), state.payload.taskIds)
+    assert.equal(events.length, 12, 'событие task_late на каждую задачу, иначе за них штраф')
     const toOwner = h.sent.find((m) => m.text.includes('Не успевает начать задачи'))
-    assert.ok(toOwner)
     assert.equal((toOwner.text.match(/«Задача/g) ?? []).length, 5)
-    assert.match(toOwner.text, /\nи ещё 4\n/)
+    assert.match(toOwner.text, /\nи ещё 7\n/)
+    assert.match(toOwner.text, /<b>Не успевает начать задачи<\/b>\nАнтон, дизайн\n/)
   })
 })
 

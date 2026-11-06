@@ -5,10 +5,11 @@ import { mskDateStart } from '../../services/motivation/taskRules.js'
 import { updateTaskStatus } from '../../services/task.service.js'
 import { chargeNotStarted } from '../../services/motivation/autoTasks.service.js'
 import { isQuietHour, isWorkday, mskDayKey } from '../plan.js'
+import { labelOf } from '../ai/context.js'
 import { nudgeText } from '../ai/nudge.js'
 import { activeAway, hasEndedDay } from './away.js'
 import { hm, short } from './format.js'
-import { crmButton, firstName, hasNotice, logEvent, nameOf, row, sendOnce, tell, tellOwners } from './notify.js'
+import { crmButton, firstName, hasNotice, logEvent, row, sendOnce, tell, tellOwners } from './notify.js'
 import * as state from './state.js'
 import { dueTodayWhere, VISIBLE } from './taskScope.js'
 
@@ -222,7 +223,7 @@ export async function tickNotStarted(now = new Date()) {
       startAt: { gt: from, lte: to },
       owner: { active: true, role: { in: PARTICIPANT_ROLES }, telegram: { chatId: { not: null } } },
     },
-    select: { id: true, title: true, description: true, deadline: true, origin: true, startAt: true, createdAt: true, ownerId: true, owner: { select: { id: true, name: true, role: true } } },
+    select: { id: true, title: true, description: true, deadline: true, origin: true, startAt: true, createdAt: true, ownerId: true, owner: { select: { id: true, name: true, role: true, department: { select: { name: true } } } } },
     orderBy: { startAt: 'asc' },
   })
   const jobs = []
@@ -252,7 +253,7 @@ export async function tickNotStarted(now = new Date()) {
     const minutes = Math.round((now.getTime() - group.startAt.getTime()) / 60000)
     const titles = list.map((t) => `«${escapeHtml(short(t.title, 120))}»`)
     const many = list.length > 1
-    const res = await sendOnce(key, () => tellOwners(`<b>${many ? 'Задачи не начаты вовремя' : 'Задача не начата вовремя'}</b>\n${nameOf(group.owner)}\n${titles.join('\n')}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
+    const res = await sendOnce(key, () => tellOwners(`<b>${many ? 'Задачи не начаты вовремя' : 'Задача не начата вовремя'}</b>\n${escapeHtml(labelOf(group.owner))}\n${titles.join('\n')}\nПо плану в ${hm(group.startAt)}, прошло ${minutes} мин`))
     if (res.skipped) continue
     // Временный сбой — ключ освобождён, повторим на следующем проходе целиком.
     if (!res.ok && res.retry) continue
@@ -319,37 +320,52 @@ export async function takeTask(user, taskId) {
   }
 }
 
+// «Не успеваю» извиняет все задачи этого времени начала, иначе те, что за
+// пределами кнопок, получили бы штраф. Предел — страховка от огромных списков.
+const LATE_MAX = 50
+const LATE_TITLES = 5
+
+/** Подпись человека в отчёте Яну: «Имя, отдел». */
+async function labelFor(user) {
+  const person = await prisma.user.findUnique({ where: { id: user.id }, select: { id: true, name: true, role: true, department: { select: { name: true } } } }).catch(() => null)
+  return escapeHtml(person ? labelOf(person) : user.name || 'Сотрудник')
+}
+
 /**
  * Кнопка «Не успеваю»: спрашиваем, что случилось, и ждём строку. Она одна
  * на всё время начала, поэтому «не успеваю» относится ко всем ещё не
- * начатым задачам этого времени.
+ * начатым задачам этой минуты, не только к тем, что поместились в кнопки.
  */
 export async function lateForTask(user, taskId) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true, startAt: true } })
   if (!task || task.ownerId !== user.id) return 'Задача не найдена'
   if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта`
-  const where = { ownerId: user.id, status: 'today', startAt: task.startAt }
-  const total = task.startAt ? await prisma.task.count({ where }) : 0
-  const same = task.startAt
-    ? await prisma.task.findMany({ where: { ownerId: user.id, status: 'today', startAt: task.startAt }, orderBy: { createdAt: 'asc' }, take: MAX_BUTTON_TASKS, select: { id: true } })
+  const minuteStart = task.startAt ? new Date(startMinute(task.startAt) * 60000) : null
+  const same = minuteStart
+    ? await prisma.task.findMany({
+      where: { ownerId: user.id, status: 'today', startAt: { gte: minuteStart, lt: new Date(minuteStart.getTime() + 60000) } },
+      orderBy: { createdAt: 'asc' },
+      take: LATE_MAX,
+      select: { id: true },
+    })
     : []
-  const taskIds = [...new Set([task.id, ...same.map((t) => t.id)])].slice(0, MAX_BUTTON_TASKS)
-  state.expect(user.id, 'task_late', { taskId, taskIds, total: Math.max(total, taskIds.length) })
+  const taskIds = [...new Set([task.id, ...same.map((t) => t.id)])].slice(0, LATE_MAX)
+  state.expect(user.id, 'task_late', { taskId, taskIds })
   await tell(user.id, 'Что случилось и во сколько начнёшь?\nНапиши одной строкой, я передам Яну')
   return taskIds.length > 1 ? 'Не успеваю начать' : `Не успеваю начать «${escapeHtml(short(task.title, 120))}»`
 }
 
-/** Ответ на «что случилось?» — Яну. taskIds — задачи этого времени начала (не больше пяти), total — сколько их всего. */
-export async function reportTaskLate(user, taskId, text, now = new Date(), taskIds = [taskId], total = taskIds.length) {
-  const ids = [...new Set(taskIds)].slice(0, MAX_BUTTON_TASKS)
-  const found = await prisma.task.findMany({ where: { id: { in: ids }, ownerId: user.id }, take: MAX_BUTTON_TASKS, select: { id: true, title: true, startAt: true } })
+/** Ответ на «что случилось?» — Яну. taskIds — задачи этого времени начала, событие пишем на каждую. */
+export async function reportTaskLate(user, taskId, text, now = new Date(), taskIds = [taskId]) {
+  const ids = [...new Set(taskIds)].slice(0, LATE_MAX)
+  const found = await prisma.task.findMany({ where: { id: { in: ids }, ownerId: user.id }, take: LATE_MAX, select: { id: true, title: true, startAt: true } })
   const list = found.length ? found : [{ id: taskId, title: null, startAt: null }]
   for (const task of list) {
     await logEvent(user.id, 'task_late', { at: now, text, data: { taskId: task.id, taskTitle: task.title ?? null, startAt: task.startAt?.toISOString() ?? null } })
   }
   await tell(user.id, 'Понял, передал Яну')
-  const titles = list.map((t) => `«${escapeHtml(short(t.title || 'задача', 120))}»`)
-  const more = total > list.length ? [`и ещё ${total - list.length}`] : []
+  const titles = list.slice(0, LATE_TITLES).map((t) => `«${escapeHtml(short(t.title || 'задача', 120))}»`)
+  const more = list.length > LATE_TITLES ? [`и ещё ${list.length - LATE_TITLES}`] : []
   const startAt = list.find((t) => t.startAt)?.startAt
-  await tellOwners(`<b>${list.length > 1 ? 'Не успевает начать задачи' : 'Не успевает начать задачу'}</b>\n${nameOf(user)}\n${[...titles, ...more].join('\n')}${startAt ? `\nПо плану в ${hm(startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
+  await tellOwners(`<b>${list.length > 1 ? 'Не успевает начать задачи' : 'Не успевает начать задачу'}</b>\n${await labelFor(user)}\n${[...titles, ...more].join('\n')}${startAt ? `\nПо плану в ${hm(startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
 }

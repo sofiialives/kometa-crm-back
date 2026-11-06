@@ -9,7 +9,7 @@ import { patch } from './patch.js'
 
 const T = (time) => new Date(`2026-11-03T${time}:00+03:00`)
 const NOW = T('12:20')
-const owner = { id: 'u1', name: 'Антон Иванов', role: 'staff' }
+const owner = { id: 'u1', name: 'Антон Иванов', role: 'staff', department: { name: 'Дизайн' } }
 const task = (id) => ({ id, title: `Задача ${id}`, startAt: T('12:00'), createdAt: T('09:00'), ownerId: 'u1', owner })
 
 /** Всё, что читает tickNotStarted; working — есть ли у человека работа в процессе. */
@@ -41,7 +41,7 @@ describe('«эти задачи должны были начаться»', () =>
     const toUser = h.sent.find((m) => m.chatId === 'chat-u1')
     assert.match(toUser.text, /^Эти задачи должны были начаться в <b>12:00<\/b>/)
     assert.deepEqual(toUser.buttons.map((r) => r[0].callback_data), ['tk:go:a', 'tk:go:b', 'tk:late:a'])
-    assert.ok(h.sent.some((m) => m.chatId === 'chat-owner' && m.text.includes('Задачи не начаты вовремя')))
+    assert.ok(h.sent.some((m) => m.chatId === 'chat-owner' && m.text.includes('Задачи не начаты вовремя</b>\nАнтон, дизайн\n')))
   })
 
   test('взял в работу задачу группы или что-то уже в процессе: ни вопроса, ни отчёта, ни баллов', async (t) => {
