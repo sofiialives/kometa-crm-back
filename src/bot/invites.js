@@ -1,6 +1,7 @@
 import { prisma } from '../config/prisma.js'
 import { env } from '../config/env.js'
-import { escapeHtml, sendMessage } from './telegram.js'
+import { tellChat } from './agent/notify.js'
+import { escapeHtml } from './telegram.js'
 
 /**
  * Сообщения о самом факте звонка: позвали, перенесли, отменили, сняли.
@@ -45,7 +46,7 @@ async function chatsOf(userIds) {
 
   const links = await prisma.telegramLink.findMany({
     where: { userId: { in: ids }, chatId: { not: null }, user: { active: true } },
-    select: { chatId: true, user: { select: { name: true } } },
+    select: { chatId: true, userId: true, user: { select: { name: true } } },
   })
   return links
 }
@@ -53,7 +54,7 @@ async function chatsOf(userIds) {
 async function send(userIds, text) {
   if (!env.telegramBotToken) return
   const links = await chatsOf(userIds)
-  for (const l of links) await sendMessage(l.chatId, text)
+  for (const l of links) await tellChat(l.chatId, text, { userId: l.userId })
 }
 
 const fireAndForget = (promise, what) =>
