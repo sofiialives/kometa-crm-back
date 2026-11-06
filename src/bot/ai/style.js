@@ -87,8 +87,8 @@ export function plainStyle(text) {
 /** Без ссылок и упоминаний: телеграм делает их кликабельными, даже голый домен. */
 export function noLinks(text) {
   return String(text ?? '')
-    .replace(/(?:https?|hxxps?|tg):\/\/\S+/gi, '[ссылка]')
-    .replace(/\b(?:t\.me|telegram\.me|www\.)\S*/gi, '[ссылка]')
-    .replace(/(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|link|page)(?![\p{L}\d])\S*/giu, '[ссылка]')
-    .replace(/@\w{3,}/g, '[упоминание]')
+    .replace(/(?:https?|hxxps?|tg):\/\/\S+/gi, 'ссылка')
+    .replace(/\b(?:t\.me|telegram\.me|www\.)\S*/gi, 'ссылка')
+    .replace(/(?<![\p{L}\d.-])[\p{L}\d-]+(?:\.[\p{L}\d-]+)*\.(?:ru|com|net|org|io|me|su|рф|app|dev|site|online|info|biz|xyz|pro|ua|by|kz|ly|co|uk|de|us|gg|to|cc|tv|ai|be|fm|ws|im|gl|ee|ink|link|page|click|top|club|store|shop)(?![\p{L}\d])\S*/giu, 'ссылка')
+    .replace(/@\w{3,}/g, 'упоминание')
 }

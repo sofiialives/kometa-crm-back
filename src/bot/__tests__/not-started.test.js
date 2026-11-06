@@ -80,7 +80,7 @@ describe('текст вопроса пишет агент', () => {
     assert.equal(await nudgeText(base, { ...deps('Привет'), can: async () => false }), null)
     assert.equal(await nudgeText(base, { ...deps('Привет'), pick: async () => ({ model: null, why: 'day' }) }), null)
     assert.equal(await nudgeText(base, deps('   ')), null)
-    assert.equal(await nudgeText(base, deps('Глянь t.me/x')), 'Глянь [ссылка]')
+    assert.equal(await nudgeText(base, deps('Глянь t.me/x')), 'Глянь ссылка')
   })
 })
 
