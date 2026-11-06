@@ -122,6 +122,8 @@ export function staffTools(ctx) {
       input_schema: object({ note: { type: 'string', description: 'Суть для Яна.' } }),
       run: async (input) => {
         const sent = await ctx.noteToOwner(String(input.note ?? ''))
+        // Агент может промолчать или сорваться: тогда человеку ответит правило.
+        ctx.toldOwner = sent
         return sent
           ? 'Передал Яну. Скажи человеку коротко, что передал.'
           : 'Не передал: сейчас ночь или на сегодня заметок от него уже много. Скажи, что записал, а если срочно, пусть напишет Яну сам.'

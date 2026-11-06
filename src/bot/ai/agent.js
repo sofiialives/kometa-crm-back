@@ -74,8 +74,20 @@ function typing(chatId) {
 // ничего не сказала, человек остался бы без ответа.
 const READ_ONLY = new Set(['get_team', 'get_person', 'get_works', 'get_round'])
 const acted = (tools = []) => tools.some((t) => !READ_ONLY.has(t))
-// Действия, которые сами отвечают человеку стандартной фразой.
-const SPEAKS = new Set(['set_away', 'come_back', 'running_late', 'set_reminder', 'end_day', 'force_majeure', 'tell_owner'])
+// Действия, которые сами отвечают человеку стандартной фразой. tell_owner
+// сюда не входит: человеку он ничего не пишет, только Яну.
+const SPEAKS = new Set(['set_away', 'come_back', 'running_late', 'set_reminder', 'end_day', 'force_majeure'])
+
+// Передал Яну, а сам ничего не сказал: человек должен понять, что его
+// услышали. Фраза зависит от того, ушла ли заметка на самом деле.
+const TOLD_OWNER_TEXT = 'Понял, передал Яну'
+const NOTED_TEXT = 'Записал\nЕсли срочно, напиши Яну сам'
+
+/** Что сказать человеку, если после tell_owner ход кончился без ответа. null — сказать нечего. */
+export function toldOwnerReply({ tools = [], quiet = false, toldOwner }) {
+  if (toldOwner === undefined || quiet || tools.some((t) => SPEAKS.has(t))) return null
+  return toldOwner ? TOLD_OWNER_TEXT : NOTED_TEXT
+}
 
 /**
  * Готов ли агент ответить человеку сейчас: ключ, деньги, лимит. Роутер
@@ -187,6 +199,11 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
       if (target) await countReply(target.id)
       return true
     }
+    const told = toldOwnerReply({ tools: res.tools, quiet: ctx.quiet, toldOwner: ctx.toldOwner })
+    if (told) {
+      await tellChat(chatId, told, { userId: user.id, roundTargetId: target?.id ?? null })
+      return true
+    }
     // В опросе человек всегда должен понять, что его услышали: агент
     // записал ответ, но ничего не сказал — короткое «записал».
     if (target && !res.tools.some((t) => SPEAKS.has(t))) return ack()
@@ -206,6 +223,12 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
     return false
   } catch (e) {
     console.error(`[агент] сообщение: ${e.name}`)
+    // Яну уже ушло, а ход сорвался: человеку всё равно сказать, что передали.
+    const told = toldOwnerReply({ toldOwner: ctx.toldOwner })
+    if (told) {
+      await tellChat(chatId, told, { userId: user.id, roundTargetId: target?.id ?? null }).catch(() => {})
+      return true
+    }
     if (target) return ack()
     return false
   } finally {
