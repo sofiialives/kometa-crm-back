@@ -2,6 +2,7 @@ import { hm } from '../agent/format.js'
 import { preflight, runAgent } from './engine.js'
 import { takeAiCall } from './usage.js'
 import { cut, plain, TALK_BEGIN, TALK_END, TASKS_BEGIN, TASKS_END } from './limits.js'
+import { sharedNotesBlock } from './styleNotes.js'
 import { STYLE } from './system.js'
 
 /**
@@ -79,6 +80,8 @@ export async function aiReport({ ownerId, role = 'admin', topic, people }, deps 
   const take = deps.take ?? ((userId, kind, r) => takeAiCall(userId, kind, new Date(), r))
   if (!(await take(ownerId, 'report', role))) return null
   const once = { ...deps, take: async () => true }
+  const shared = deps.sharedNotes ?? await sharedNotesBlock()
+  const system = shared ? `${SYSTEM}\n\n${shared}` : SYSTEM
   const out = {}
   const queue = [...people]
   const worker = async () => {
@@ -87,7 +90,7 @@ export async function aiReport({ ownerId, role = 'admin', topic, people }, deps 
         userId: ownerId,
         role,
         kind: 'report',
-        system: [SYSTEM],
+        system: [system],
         messages: [{
           role: 'user',
           content: [{ type: 'text', text: `Поручение «${plain(topic, 300)}».\nЧеловек ${p.label}${p.summary ? `. Суть от агента в разговоре «${plain(p.summary, 400)}»` : ''}.\n\n${tasksText(p.tasks)}${TALK_BEGIN}\n${cut(transcript(p.messages), 12000)}\n${TALK_END}` }],

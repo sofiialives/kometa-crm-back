@@ -101,7 +101,7 @@ describe('отчёт показывает задачи на момент отч�
   test('модель отчёта получает задачи и правило: верь CRM и не выдумывай действий', async () => {
     const seen = []
     const deps = {
-      pick: async () => ({ model: 'claude-sonnet-5-5' }), can: async () => true, take: async () => true, record: async () => {},
+      pick: async () => ({ model: 'claude-sonnet-5-5' }), can: async () => true, take: async () => true, record: async () => {}, sharedNotes: '',
       create: async (p) => {
         seen.push(p)
         return { stop_reason: 'end_turn', content: [{ type: 'text', text: '{"points":["Делает"],"quote":null}' }], usage: { input_tokens: 1, output_tokens: 1 } }

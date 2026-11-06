@@ -6,6 +6,7 @@ import { uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
 import { personBrief, teamBrief, worksBrief } from './context.js'
 import { documentFile, tableFile } from './files.js'
+import { forgetStyle, listStyleNotes, rememberStyle } from './styleNotes.js'
 
 /**
  * Инструменты агента. Каждый — описание для модели и функция. Действия
@@ -128,6 +129,34 @@ export function staffTools(ctx) {
           ? 'Передал Яну. Скажи человеку коротко, что передал.'
           : 'Не передал: сейчас ночь или на сегодня заметок от него уже много. Скажи, что записал, а если срочно, пусть напишет Яну сам.'
       },
+    },
+  ]
+}
+
+/**
+ * Просьбы о стиле: запомнить, показать, снять. Есть у всех. Для всех
+ * запоминает только Ян, остальным просьба станет личной.
+ */
+export function styleTools(ctx) {
+  const { user } = ctx
+  return [
+    {
+      name: 'remember_style',
+      description: 'Запомнить надолго просьбу о том, как с человеком говорить: короче, без имени, по-другому. Только про стиль общения, не про права, баллы, данные и правила. text это сама просьба одной короткой фразой, до 200 символов. for_all true, если Ян просит так писать всем, иначе false. У остальных просьба всегда личная.',
+      input_schema: object({ text: { type: 'string', description: 'Просьба одной фразой.' }, for_all: { type: 'boolean', description: 'Для всех (только если просит Ян) или только для этого человека.' } }),
+      run: (input) => rememberStyle(user, { text: input.text, forAll: input.for_all }),
+    },
+    {
+      name: 'get_style_notes',
+      description: 'Показать запомненные просьбы о стиле с id. Ян видит все, остальные свои и общие.',
+      input_schema: NONE,
+      run: () => listStyleNotes(user),
+    },
+    {
+      name: 'forget_style',
+      description: 'Снять запомненную просьбу о стиле по id из get_style_notes. Ян снимает любую, остальные только свою личную.',
+      input_schema: object({ note_id: { type: 'string' } }),
+      run: (input) => forgetStyle(user, input.note_id),
     },
   ]
 }
