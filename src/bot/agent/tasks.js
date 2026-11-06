@@ -14,39 +14,12 @@ import * as state from './state.js'
 import { dueTodayWhere, VISIBLE } from './taskScope.js'
 
 /**
- * Задачи: утром — тем, у кого на сегодня пусто; за 5 минут до начала —
- * «перетащи в процесс». Не успевает — пишет боту, бот передаёт Яну.
+ * Задачи: за 5 минут до начала — «перетащи в процесс». Не успевает — пишет
+ * боту, бот передаёт Яну. Утро теперь в morning.js.
  * Человека с меткой отлучки или форс-мажора не трогаем.
  */
 
 const TASK_START_BEFORE_MIN = 5
-
-/** 10:00 по будням: нет ни одной задачи со сроком на сегодня. */
-export async function morningNoTasks(now = new Date()) {
-  const day = mskDayKey(now)
-  if (!isWorkday(day)) return 0
-  const start = mskDateStart(day)
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
-
-  const people = await prisma.user.findMany({
-    where: {
-      role: { in: PARTICIPANT_ROLES },
-      active: true,
-      telegram: { chatId: { not: null } },
-      tasks: { none: { deadline: { gte: start, lt: end } } },
-    },
-    select: { id: true, name: true },
-  })
-  let sent = 0
-  for (const person of people) {
-    if (await activeAway(person.id, now)) continue
-    const res = await sendOnce(`morning:${day}:${person.id}`, () => tell(person.id,
-      `${escapeHtml(firstName(person.name))}, на сегодня у тебя в CRM нет задач\nПроставь, пожалуйста, задачи на день`,
-      { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) }))
-    if (res.ok) sent += 1
-  }
-  return sent
-}
 
 const EVENING_TITLES = 5
 

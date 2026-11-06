@@ -2,7 +2,8 @@ import { prisma } from '../../config/prisma.js'
 import { tickBreaks } from './away.js'
 import { tickCheckin } from './checkin.js'
 import { tickFeed } from './feed.js'
-import { eveningOpenTasks, morningNoTasks, tickNotStarted, tickTaskStarts } from './tasks.js'
+import { eveningOpenTasks, tickNotStarted, tickTaskStarts } from './tasks.js'
+import { runMorningRound, tickMorning } from './morning.js'
 import { tickReminders } from './remind.js'
 import { tickRounds } from './rounds.js'
 
@@ -21,6 +22,7 @@ const STEPS = [
   ['чек-ин', tickCheckin],
   ['лента', tickFeed],
   ['поручения', tickRounds],
+  ['утренний обход', tickMorning],
   // Последним: вопросы агента могут занять до ~20 секунд и не должны задерживать остальное.
   ['не начатые задачи', tickNotStarted],
 ]
@@ -37,9 +39,10 @@ export async function runAgentOnce(now = new Date()) {
   }
 }
 
+/** 9:40 по будням: утренний обход, каждому лично. */
 export async function runMorning(now = new Date()) {
-  const sent = await morningNoTasks(now)
-  console.log(`[агент] утро: без задач на сегодня — ${sent}`)
+  const sent = await runMorningRound(now)
+  console.log(`[агент] утренний обход: написал ${sent}`)
 }
 
 export async function runEvening(now = new Date()) {

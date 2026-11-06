@@ -1276,6 +1276,10 @@ model BotRound {
   // true — агент написал сам, без черновика и кнопки: для лимита в день и отчётов.
   direct Boolean @default(false)
 
+  // ask — поручение владельца или руководителя; morning — утренний обход
+  // в 9:40, его ведёт агент сам, а отчёт идёт Яну и руководителям.
+  kind String @default("ask")
+
   createdAt DateTime @default(now())
 
   targets BotRoundTarget[]
@@ -1303,6 +1307,9 @@ model BotRoundTarget {
   summary String?
   // Сколько раз агент ответил человеку в этом разговоре: потолок на токены.
   replies Int     @default(0)
+  // Утренний обход: задача, которую агент предложил взять. Просто id, без
+  // связи: задачу могут удалить, отчёт тогда скажет, что её уже нет.
+  offeredTaskId String?
 
   sentAt     DateTime?
   answeredAt DateTime?

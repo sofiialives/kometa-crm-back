@@ -18,13 +18,13 @@ describe('один отчёт: срок меняем, а не заводим н�
     const changed = patch(t, prisma.botRound, 'updateMany', async () => ({ count: 1 }))
     const text = await setRoundDeadline(owner, null, 30, NOW)
     assert.match(text, /Срок отчёта теперь 17:30\. Скажи об этом коротко\. Новое поручение не создавай/)
-    assert.deepEqual(found[0][0].where, { ownerId: 'owner', status: 'sent', collect: true })
+    assert.deepEqual(found[0][0].where, { ownerId: 'owner', kind: 'ask', status: 'sent', collect: true })
     assert.deepEqual(changed[0][0], { where: { id: 'r1', status: 'sent' }, data: { deadlineAt: new Date('2026-11-04T14:30:00Z') } })
     await setRoundDeadline(owner, 'r1', 1, NOW)
     assert.equal(changed[1][0].data.deadlineAt.toISOString(), '2026-11-04T14:10:00.000Z')
     await setRoundDeadline(owner, 'r1', 5000, NOW)
     assert.equal(changed[2][0].data.deadlineAt.toISOString(), '2026-11-04T22:00:00.000Z')
-    assert.deepEqual(found[1][0].where, { ownerId: 'owner', status: 'sent', collect: true, id: 'r1' })
+    assert.deepEqual(found[1][0].where, { ownerId: 'owner', kind: 'ask', status: 'sent', collect: true, id: 'r1' })
   })
 
   test('нет идущего поручения или отчёт уже собирается — срок не меняем', async (t) => {
