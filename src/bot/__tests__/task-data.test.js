@@ -177,6 +177,22 @@ describe('работы в Иерархии: у каждого его задач�
     assert.match(text, /и ещё 1$/)
   })
 
+  test('руководитель: исполнителей из других отделов в «ведут» не называем, только сколько их', async (t) => {
+    const roman = { id: 'r', name: 'Роман Котов', role: 'staff', active: true, departmentId: 'd', department: { name: 'Дизайн' } }
+    const igor = { id: 'i', name: 'Игорь Орлов', role: 'staff', active: true, departmentId: 'd2', department: { name: 'Разработка' } }
+    const owner = { id: 'o', name: 'Ян Ветров', role: 'admin', active: true, departmentId: null, department: null }
+    patch(t, prisma.work, 'findMany', async () => [{ id: 'w1', title: 'Лендинг', client: { name: 'Румикс' }, department: { name: 'Дизайн' }, assignees: [roman, igor, owner] }])
+    patch(t, prisma.work, 'count', async () => 1)
+    patch(t, prisma.task, 'groupBy', async () => [])
+    patch(t, prisma.task, 'findMany', async () => [])
+    patch(t, prisma.user, 'findMany', async () => [])
+    const lead = await worksBrief({ id: 'lead', role: 'lead', departmentId: 'd' }, null, NOW)
+    assert.match(lead, /ведут \(Дизайн\) Роман, и ещё 2 из других отделов;/)
+    assert.doesNotMatch(lead, /Игорь|Ян/)
+    const admin = await worksBrief({ role: 'admin' }, null, NOW)
+    assert.match(admin, /Игорь/)
+  })
+
   test('сотруднику работы не видны', async () => {
     assert.equal(await worksBrief({ role: 'staff' }, null, NOW), 'Работы в Иерархии тебе не видны.')
   })

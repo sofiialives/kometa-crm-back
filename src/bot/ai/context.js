@@ -358,7 +358,7 @@ export async function worksBrief(viewer, query = null, now = new Date()) {
         title: true,
         client: { select: { name: true } },
         department: { select: { name: true } },
-        assignees: { where: { active: true }, select: { id: true, name: true, role: true, department: { select: { name: true } } } },
+        assignees: { where: { active: true }, select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } },
       },
     }),
     prisma.work.count({ where }),
@@ -391,7 +391,10 @@ export async function worksBrief(viewer, query = null, now = new Date()) {
   const lines = []
   if (total > works.length) lines.push(`Показаны ${works.length} работ из ${total}, для остальных уточни название в query.`)
   for (const w of works) {
-    const people = [...labelsFor(w.assignees).values()].join(', ') || 'никто не назначен'
+    // Исполнителей из чужих отделов руководителю не называем, только сколько их.
+    const seen = viewer.role === 'admin' ? w.assignees : w.assignees.filter((a) => a.id === viewer.id || inTeam(viewer, a))
+    const hidden = w.assignees.length - seen.length
+    const people = [...[...labelsFor(seen).values()], ...(hidden ? [`и ещё ${hidden} из других отделов`] : [])].join(', ') || 'никто не назначен'
     lines.push(`- клиент ${plain(w.client?.name, 40)}, «${plain(w.title, 70)}», отдел ${plain(w.department?.name, 30)}; ведут ${people}; открыто задач ${countOf(openBy, w.id)}, в процессе ${countOf(progressBy, w.id)}, просрочено ${countOf(overdueBy, w.id)}`)
     const mine = openBy.filter((g) => g.workId === w.id && known.has(g.ownerId)).sort((a, b) => String(labels.get(a.ownerId)).localeCompare(String(labels.get(b.ownerId)), 'ru'))
     for (const g of mine) {
