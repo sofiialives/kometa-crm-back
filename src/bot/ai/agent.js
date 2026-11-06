@@ -59,7 +59,7 @@ async function noteToOwner(user, note, text, now = new Date()) {
   await prisma.botNotice.create({ data: { key: `ai-note:${user.id}:${day}:${today.length + 1}` } })
   const person = await prisma.user.findUnique({ where: { id: user.id }, select: { id: true, name: true, role: true, department: { select: { name: true } } } })
   const res = await tellOwners(
-    `<b>Важное от агента</b>\n${escapeHtml(person ? labelOf(person) : nameOf(user))}\n${escapeHtml(plainStyle(noLinks(cut(note, 300))))}\n\n<i>${escapeHtml(noLinks(cut(text, 300)))}</i>`,
+    `<b>Важное от агента</b>\n${escapeHtml(person ? labelOf(person) : nameOf(user))}\n${escapeHtml(noLinks(plainStyle(cut(note, 300))))}\n\n<i>${escapeHtml(noLinks(cut(text, 300)))}</i>`,
   )
   return res.ok
 }
@@ -200,7 +200,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
     if (res.status === 'ok' && res.text) {
       // Черновик, файл или отчёт бот уже показал — «Готово, жми Отправить» лишнее.
       if (ctx.quiet && res.text.length <= 200) return true
-      await tellChat(chatId, escapeHtml(plainStyle(cut(res.text, team ? OWNER_REPLY_MAX : REPLY_MAX))), { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null })
+      await tellChat(chatId, escapeHtml(noLinks(plainStyle(cut(res.text, team ? OWNER_REPLY_MAX : REPLY_MAX)))), { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null })
       if (target) await countReply(target.id)
       return true
     }

@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { escapeHtml, sendAlbum, sendFileById } from '../telegram.js'
 import { isQuietHour } from '../plan.js'
 import { aiReport } from '../ai/report.js'
-import { plainStyle } from '../ai/style.js'
+import { noLinks, plainStyle } from '../ai/style.js'
 import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
@@ -377,7 +377,7 @@ export function reportText({ round, answered, silent, failed, skipped = [], ai, 
     const r = got?.points?.length ? got : { points: fallback.points, quote: got?.quote ?? fallback.quote }
     lines.push('', `<b>${escapeHtml(p.label)}</b>`)
     // Пункты пишет модель — в стиле бота; цитата — слово в слово.
-    for (const point of (r.points ?? []).slice(0, 4)) lines.push(`• ${escapeHtml(plainStyle(cut(String(point).replace(/^\s*[-—–*•]\s*/, ''), 300)))}`)
+    for (const point of (r.points ?? []).slice(0, 4)) lines.push(`• ${escapeHtml(noLinks(plainStyle(cut(String(point).replace(/^\s*[-—–*•]\s*/, ''), 300))))}`)
     if (r.quote) lines.push(`<i>«${escapeHtml(cut(r.quote, 200))}»</i>`)
     // Задачи на момент отчёта рядом с ответом: слова человека и CRM могут расходиться.
     const st = states?.get(p.userId)

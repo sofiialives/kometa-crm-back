@@ -390,6 +390,15 @@ describe('стиль ответов', () => {
     assert.equal(plainStyle('Александр, дизайн, делает баннер'), 'Александр, дизайн, делает баннер')
   })
 
+  test('скобки не склеивают ссылку и упоминание: noLinks идёт после plainStyle', () => {
+    for (const evil of ['evil(.)com', 't(.)me/x', 'смотри t(.)me/x', 'a**.**ru', 'site(.)ru/путь', 'пиши @(x)ivan_boss']) {
+      const out = noLinks(plainStyle(evil))
+      assert.doesNotMatch(out, /[a-z]\.(com|me|ru)|@\w{3,}/i, `${evil} -> ${out}`)
+    }
+    assert.equal(plainStyle('t(.)me/x'), 't . me/x')
+    assert.equal(noLinks(plainStyle('сюда t.me/x и evil.com')), 'сюда [ссылка] и [ссылка]')
+  })
+
   test('подсказка просит живой тон, без точек, двоеточий и маркеров', () => {
     for (const text of [ownerSystem(), staffSystem()]) {
       assert.match(text, /как живой человек в телеграме/)
