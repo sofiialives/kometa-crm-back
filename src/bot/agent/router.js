@@ -98,7 +98,7 @@ async function onWaiting(user, waiting, text, logged, now) {
     return true
   }
   if (waiting.type === 'task_late') {
-    await reportTaskLate(user, waiting.payload.taskId, text, now, waiting.payload.taskIds)
+    await reportTaskLate(user, waiting.payload.taskId, text, now, waiting.payload.taskIds, waiting.payload.total)
     return true
   }
   if (waiting.type === 'break_time') {

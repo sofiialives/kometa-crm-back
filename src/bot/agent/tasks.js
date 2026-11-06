@@ -268,24 +268,28 @@ export async function lateForTask(user, taskId) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true, startAt: true } })
   if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
   if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта.`
+  const where = { ownerId: user.id, status: 'today', startAt: task.startAt }
+  const total = task.startAt ? await prisma.task.count({ where }) : 0
   const same = task.startAt
-    ? await prisma.task.findMany({ where: { ownerId: user.id, status: 'today', startAt: task.startAt }, select: { id: true } })
+    ? await prisma.task.findMany({ where: { ownerId: user.id, status: 'today', startAt: task.startAt }, orderBy: { createdAt: 'asc' }, take: MAX_BUTTON_TASKS, select: { id: true } })
     : []
-  const taskIds = [...new Set([task.id, ...same.map((t) => t.id)])]
-  state.expect(user.id, 'task_late', { taskId, taskIds })
+  const taskIds = [...new Set([task.id, ...same.map((t) => t.id)])].slice(0, MAX_BUTTON_TASKS)
+  state.expect(user.id, 'task_late', { taskId, taskIds, total: Math.max(total, taskIds.length) })
   await tell(user.id, 'Что случилось и во сколько начнёшь?\nНапиши одной строкой, я передам Яну')
   return taskIds.length > 1 ? 'Не успеваю начать' : `Не успеваю начать «${escapeHtml(short(task.title, 120))}»`
 }
 
-/** Ответ на «что случилось?» — Яну. taskIds — все задачи этого времени начала. */
-export async function reportTaskLate(user, taskId, text, now = new Date(), taskIds = [taskId]) {
-  const tasks = await prisma.task.findMany({ where: { id: { in: taskIds }, ownerId: user.id }, select: { id: true, title: true, startAt: true } })
-  const list = tasks.length ? tasks : [{ id: taskId, title: null, startAt: null }]
+/** Ответ на «что случилось?» — Яну. taskIds — задачи этого времени начала (не больше пяти), total — сколько их всего. */
+export async function reportTaskLate(user, taskId, text, now = new Date(), taskIds = [taskId], total = taskIds.length) {
+  const ids = [...new Set(taskIds)].slice(0, MAX_BUTTON_TASKS)
+  const found = await prisma.task.findMany({ where: { id: { in: ids }, ownerId: user.id }, take: MAX_BUTTON_TASKS, select: { id: true, title: true, startAt: true } })
+  const list = found.length ? found : [{ id: taskId, title: null, startAt: null }]
   for (const task of list) {
     await logEvent(user.id, 'task_late', { at: now, text, data: { taskId: task.id, taskTitle: task.title ?? null, startAt: task.startAt?.toISOString() ?? null } })
   }
   await tell(user.id, 'Понял, передал Яну')
   const titles = list.map((t) => `«${escapeHtml(short(t.title || 'задача', 120))}»`)
+  const more = total > list.length ? [`и ещё ${total - list.length}`] : []
   const startAt = list.find((t) => t.startAt)?.startAt
-  await tellOwners(`<b>${list.length > 1 ? 'Не успевает начать задачи' : 'Не успевает начать задачу'}</b>\n${nameOf(user)}\n${titles.join('\n')}${startAt ? `\nПо плану в ${hm(startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
+  await tellOwners(`<b>${list.length > 1 ? 'Не успевает начать задачи' : 'Не успевает начать задачу'}</b>\n${nameOf(user)}\n${[...titles, ...more].join('\n')}${startAt ? `\nПо плану в ${hm(startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
 }
