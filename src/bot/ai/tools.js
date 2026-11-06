@@ -109,7 +109,7 @@ export function staffTools(ctx) {
       input_schema: NONE,
       run: async () => {
         if (!ctx.logged?.id) return 'Не вышло, нет текста заявки. Попроси написать одной строкой, что случилось и до какого времени.'
-        await tellChat(ctx.chatId, 'Похоже на форс-мажор. Передать Яну заявку, чтобы он отметил?', {
+        await tellChat(ctx.chatId, 'Похоже на форс-мажор\nПередать Яну заявку, чтобы он отметил?', {
           userId: user.id,
           buttons: [[{ text: 'Да', data: `ai:fm:${ctx.logged.id}` }, { text: 'Нет', data: 'ai:no' }]],
         })

@@ -290,8 +290,8 @@ describe('свежие задачи при отправке', () => {
       skipped: [{ userId: 'd', label: 'Денис, SMM' }],
       ai: null,
     })
-    assert.match(text, /Не ответили<\/b>\n• Антон, SMM/)
-    assert.match(text, /Не писал, задачи уже сделаны<\/b>\n• Денис, SMM/)
+    assert.match(text, /<b>Не ответили<\/b> Антон, SMM/)
+    assert.match(text, /\nНе писал, задачи уже сделаны\nДенис, SMM/)
   })
 
   test('get_round: кому не писали — так и сказано, и в «написал» он не входит', async (t) => {
@@ -312,7 +312,7 @@ describe('свежие задачи при отправке', () => {
 
   test('подтверждение: сколько отправил и кому не писал', () => {
     const deadlineAt = new Date('2026-11-04T14:00:00Z')
-    assert.equal(sentNote({ sent: 2, failed: 1, skipped: [], collect: true, deadlineAt }), 'Отправил 2, не дошло 1. Отчёт пришлю к 17:00')
+    assert.equal(sentNote({ sent: 2, failed: 1, skipped: [], collect: true, deadlineAt }), 'Отправил 2, не дошло 1\nОтчёт пришлю к 17:00')
     assert.equal(sentNote({ sent: 1, failed: 0, skipped: ['Денис, SMM'], collect: false, deadlineAt }), 'Отправил 1\nНе отправил Денис, SMM, задачи уже сделаны')
     assert.equal(sentNote({ sent: 0, failed: 0, skipped: ['Денис, SMM', 'Антон, SMM'], collect: true, deadlineAt }), 'Никому не отправил\nНе отправил Денис, SMM, задачи уже сделаны\nНе отправил Антон, SMM, задачи уже сделаны')
   })
@@ -348,7 +348,7 @@ describe('свежие задачи при отправке', () => {
     const note = await run.run()
     assert.deepEqual(run.written.map((w) => w.chat_id), ['1001'])
     assert.deepEqual(run.updates.map(([a]) => [a.where.id, a.data.status]), [['target-denis', 'skipped'], ['target-roman', 'sent']])
-    assert.match(note, /^Отправил 1\. Отчёт пришлю к \d\d:\d\d\nНе отправил Денис, SMM, задачи уже сделаны$/)
+    assert.match(note, /^Отправил 1\nОтчёт пришлю к \d\d:\d\d\nНе отправил Денис, SMM, задачи уже сделаны$/)
     assert.equal(run.closed.length, 0)
   })
 
@@ -368,7 +368,7 @@ describe('свежие задачи при отправке', () => {
     patch(t, prisma.task, 'findMany', async () => { throw new Error('база') })
     const note = await run.run()
     assert.equal(run.written.length, 1)
-    assert.match(note, /^Отправил 1\./)
+    assert.match(note, /^Отправил 1\n/)
   })
 })
 

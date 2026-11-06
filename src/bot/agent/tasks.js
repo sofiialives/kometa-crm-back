@@ -40,7 +40,7 @@ export async function morningNoTasks(now = new Date()) {
   for (const person of people) {
     if (await activeAway(person.id, now)) continue
     const res = await sendOnce(`morning:${day}:${person.id}`, () => tell(person.id,
-      `${escapeHtml(firstName(person.name))}, на сегодня у тебя в CRM нет задач.\nПроставь, пожалуйста, задачи на день.`,
+      `${escapeHtml(firstName(person.name))}, на сегодня у тебя в CRM нет задач\nПроставь, пожалуйста, задачи на день`,
       { buttons: [row(crmButton('Открыть задачи', '/tasks'))].filter((r) => r.length) }))
     if (res.ok) sent += 1
   }
@@ -265,15 +265,15 @@ export async function tickNotStarted(now = new Date()) {
  */
 export async function takeTask(user, taskId) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { title: true, status: true, ownerId: true } })
-  if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
-  if (task.status === 'progress') return `«${escapeHtml(short(task.title, 120))}» уже в процессе.`
-  if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта.`
+  if (!task || task.ownerId !== user.id) return 'Задача не найдена'
+  if (task.status === 'progress') return `«${escapeHtml(short(task.title, 120))}» уже в процессе`
+  if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта`
   try {
     // В журнал «взял в работу» запишет сам сервис задач.
     const task = await updateTaskStatus(taskId, 'progress', user)
-    return `«${escapeHtml(short(task.title, 120))}» в процессе.`
+    return `«${escapeHtml(short(task.title, 120))}» в процессе`
   } catch (e) {
-    return e.status ? `Не получилось. ${e.message}` : 'Не получилось, открой задачу в CRM.'
+    return e.status ? `Не получилось\n${e.message}` : 'Не получилось, открой задачу в CRM'
   }
 }
 
@@ -284,8 +284,8 @@ export async function takeTask(user, taskId) {
  */
 export async function lateForTask(user, taskId) {
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, title: true, ownerId: true, status: true, startAt: true } })
-  if (!task || task.ownerId !== user.id) return 'Задача не найдена.'
-  if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта.`
+  if (!task || task.ownerId !== user.id) return 'Задача не найдена'
+  if (task.status === 'done') return `«${escapeHtml(short(task.title, 120))}» уже закрыта`
   const where = { ownerId: user.id, status: 'today', startAt: task.startAt }
   const total = task.startAt ? await prisma.task.count({ where }) : 0
   const same = task.startAt

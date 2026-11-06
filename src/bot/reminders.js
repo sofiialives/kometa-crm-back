@@ -26,8 +26,8 @@ export function buildReminder(call, person, everyone, minutes = env.remindBefore
     `<b>${escapeHtml(call.title)}</b>`,
   ]
   if (call.note) lines.push(escapeHtml(call.note))
-  if (others.length) lines.push('', `Вместе с вами ${others.join(', ')}`)
-  if (person.id !== call.ownerId) lines.push('', '<i>Вас позвали на этот звонок</i>')
+  if (others.length) lines.push('', `Вместе с тобой ${others.join(', ')}`)
+  if (person.id !== call.ownerId) lines.push('', '<i>Тебя позвали на этот звонок</i>')
 
   return lines.join('\n')
 }

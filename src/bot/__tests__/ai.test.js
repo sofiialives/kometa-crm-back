@@ -443,14 +443,14 @@ describe('поручения', () => {
       skipped: ['Настя, SEO, телеграм не подключён'],
     })
     assert.match(text, /<b>Александр, дизайн<\/b>\nПривет &lt;b&gt;Саша&lt;\/b&gt;/)
-    assert.match(text, /Не уйдёт<\/b>\n• Настя, SEO/)
+    assert.match(text, /Не уйдёт<\/b>\nНастя, SEO/)
   })
 
   test('под кнопками — тема, срок и ссылки из сообщений', () => {
     const text = confirmText({ topic: 'Как дела', collect: true, deadlineAt: new Date('2026-10-16T14:30:00Z'), count: 3, links: ['evil.com/x'] })
     assert.match(text, /<b>Тема<\/b> Как дела/)
     assert.match(text, /Кому 3, ответы соберу до 17:30/)
-    assert.match(text, /ссылки, проверь их\n• evil\.com\/x/)
+    assert.match(text, /ссылки, проверь их\nevil\.com\/x/)
     assert.deepEqual(linksIn(['глянь https://figma.com/file/1', 'напиши @boss', 'без ссылок']), ['https://figma.com/file/1', '@boss'])
     assert.ok(MAX_PEOPLE <= 25)
   })
@@ -468,9 +468,9 @@ describe('поручения', () => {
       ai: { a: { points: ['- Баннер для Румикс (Цепляющая главная), готов наполовину', 'Причина: ждал правки'], quote: 'Всё получается' } },
     })
     assert.match(text, /^<b>Отчёт по опросу<\/b>/)
-    assert.match(text, /Написал 2 в 15:30, ответили 1\./)
-    assert.match(text, /<b>Александр, дизайн<\/b>\n• Баннер для Румикс, Цепляющая главная, готов наполовину\n• Причина, ждал правки\n<i>«Всё получается»<\/i>\nПрислал файлов 1/)
-    assert.match(text, /Не ответили<\/b>\n• Настя, SEO/)
+    assert.match(text, /Ответили 1 из 2, написал в 15:30\n/)
+    assert.match(text, /<b>Александр, дизайн<\/b>\nБаннер для Румикс, Цепляющая главная, готов наполовину\nПричина, ждал правки\n<i>«Всё получается»<\/i>\nПрислал файлов 1/)
+    assert.match(text, /<b>Не ответили<\/b> Настя, SEO/)
   })
 
   test('без ИИ отчёт из ответов как есть', () => {
