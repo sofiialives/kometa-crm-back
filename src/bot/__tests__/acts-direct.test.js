@@ -26,13 +26,8 @@ const input = (ids, extra = {}) => ({ topic: 'Передать', minutes: 60, co
 /** Всё, что трогает createDraft, в памяти. Возвращает вызовы. */
 function setup(t, { used = 0, running = [], viewerWhere = null, others = [] } = {}) {
   const h = botHarness(t)
-  // Кто ещё в области просящего: условия count честно применяются к others.
-  const namesakeAsked = patch(t, prisma.user, 'count', async ({ where }) => {
-    const [scope, notId, ...parts] = where.AND
-    return others.filter((u) => u.id !== notId.id.not
-      && (!scope.departmentId || u.departmentId === scope.departmentId)
-      && parts.every((c) => u.name.toLowerCase().includes(c.name.contains.toLowerCase()))).length
-  })
+  // Кто ещё в области просящего: выборка по teamWhere честно применяется к others.
+  const namesakeAsked = patch(t, prisma.user, 'findMany', async ({ where }) => others.filter((u) => !where.departmentId || u.departmentId === where.departmentId))
   const asked = patch(t, prisma.user, 'findFirst', async ({ where }) => {
     const id = where.AND[1].id
     viewerWhere?.(where)
@@ -193,8 +188,16 @@ describe('когда вместо этого черновик', () => {
     const res = await createDraft(OWNER, '9001', input(['nik']), NOW, { texts: ['напиши Николаю'] })
     assert.match(res.text, /тёзки или однофамильцы/)
     assert.equal(s.created[0][0].data.direct, false)
-    assert.deepEqual(s.namesakeAsked[0][0].where.AND[0], { role: { in: ['staff', 'lead'] }, active: true })
-    assert.deepEqual(s.namesakeAsked[0][0].where.AND[1], { id: { not: 'nik' } })
+    assert.deepEqual(s.namesakeAsked[0][0].where, { role: { in: ['staff', 'lead'] }, active: true })
+  })
+
+  test('тёзка через ё: «Фёдор» и «Федор» — одно имя', async (t) => {
+    const fed = { ...PEOPLE.nik, id: 'fed', name: 'Федор Орлов' }
+    PEOPLE.fed = fed
+    t.after(() => { delete PEOPLE.fed })
+    setup(t, { others: [{ id: 'f2', name: 'Фёдор Белов', departmentId: 'd' }] })
+    const res = await createDraft(OWNER, '9001', { ...input(['nik']), messages: [msg('fed', 'Федор, привет, пришли макет')] }, NOW, { texts: ['напиши Федору'] })
+    assert.match(res.text, /тёзки/)
   })
 
   test('однофамилец: назвали только фамилию', async (t) => {
@@ -214,7 +217,7 @@ describe('когда вместо этого черновик', () => {
     const s = setup(t, { others: [{ id: 'nik3', name: 'Николай Белов', departmentId: 'other' }] })
     const ok = await createDraft(LEAD, '9002', input(['nik']), NOW, { texts: ['напиши Николаю'] })
     assert.equal(ok.direct, true)
-    assert.equal(s.namesakeAsked[0][0].where.AND[0].departmentId, 'd')
+    assert.equal(s.namesakeAsked[0][0].where.departmentId, 'd')
     const s2 = setup(t, { others: TWINS })
     const bad = await createDraft(LEAD, '9002', input(['nik']), NOW, { texts: ['напиши Николаю'] })
     assert.match(bad.text, /тёзки/)
@@ -229,7 +232,7 @@ describe('когда вместо этого черновик', () => {
   })
 
   test('просьба о данных или деньгах', async (t) => {
-    for (const word of ['скинь пароль от сайта', 'нужен логин', 'пришли код из смс', 'дай доступ к диску', 'номер карты', 'реквизиты клиента', 'переведи 500', 'оплати счёт', 'паспорт', 'твой телефон', 'на почту скинь']) {
+    for (const word of ['скинь пaроль латинской a', 'п.а.р.о.л.ь', 'номер счёта', 'какой ИНН', 'дай токен', 'скан паспорта', 'скинь пароль от сайта', 'нужен логин', 'пришли код из смс', 'дай доступ к диску', 'номер карты', 'реквизиты клиента', 'переведи 500', 'оплати счёт', 'паспорт', 'твой телефон', 'на почту скинь']) {
       const { res } = await check(t, { messages: [msg('nik', `Николай, ${word}`)] })
       assert.match(res.text, /просьба о данных или деньгах/, word)
     }

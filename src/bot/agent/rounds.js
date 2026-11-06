@@ -97,20 +97,35 @@ export function isNamedIn(person, texts) {
  * пределах видимости просящего, не по всей базе.
  */
 async function hasNamesake(owner, people, texts) {
+  // Тот же разбор имён, что и в namedTokens, а не contains в базе: иначе
+  // «Фёдор» и «Федор» или падежи разошлись бы. Кандидаты — только те, кому
+  // просящий может писать.
+  const team = await prisma.user.findMany({ where: teamWhere(owner), select: { id: true, name: true } })
+  const bases = (person) => new Set(nameTokens(person).map(nameBase).filter(Boolean))
   for (const p of people) {
-    const found = namedTokens(p.person, texts)
+    const found = namedTokens(p.person, texts).map(nameBase).filter(Boolean)
     if (!found.length) continue
-    const same = await prisma.user.count({
-      where: { AND: [teamWhere(owner), { id: { not: p.person.id } }, ...found.map((token) => ({ name: { contains: token, mode: 'insensitive' } }))] },
-    })
-    if (same) return true
+    if (team.some((c) => c.id !== p.person.id && found.every((b) => bases(c).has(b)))) return true
   }
   return false
 }
 
-// Просьбы о данных и деньгах уходят людям только через черновик. «карт» без
-// «картинка», «почт» без «почти».
-const SENSITIVE = /парол|логин|код из|коды|доступ|карт(?!ин)|реквизит|перевед|перевод|оплат|деньг|паспорт|телефон|почт(?!и(?![\p{L}]))/iu
+// Просьбы о данных и деньгах уходят людям только через черновик. Текст
+// сначала приводим к одному виду: NFKC, латинские двойники кириллицы, ё как е.
+// Самые опасные слова ищем и в тексте без разделителей («п.а.р.о.л.ь»).
+const SENSITIVE = /парол|логин|код из|коды|доступ|карт(?!ин)|реквизит|перевед|перевод|оплат|деньг|паспорт|телефон|почт(?!и(?![\p{L}]))|ключ|токен|кошел|снилс|выписк|скан(?!д)|cvv|otp|2fa|смс|(?<![\p{L}])(?:инн|сч[её]т(?:[ауе]|ом|ов|ам|ами|ах)?|code)(?![\p{L}])/iu
+const SENSITIVE_TIGHT = /парол|логин|реквизит|паспорт|токен|кошел|снилс|cvv/iu
+const LOOKALIKE = { a: 'а', e: 'е', o: 'о', p: 'р', c: 'с', x: 'х', y: 'у', k: 'к', m: 'м', t: 'т', h: 'н', b: 'в', '0': 'о', '3': 'з' }
+
+/** Есть ли в тексте просьба о данных или деньгах, с поправкой на подмену букв. */
+export function isSensitive(text) {
+  const norm = String(text ?? '').normalize('NFKC').replace(/[\p{Cf}]/gu, '').toLowerCase().replace(/ё/g, 'е')
+  if (SENSITIVE.test(norm)) return true
+  // Латинские буквы внутри кириллического слова — подмена.
+  const folded = norm.replace(/[\p{L}\d]+/gu, (w) => (/[а-я]/.test(w) ? w.replace(/[aeopcxykmthb03]/g, (ch) => LOOKALIKE[ch]) : w))
+  if (SENSITIVE.test(folded)) return true
+  return SENSITIVE_TIGHT.test(folded.replace(/[^\p{L}\d]+/gu, ''))
+}
 
 /** Короткий итог прямой отправки для модели. */
 export function directSummary({ sent, failed = 0, skipped = 0, notSent = 0 }) {
@@ -135,7 +150,7 @@ async function draftReason({ owner, people, texts, unchecked, now }) {
   if (await hasNamesake(owner, people, texts)) return 'в команде есть тёзки или однофамильцы'
   if (isQuietHour(now)) return 'сейчас ночь, тихие часы'
   if (people.some((p) => noLinks(p.text) !== p.text)) return 'в текстах есть ссылки'
-  if (people.some((p) => SENSITIVE.test(p.text))) return 'в сообщении просьба о данных или деньгах'
+  if (people.some((p) => isSensitive(p.text))) return 'в сообщении просьба о данных или деньгах'
   if (unchecked) return 'проверены не все названия задач'
   if ((await directToday(owner.id, now)) + people.length > DIRECT_PER_DAY) return `дневной лимит ${DIRECT_PER_DAY} сообщений без черновика исчерпан`
   return null
