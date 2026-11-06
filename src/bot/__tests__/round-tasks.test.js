@@ -107,6 +107,20 @@ describe('чужая задача в сообщении человеку', () =>
     assert.equal(calls.length, 2)
   })
 
+  test('своя задача, сделанная месяц назад, не прикрывает живую чужую с тем же названием', async (t) => {
+    const old = task({ id: 't5', ownerId: 'denis', owner: denis, status: 'done', doneAt: new Date(Date.now() - 30 * 24 * 3600e3) })
+    patch(t, prisma.user, 'findMany', async () => [anton])
+    patch(t, prisma.task, 'findMany', async ({ where }) => {
+      if (where.AND.some((c) => c.owner)) return [task()]
+      // Запрос без даты отсечки вернул бы и старую задачу, как раньше.
+      const since = where.AND.flatMap((c) => c.OR ?? []).find((o) => o.doneAt)?.doneAt.gte
+      return since ? [old].filter((x) => x.status !== 'done' || x.doneAt >= since) : [old]
+    })
+    const found = await problemsOf([{ userId: 'denis', text: `Как «${POSTS}»?` }], ADMIN)
+    assert.equal(found.length, 1)
+    assert.deepEqual(found[0].owners.map((o) => o.id), ['anton'])
+  })
+
   test('назвали более длинную свою задачу, в которой чужое название лишь часть — не чужая', async (t) => {
     rows(t, { open: [task({ title: 'Макет баннера' }), task({ id: 't4', title: 'Макет баннера для Румикс', ownerId: 'denis', owner: denis })] })
     assert.deepEqual(await problemsOf([{ userId: 'denis', text: 'Как «Макет баннера для Румикс»?' }], ADMIN), [])

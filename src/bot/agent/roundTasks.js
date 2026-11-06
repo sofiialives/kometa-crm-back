@@ -66,16 +66,19 @@ export function sameTitle(mention, title) {
 export const SCAN_MAX = 5000
 const PROBLEMS_MAX = 20
 export const OWN_MAX = 2000
+// Сколько дней сделанная задача адресата ещё может оправдать упоминание.
+export const OWN_DONE_DAYS = 14
 const OWNER = { select: { id: true, name: true, role: true, active: true, departmentId: true, department: { select: { name: true } } } }
 
 /**
  * Все видимые задачи людей, любого статуса, одним запросом по ownerId. Названия
  * сравниваем уже в памяти: в запрос не попадает текст, который написала
  * модель. full: false значит, задач больше предела и мы видим не все.
+ * since — сделанные раньше этой даты не берём (открытые берём всегда).
  */
-async function ownTasks(ids) {
+async function ownTasks(ids, { since = null } = {}) {
   const rows = await prisma.task.findMany({
-    where: { AND: [VISIBLE, { ownerId: { in: ids } }] },
+    where: { AND: [VISIBLE, { ownerId: { in: ids } }, since ? { OR: [{ status: { not: 'done' } }, { doneAt: { gte: since } }] } : {}] },
     orderBy: { updatedAt: 'desc' },
     take: OWN_MAX + 1,
     select: { id: true, title: true, status: true, deadline: true, origin: true, ownerId: true },
@@ -139,8 +142,11 @@ export async function foreignTitles(items, viewer) {
   const mineOpen = (userId) => open.filter((t) => t.ownerId === userId).map((t) => t.title)
   let left = [...suspects.values()].filter((s) => !excused(s, mineOpen(s.userId)))
   if (!left.length) return { problems: [], incomplete: false }
-  // Своё название могло быть у сделанной задачи: её среди открытых нет.
-  const own = await ownTasks([...new Set(left.map((s) => s.userId))])
+  // Своё название могло быть у сделанной задачи: её среди открытых нет. Но
+  // только у недавней: задача, закрытая месяц назад, не должна прикрывать
+  // живую чужую с тем же названием.
+  const since = new Date(Date.now() - OWN_DONE_DAYS * 24 * 60 * 60 * 1000)
+  const own = await ownTasks([...new Set(left.map((s) => s.userId))], { since })
   if (!own.full) return { problems: [], incomplete: true }
   left = left.filter((s) => !excused(s, own.tasks.filter((t) => t.ownerId === s.userId).map((t) => t.title))).slice(0, PROBLEMS_MAX)
   // Имена владельцев нужны только для текста ошибки, и только у найденных.
