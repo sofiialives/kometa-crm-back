@@ -122,6 +122,25 @@ describe('отчёт по поручению не дублируется', () =>
     assert.equal(n, 1)
   })
 
+  test('отправка бросила исключение — попытка возвращается, а не съедается', async (t) => {
+    const ctx = setup(t)
+    await assert.rejects(sendPart('x', 'f', async () => { throw new Error('сеть') }))
+    assert.equal(ctx.notices.has('round-report:x:f:try:1'), false)
+    assert.equal(ctx.notices.has('round-report:x:f'), false)
+    let n = 0
+    assert.deepEqual(await sendPart('x', 'f', async () => { n += 1; return { ok: true } }), { ok: true })
+    assert.equal(n, 1)
+  })
+
+  test('все попытки оборвались — честно «не доставлен», без новой отправки', async (t) => {
+    const ctx = setup(t)
+    for (let i = 1; i <= 5; i += 1) ctx.notices.add(`round-report:x:g:try:${i}`)
+    let n = 0
+    const res = await sendPart('x', 'g', async () => { n += 1; return { ok: true } })
+    assert.equal(res.exhausted, true)
+    assert.equal(n, 0)
+  })
+
   test('прошлая попытка оборвалась на захвате — часть отправляется ещё раз и отмечается', async (t) => {
     const ctx = setup(t)
     ctx.notices.add('round-report:r1:text:try:1')

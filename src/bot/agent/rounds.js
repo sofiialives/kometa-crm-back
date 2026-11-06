@@ -493,13 +493,22 @@ export async function sendPart(roundId, part, send) {
     if (await claimNotice(`${base}:try:${n}`)) attempt = n
   }
   if (!attempt) {
-    console.error(`[агент] отчёт ${roundId}, часть ${part}: ${REPORT_TRIES} попыток оборвались, больше не пробую`)
-    return { ok: false, retry: false }
+    console.error(`[агент] отчёт ${roundId}, часть ${part}: ${REPORT_TRIES} попыток оборвались, больше не пробую, отчёт не доставлен`)
+    return { ok: false, retry: false, exhausted: true }
   }
   if (attempt > 1) console.log(`[агент] отчёт ${roundId}, часть ${part}: прошлая попытка оборвалась, отправляю снова (${attempt} из ${REPORT_TRIES})`)
-  const res = await send()
+  let res
+  try {
+    res = await send()
+  } catch (e) {
+    // Исключение — не обрыв процесса: попытку возвращаем, её не съедаем зря.
+    await releaseNotice(`${base}:try:${attempt}`)
+    throw e
+  }
   if (res.ok || res.unsure) {
-    await claimNotice(base)
+    // Без этой отметки следующий проход отправит часть второй раз: один
+    // повтор при сбое базы дешевле дубля отчёта у Яна.
+    await claimNotice(base).catch(() => claimNotice(base))
     if (res.unsure) console.error(`[агент] отчёт ${roundId}, часть ${part}: телеграм не ответил, повторно не отправляю`)
   } else if (res.retry) {
     await releaseNotice(`${base}:try:${attempt}`)
