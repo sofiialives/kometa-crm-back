@@ -130,4 +130,14 @@ describe('ответ после «Не успеваю»', () => {
     assert.equal(late.length, 1)
     assert.ok(h.sent.some((m) => /Не успевает начать задачу/.test(m.text)))
   })
+
+  test('«задерживаюсь, буду к 13» после «Не успеваю» — это причина, она идёт Яну', async (t) => {
+    const { h, late, created } = setupText(t)
+    state.expect('u1', 'task_late', { taskId: 'a', taskIds: ['a'] })
+    await onText(user, 1001, 'задерживаюсь, буду к 13', now)
+    assert.equal(late.length, 1)
+    assert.equal(late[0].type, 'task_late')
+    assert.equal(created.length, 0)
+    assert.ok(h.sent.some((m) => /Не успевает начать задачу/.test(m.text) && /задерживаюсь, буду к 13/.test(m.text)))
+  })
 })
