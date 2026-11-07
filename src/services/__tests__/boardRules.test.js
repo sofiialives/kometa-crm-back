@@ -195,6 +195,14 @@ describe('какие карточки есть в периоде', () => {
     assert.equal(cardVisible(card, resolveRange({ mode: 'period', from: day('2026-10-21'), to: day('2026-10-31') })), false)
   })
 
+  test('клиент без единой услуги виден в месяце начала работ и больше нигде', () => {
+    const card = { status: 'active', leftAt: null, serviceCount: 0, serviceCountTotal: 0, startedAt: new Date('2026-11-05T00:00:00.000Z') }
+    assert.equal(cardVisible(card, month('2026-11')), true)
+    assert.equal(cardVisible(card, month('2026-10')), false)
+    assert.equal(cardVisible(card, month('2026-12')), false)
+    assert.equal(cardVisible({ ...card, serviceCountTotal: 1 }, month('2026-11')), false, 'есть услуга в другом месяце — видна только там')
+  })
+
   test('вернувшийся в работу (статус active, дата ухода стёрта) уходом не считается', () => {
     assert.equal(cardVisible({ status: 'active', leftAt: null, serviceCount: 0 }, month('2026-10')), false)
   })
@@ -462,7 +470,7 @@ describe('доска целиком', () => {
     card('Бета', { startedAt: '2026-11-02', services: [service('2026-11', { revenueCents: 40000, expenses: [expense(1000)] })] }),
     // Ушёл в октябре, услуги были в сентябре.
     card('Гамма', { status: 'left', startedAt: '2026-05-01', leftAt: '2026-10-20', services: [service('2026-09', { revenueCents: 30000 })] }),
-    // Без услуг, пришёл в ноябре: дата начала на видимость не влияет.
+    // Без единой услуги, пришёл в ноябре: виден только в ноябре, пока нет услуг.
     card('Дельта', { startedAt: '2026-11-03' }),
   ]
 
@@ -476,9 +484,9 @@ describe('доска целиком', () => {
     assert.equal(board.summary.leftCount, 1)
   })
 
-  test('в ноябре клиент виден только с услугой ноября: срок работ Альфы и дата начала Дельты не в счёт', () => {
+  test('в ноябре клиент с услугой ноября и новый без услуг, срок работ Альфы не в счёт', () => {
     const board = buildBoard(cards, month('2026-11'), NOW)
-    assert.deepEqual(names(board.active), ['Бета'])
+    assert.deepEqual(names(board.active), ['Бета', 'Дельта'])
     assert.deepEqual(names(board.left), [])
     const beta = board.active[0]
     assert.equal(beta.serviceCountInPeriod, 1)

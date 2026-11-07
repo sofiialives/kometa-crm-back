@@ -153,9 +153,12 @@ export function shapeService(service, range) {
  * счётчика ушедших за месяц. Дата начала работы и срок работ видимость не
  * определяют. Без периода («за всё время») видны все.
  */
-export function cardVisible({ status, leftAt, serviceCount }, range) {
+export function cardVisible({ status, leftAt, serviceCount, serviceCountTotal = null, startedAt = null }, range) {
   if (!range) return true
   if (serviceCount > 0) return true
+  // Только что заведённый клиент без единой услуги не пропадает с доски:
+  // виден в месяце начала работ, пока ему не добавят услугу.
+  if (serviceCountTotal === 0 && startedAt && inRange(monthStart(startedAt), range)) return true
   return status === 'left' && Boolean(leftAt) && inRange(leftAt, range)
 }
 
@@ -202,6 +205,8 @@ export function buildBoard(cards, range, now = new Date()) {
       status: c.status,
       leftAt: c.leftAt,
       serviceCount: visible.length,
+      serviceCountTotal: serviceCount,
+      startedAt: c.startedAt,
     }, range)) continue
 
     visibleServices.push(...visible)
