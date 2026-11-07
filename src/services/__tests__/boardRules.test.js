@@ -1,15 +1,18 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildBoard, cardVisible, columnOf, daysWithUs, servicePrefilter, expenseRows, fillWorkSpan, monthsOfService, resolvePaidAt, resolveRange, serviceInPeriod,
-  serviceVisible, shapeService, totals, workSpan, workSpanError, workSpanProblem, dayStart,
+  buildBoard, cardVisible, columnOf, daysWithUs, expenseRows, resolvePaidAt, resolveRange, serviceInPeriod,
+  shapeService, totals, dayStart,
 } from '../boardRules.js'
 
 const iso = (d) => d.toISOString()
 const day = (s) => new Date(`${s}T00:00:00.000Z`)
 const month = (key) => resolveRange({ mode: 'month', month: day(`${key}-01`) })
 
-/** Услуга месяца key ('2026-10') с необязательным сроком работ и расходами. */
+/**
+ * Услуга месяца key ('2026-10'). workFrom/workTo остались в базе у старых
+ * услуг, и в тестах они нужны, чтобы доказать: на доску они не влияют.
+ */
 function service(key, { workFrom = null, workTo = null, revenueCents = 100000, expenses = [] } = {}) {
   return {
     month: day(`${key}-01`),
@@ -72,173 +75,48 @@ describe('последние месяцы считаются по Москве',
   })
 })
 
-describe('срок работ услуги', () => {
-  test('пусто — весь месяц услуги', () => {
-    const { from, to } = workSpan(service('2026-10'))
-    assert.equal(iso(from), '2026-10-01T00:00:00.000Z')
-    assert.equal(iso(to), '2026-10-31T00:00:00.000Z')
-  })
-
-  test('последний день месяца: февраль високосного года, декабрь', () => {
-    assert.equal(iso(workSpan(service('2028-02')).to), '2028-02-29T00:00:00.000Z')
-    assert.equal(iso(workSpan(service('2026-02')).to), '2026-02-28T00:00:00.000Z')
-    assert.equal(iso(workSpan(service('2026-12')).to), '2026-12-31T00:00:00.000Z')
-  })
-
-  test('заданные дни приводятся к полуночи UTC', () => {
-    const s = { ...service('2026-10'), workFrom: new Date('2026-10-20T15:30:00.000Z'), workTo: new Date('2026-11-05T23:59:00.000Z') }
-    const { from, to } = workSpan(s)
-    assert.equal(iso(from), '2026-10-20T00:00:00.000Z')
-    assert.equal(iso(to), '2026-11-05T00:00:00.000Z')
-  })
-
-  test('задана одна граница — вторая берётся из месяца услуги', () => {
-    const onlyFrom = workSpan(service('2026-10', { workFrom: '2026-10-20' }))
-    assert.equal(iso(onlyFrom.from), '2026-10-20T00:00:00.000Z')
-    assert.equal(iso(onlyFrom.to), '2026-10-31T00:00:00.000Z')
-    const onlyTo = workSpan(service('2026-10', { workTo: '2026-11-10' }))
-    assert.equal(iso(onlyTo.from), '2026-10-01T00:00:00.000Z')
-    assert.equal(iso(onlyTo.to), '2026-11-10T00:00:00.000Z')
-  })
-
-  test('в ответе границы всегда заполнены', () => {
-    const filled = fillWorkSpan(service('2026-11'))
-    assert.equal(iso(filled.workFrom), '2026-11-01T00:00:00.000Z')
-    assert.equal(iso(filled.workTo), '2026-11-30T00:00:00.000Z')
-    assert.equal(filled.revenueCents, 100000)
-  })
-
-  test('начало позже конца — ошибка, один день — можно', () => {
-    assert.match(workSpanError(day('2026-11-10'), day('2026-11-09')), /начало позже конца/)
-    assert.equal(workSpanError(day('2026-11-10'), day('2026-11-10')), null)
-  })
-
-  test('не длиннее 366 дней, считая оба края', () => {
-    assert.equal(workSpanError(day('2028-01-01'), day('2028-12-31')), null) // високосный год, 366 дней
-    assert.equal(workSpanError(day('2026-01-01'), day('2027-01-01')), null) // 366 дней
-    assert.match(workSpanError(day('2026-01-01'), day('2027-01-02')), /366/) // 367 дней
-  })
-
-  test('срок проверяется вместе с месяцем услуги, если задана одна граница', () => {
-    const nov = day('2026-11-01')
-    assert.equal(workSpanProblem({ month: nov, workFrom: null, workTo: null }), null)
-    assert.equal(workSpanProblem({ month: nov, workFrom: day('2026-11-10'), workTo: null }), null)
-    // Начало в декабре, конца нет: он берётся из ноября, и выходит наоборот.
-    assert.match(workSpanProblem({ month: nov, workFrom: day('2026-12-05'), workTo: null }), /начало позже конца.*край месяца/)
-    // Конец в октябре, начала нет: начало берётся из ноября.
-    assert.match(workSpanProblem({ month: nov, workFrom: null, workTo: day('2026-10-20') }), /начало позже конца/)
-  })
-
-  test('обе границы заданы — без пояснения про месяц', () => {
-    const problem = workSpanProblem({ month: day('2026-11-01'), workFrom: day('2026-11-10'), workTo: day('2026-11-02') })
-    assert.equal(problem, 'Срок работ: начало позже конца')
-  })
-
-  test('слишком длинный срок через месяц услуги', () => {
-    // Конец через два года после месяца услуги: начало берётся из месяца.
-    assert.match(workSpanProblem({ month: day('2026-11-01'), workFrom: null, workTo: day('2028-12-01') }), /366/)
-  })
-
-  test('день — это полночь UTC', () => {
-    assert.equal(iso(dayStart('2026-11-04T23:59:59.999Z')), '2026-11-04T00:00:00.000Z')
-  })
-})
-
 describe('какие услуги видны в периоде', () => {
-  test('услуга без срока работ видна только в своём месяце', () => {
+  test('услуга видна только в своём месяце', () => {
     const s = service('2026-10')
-    assert.equal(serviceVisible(s, month('2026-10')), true)
-    assert.equal(serviceVisible(s, month('2026-09')), false)
-    assert.equal(serviceVisible(s, month('2026-11')), false)
-  })
-
-  test('доделки: видна в следующем месяце, но не идёт в его итоги', () => {
-    const s = service('2026-10', { workFrom: '2026-10-20', workTo: '2026-11-10' })
-    assert.equal(serviceVisible(s, month('2026-10')), true)
     assert.equal(serviceInPeriod(s, month('2026-10')), true)
-    assert.equal(serviceVisible(s, month('2026-11')), true)
     assert.equal(serviceInPeriod(s, month('2026-11')), false)
-    assert.equal(serviceVisible(s, month('2026-12')), false)
+    assert.equal(serviceInPeriod(s, month('2026-09')), false)
   })
 
-  test('последний день срока входит целиком', () => {
-    assert.equal(serviceVisible(service('2026-10', { workTo: '2026-11-01' }), month('2026-11')), true)
-    assert.equal(serviceVisible(service('2026-10', { workTo: '2026-10-31' }), month('2026-11')), false)
-    assert.equal(serviceVisible(service('2026-10', { workFrom: '2026-10-31' }), month('2026-10')), true)
+  test('срок работ ничего не решает: услуга октября с работами до января не видна в ноябре', () => {
+    const s = service('2026-10', { workFrom: '2026-10-20', workTo: '2027-01-05' })
+    assert.equal(serviceInPeriod(s, month('2026-11')), false)
+    assert.equal(serviceInPeriod(s, month('2026-12')), false)
+    assert.equal(serviceInPeriod(s, month('2026-10')), true)
   })
 
-  test('срок целиком в чужом месяце: видна и в своём (по месяцу), и в месяце работ', () => {
-    const s = service('2026-10', { workFrom: '2026-11-30', workTo: '2026-12-03' })
-    assert.equal(serviceVisible(s, month('2026-10')), true)
-    assert.equal(serviceVisible(s, month('2026-11')), true)
-    assert.equal(serviceVisible(s, month('2026-12')), true)
-    assert.equal(serviceVisible(s, month('2027-01')), false)
+  test('за всё время видно всё', () => {
+    assert.equal(serviceInPeriod(service('2020-01'), null), true)
   })
 
-  test('срок через несколько месяцев виден во всех промежуточных', () => {
-    const s = service('2026-09', { workFrom: '2026-09-25', workTo: '2026-12-05' })
-    for (const m of ['2026-09', '2026-10', '2026-11', '2026-12']) assert.equal(serviceVisible(s, month(m)), true, m)
-    assert.equal(serviceVisible(s, month('2027-01')), false)
-  })
-
-  test('за всё время видно и считается всё', () => {
-    const s = service('2026-10', { workFrom: '2026-10-20', workTo: '2026-11-10' })
-    assert.equal(serviceVisible(s, null), true)
-    assert.equal(serviceInPeriod(s, null), true)
-  })
-
-  test('последние месяцы: доделка прошлого месяца видна', () => {
-    const now = new Date('2026-11-04T09:00:00.000Z')
-    const range = resolveRange({ mode: 'last', months: 1 }, now)
-    const s = service('2026-10', { workFrom: '2026-10-20', workTo: '2026-11-10' })
-    assert.equal(serviceVisible(s, range), true)
-    assert.equal(serviceInPeriod(s, range), false)
-  })
-
-  test('последние месяцы: работа, которая начнётся после сегодняшнего дня, ещё не видна', () => {
-    const now = new Date('2026-11-04T09:00:00.000Z')
-    const range = resolveRange({ mode: 'last', months: 1 }, now)
-    assert.equal(serviceVisible(service('2026-10', { workFrom: '2026-11-20', workTo: '2026-11-25' }), range), false)
-    assert.equal(serviceVisible(service('2026-10', { workFrom: '2026-11-04', workTo: '2026-11-25' }), range), true)
+  test('последние месяцы: месяц услуги внутри окна', () => {
+    const range = resolveRange({ mode: 'last', months: 3 }, new Date('2026-11-17T10:00:00.000Z'))
+    assert.equal(serviceInPeriod(service('2026-09'), range), true)
+    assert.equal(serviceInPeriod(service('2026-08'), range), false)
+    assert.equal(serviceInPeriod(service('2026-11'), range), true)
   })
 
   test('последние месяцы в первую московскую ночь месяца: услуга нового месяца уже есть', () => {
-    // 1 ноября 01:00 по Москве.
     const range = resolveRange({ mode: 'last', months: 1 }, new Date('2026-10-31T22:00:00.000Z'))
-    assert.equal(serviceVisible(service('2026-11'), range), true)
     assert.equal(serviceInPeriod(service('2026-11'), range), true)
-    assert.equal(serviceVisible(service('2026-10'), range), false)
   })
 
-  test('произвольный период: месяц считается по первому числу, работа — по дням', () => {
-    const range = resolveRange({ mode: 'period', from: day('2026-09-15'), to: day('2026-10-10') })
-    // Сентябрь: первое число осталось позади, выручка не считается, но услуга
-    // работала в сентябре, поэтому видна.
-    const september = service('2026-09')
-    assert.equal(serviceInPeriod(september, range), false)
-    assert.equal(serviceVisible(september, range), true)
-    // Октябрь: первое число внутри периода.
+  test('произвольный период: месяц считается по первому числу', () => {
+    const range = resolveRange({ mode: 'period', from: day('2026-09-15'), to: day('2026-11-20') })
+    assert.equal(serviceInPeriod(service('2026-09'), range), false)
     assert.equal(serviceInPeriod(service('2026-10'), range), true)
-    // Ноябрь: даже срок работ не доходит.
-    assert.equal(serviceVisible(service('2026-11'), range), false)
-    // Работа закончилась до начала периода.
-    assert.equal(serviceVisible(service('2026-09', { workTo: '2026-09-14' }), range), false)
+    assert.equal(serviceInPeriod(service('2026-11'), range), true)
   })
 
   test('период с одной границей', () => {
-    const since = resolveRange({ mode: 'period', from: day('2026-11-01') })
-    assert.equal(serviceVisible(service('2026-12'), since), true)
-    assert.equal(serviceVisible(service('2026-10', { workTo: '2026-10-31' }), since), false)
-    assert.equal(serviceVisible(service('2026-10', { workTo: '2026-11-01' }), since), true)
-    const until = resolveRange({ mode: 'period', to: day('2026-10-31') })
-    assert.equal(serviceVisible(service('2026-10'), until), true)
-    assert.equal(serviceVisible(service('2026-11'), until), false)
-  })
-
-  test('кривой срок, где начало позже конца, ничего не добавляет к своему месяцу', () => {
-    const s = service('2026-10', { workFrom: '2026-12-10', workTo: '2026-12-01' })
-    assert.equal(serviceVisible(s, month('2026-12')), false)
-    assert.equal(serviceVisible(s, month('2026-10')), true)
+    assert.equal(serviceInPeriod(service('2026-10'), resolveRange({ mode: 'period', from: day('2026-10-01') })), true)
+    assert.equal(serviceInPeriod(service('2026-09'), resolveRange({ mode: 'period', from: day('2026-10-01') })), false)
+    assert.equal(serviceInPeriod(service('2026-10'), resolveRange({ mode: 'period', to: day('2026-09-30') })), false)
   })
 })
 
@@ -246,7 +124,7 @@ describe('итоги только по услугам своего месяца'
   const paidExpense = { amountCents: 20000, paid: true }
   const openExpense = { amountCents: 5000, paid: false }
 
-  test('доделка из другого месяца не попадает ни в выручку, ни в расходы', () => {
+  test('услуга из другого месяца не попадает ни в выручку, ни в расходы', () => {
     const october = service('2026-10', { revenueCents: 100000, expenses: [paidExpense, openExpense], workTo: '2026-11-10' })
     const november = service('2026-11', { revenueCents: 40000, expenses: [openExpense] })
     const result = totals([october, november], month('2026-11'))
@@ -271,79 +149,62 @@ describe('итоги только по услугам своего месяца'
     assert.deepEqual(totals([], month('2026-10')), { revenueCents: 0, expenseCents: 0, unpaidCents: 0, profitCents: 0 })
   })
 
-  test('услуга в ответе: inPeriod, заполненный срок и свои цифры даже у доделки', () => {
+  test('услуга в ответе: inPeriod и свои цифры, срок работ не добавляется', () => {
     const s = service('2026-10', { revenueCents: 100000, expenses: [paidExpense, openExpense], workTo: '2026-11-10' })
-    const inOctober = shapeService(s, month('2026-10'))
-    assert.equal(inOctober.inPeriod, true)
-    const inNovember = shapeService(s, month('2026-11'))
-    assert.equal(inNovember.inPeriod, false)
-    assert.equal(iso(inNovember.workFrom), '2026-10-01T00:00:00.000Z')
-    assert.equal(iso(inNovember.workTo), '2026-11-10T00:00:00.000Z')
-    assert.equal(inNovember.revenueCents, 100000)
-    assert.equal(inNovember.expenseCents, 25000)
-    assert.equal(inNovember.unpaidCents, 5000)
-    assert.equal(inNovember.profitCents, 75000)
+    const shaped = shapeService(s, month('2026-10'))
+    assert.equal(shaped.inPeriod, true)
+    assert.equal(shaped.revenueCents, 100000)
+    assert.equal(shaped.expenseCents, 25000)
+    assert.equal(shaped.unpaidCents, 5000)
+    assert.equal(shaped.profitCents, 75000)
+    assert.equal(shapeService(s, month('2026-11')).inPeriod, false)
   })
 })
 
 describe('какие карточки есть в периоде', () => {
-  test('есть видимая услуга — карточка есть', () => {
-    const card = { startedAt: day('2026-01-10'), leftAt: null, serviceCount: 3, visibleCount: 1 }
-    assert.equal(cardVisible(card, month('2026-11')), true)
+  test('есть услуга месяца периода — карточка есть', () => {
+    assert.equal(cardVisible({ status: 'active', leftAt: null, serviceCount: 1 }, month('2026-11')), true)
   })
 
-  test('услуги заведены, но в период ни одна не попала — карточки нет', () => {
-    // Клиент, пришедший в ноябре, не висит в октябре.
-    const card = { startedAt: day('2026-11-02'), leftAt: null, serviceCount: 2, visibleCount: 0 }
+  test('услуг в периоде нет — карточки нет, даже если клиент уже работает', () => {
+    const card = { status: 'active', leftAt: null, serviceCount: 0 }
     assert.equal(cardVisible(card, month('2026-10')), false)
-    assert.equal(cardVisible(card, month('2026-12')), false)
-  })
-
-  test('без услуг — с месяца начала и дальше', () => {
-    const card = { startedAt: day('2026-11-05'), leftAt: null, serviceCount: 0, visibleCount: 0 }
-    assert.equal(cardVisible(card, month('2026-10')), false)
-    assert.equal(cardVisible(card, month('2026-11')), true)
-    assert.equal(cardVisible(card, month('2027-03')), true)
-    assert.equal(cardVisible(card, resolveRange({ mode: 'last', months: 3 }, new Date('2026-12-10T10:00:00.000Z'))), true)
-  })
-
-  test('без услуг и ушёл — до месяца ухода включительно', () => {
-    const card = { startedAt: day('2026-09-10'), leftAt: day('2026-10-10'), serviceCount: 0, visibleCount: 0 }
-    assert.equal(cardVisible(card, month('2026-08')), false)
-    assert.equal(cardVisible(card, month('2026-09')), true)
-    assert.equal(cardVisible(card, month('2026-10')), true)
-    assert.equal(cardVisible(card, month('2026-11')), false)
+    assert.equal(cardVisible(card, month('2027-03')), false)
   })
 
   test('за всё время видны все карточки', () => {
-    const card = { startedAt: day('2026-11-05'), leftAt: null, serviceCount: 2, visibleCount: 0 }
-    assert.equal(cardVisible(card, null), true)
+    assert.equal(cardVisible({ status: 'active', leftAt: null, serviceCount: 0 }, null), true)
   })
 
-  test('ушедший виден в месяце ухода, даже если услуг и доделок в нём нет', () => {
-    // Услуги были только в сентябре, ушёл в октябре.
-    const card = { status: 'left', startedAt: day('2026-08-03'), leftAt: day('2026-10-20'), serviceCount: 1, visibleCount: 0 }
+  test('ушедший виден в месяце ухода, даже если услуг в нём нет', () => {
+    const card = { status: 'left', leftAt: day('2026-10-20'), serviceCount: 0 }
     assert.equal(cardVisible(card, month('2026-10')), true)
     assert.equal(columnOf(card, month('2026-10')), 'left')
   })
 
-  test('ушедший не виден в месяцах после ухода и до него, если услуг в них нет', () => {
-    const card = { status: 'left', startedAt: day('2026-08-03'), leftAt: day('2026-10-20'), serviceCount: 1, visibleCount: 0 }
+  test('ушедший не виден в месяцах до и после ухода, если услуг в них нет', () => {
+    const card = { status: 'left', leftAt: day('2026-10-20'), serviceCount: 0 }
     assert.equal(cardVisible(card, month('2026-11')), false)
-    assert.equal(cardVisible(card, month('2026-07')), false)
+    assert.equal(cardVisible(card, month('2026-09')), false)
   })
 
   test('уход считается и в скользящем окне, и в произвольном периоде', () => {
-    const card = { status: 'left', startedAt: day('2026-01-03'), leftAt: day('2026-10-20'), serviceCount: 2, visibleCount: 0 }
+    const card = { status: 'left', leftAt: day('2026-10-20'), serviceCount: 0 }
     assert.equal(cardVisible(card, resolveRange({ mode: 'last', months: 2 }, new Date('2026-11-04T09:00:00.000Z'))), true)
     assert.equal(cardVisible(card, resolveRange({ mode: 'period', from: day('2026-10-15'), to: day('2026-10-31') })), true)
     assert.equal(cardVisible(card, resolveRange({ mode: 'period', from: day('2026-10-21'), to: day('2026-10-31') })), false)
   })
 
-  test('месяц начала работы карточку с услугами не добавляет', () => {
-    // Пришёл в ноябре, услуги только на декабрь, не уходил.
-    const card = { status: 'active', startedAt: day('2026-11-05'), leftAt: null, serviceCount: 1, visibleCount: 0 }
-    assert.equal(cardVisible(card, month('2026-11')), false)
+  test('клиент без единой услуги виден в месяце начала работ и больше нигде', () => {
+    const card = { status: 'active', leftAt: null, serviceCount: 0, serviceCountTotal: 0, startedAt: new Date('2026-11-05T00:00:00.000Z') }
+    assert.equal(cardVisible(card, month('2026-11')), true)
+    assert.equal(cardVisible(card, month('2026-10')), false)
+    assert.equal(cardVisible(card, month('2026-12')), false)
+    assert.equal(cardVisible({ ...card, serviceCountTotal: 1 }, month('2026-11')), false, 'есть услуга в другом месяце — видна только там')
+  })
+
+  test('вернувшийся в работу (статус active, дата ухода стёрта) уходом не считается', () => {
+    assert.equal(cardVisible({ status: 'active', leftAt: null, serviceCount: 0 }, month('2026-10')), false)
   })
 })
 
@@ -362,7 +223,7 @@ describe('колонки по выбранному периоду', () => {
     assert.equal(columnOf({ status: 'left', leftAt: day('2026-11-01') }, month('2026-10')), 'active')
   })
 
-  test('ушёл раньше начала периода, а карточка видна из-за доделок — «Ушедшие»', () => {
+  test('ушёл раньше начала периода, а услуга в нём есть — «Ушедшие»', () => {
     assert.equal(columnOf({ status: 'left', leftAt: day('2026-09-20') }, month('2026-10')), 'left')
   })
 
@@ -378,26 +239,6 @@ describe('колонки по выбранному периоду', () => {
     const last = resolveRange({ mode: 'last', months: 2 }, new Date('2026-11-04T09:00:00.000Z'))
     assert.equal(columnOf({ status: 'left', leftAt: day('2026-10-02') }, last), 'left')
     assert.equal(columnOf({ status: 'left', leftAt: day('2026-08-30') }, last), 'left')
-  })
-})
-
-describe('месяцы для списка выбора', () => {
-  const keys = (s) => monthsOfService(s).map((m) => m.toISOString().slice(0, 7)).sort()
-
-  test('без срока работ — только месяц услуги', () => {
-    assert.deepEqual(keys(service('2026-10')), ['2026-10'])
-  })
-
-  test('срок в другие месяцы — добавляет их все', () => {
-    assert.deepEqual(keys(service('2026-10', { workFrom: '2026-10-20', workTo: '2027-01-05' })), ['2026-10', '2026-11', '2026-12', '2027-01'])
-  })
-
-  test('месяц услуги остаётся, даже если срок целиком в другом месяце', () => {
-    assert.deepEqual(keys(service('2026-10', { workFrom: '2026-12-02', workTo: '2026-12-05' })), ['2026-10', '2026-12'])
-  })
-
-  test('кривой срок не ломает список', () => {
-    assert.deepEqual(keys(service('2026-10', { workFrom: '2026-12-10', workTo: '2026-12-01' })), ['2026-10'])
   })
 })
 
@@ -623,19 +464,19 @@ describe('доска целиком', () => {
   }
 
   const cards = [
-    // Октябрьская услуга с доделками до середины ноября.
+    // Октябрьская услуга, срок работ до середины ноября: в ноябре клиента из-за этого нет.
     card('Альфа', { services: [service('2026-10', { revenueCents: 100000, workTo: '2026-11-15', expenses: [expense(20000, true), expense(5000)] })] }),
     // Пришёл в ноябре.
     card('Бета', { startedAt: '2026-11-02', services: [service('2026-11', { revenueCents: 40000, expenses: [expense(1000)] })] }),
     // Ушёл в октябре, услуги были в сентябре.
     card('Гамма', { status: 'left', startedAt: '2026-05-01', leftAt: '2026-10-20', services: [service('2026-09', { revenueCents: 30000 })] }),
-    // Без услуг, пришёл в ноябре.
+    // Без единой услуги, пришёл в ноябре: виден только в ноябре, пока нет услуг.
     card('Дельта', { startedAt: '2026-11-03' }),
   ]
 
   const names = (list) => list.map((c) => c.client.name)
 
-  test('клиент, пришедший в ноябре, в октябре не висит; ушедший виден в месяце ухода', () => {
+  test('в октябре только клиент с услугой октября и ушедший в октябре', () => {
     const board = buildBoard(cards, month('2026-10'), NOW)
     assert.deepEqual(names(board.active), ['Альфа'])
     assert.deepEqual(names(board.left), ['Гамма'])
@@ -643,19 +484,29 @@ describe('доска целиком', () => {
     assert.equal(board.summary.leftCount, 1)
   })
 
-  test('в ноябре доделки видны, но в итоги идут только ноябрьские услуги', () => {
+  test('в ноябре клиент с услугой ноября и новый без услуг, срок работ Альфы не в счёт', () => {
     const board = buildBoard(cards, month('2026-11'), NOW)
-    assert.deepEqual(names(board.active), ['Альфа', 'Бета', 'Дельта'])
+    assert.deepEqual(names(board.active), ['Бета', 'Дельта'])
     assert.deepEqual(names(board.left), [])
-    const alpha = board.active[0]
-    assert.equal(alpha.serviceCountVisible, 1)
-    assert.equal(alpha.serviceCountInPeriod, 0)
-    assert.equal(alpha.serviceCountTotal, 1)
-    assert.equal(alpha.revenueCents, 0)
+    const beta = board.active[0]
+    assert.equal(beta.serviceCountInPeriod, 1)
+    assert.equal(beta.serviceCountTotal, 1)
     assert.equal(board.summary.revenueCents, 40000)
     assert.equal(board.summary.expenseCents, 1000)
     assert.equal(board.summary.unpaidCents, 1000)
     assert.equal(board.summary.profitCents, 39000)
+  })
+
+  test('срок работ любой длины не меняет доску', () => {
+    const plain = [card('Альфа', { services: [service('2026-10')] })]
+    const withSpan = [card('Альфа', { services: [service('2026-10', { workFrom: '2026-09-01', workTo: '2027-06-30' })] })]
+    for (const key of ['2026-08', '2026-09', '2026-10', '2026-11', '2027-03']) {
+      assert.deepEqual(
+        buildBoard(withSpan, month(key), NOW).summary,
+        buildBoard(plain, month(key), NOW).summary,
+      )
+      assert.equal(buildBoard(withSpan, month(key), NOW).active.length, key === '2026-10' ? 1 : 0)
+    }
   })
 
   test('октябрь: деньги Альфы и «не выплачено» по ней', () => {
@@ -673,7 +524,7 @@ describe('доска целиком', () => {
   })
 
   test('список клиентов доски полный, даже когда карточка в этом месяце скрыта', () => {
-    // В октябре не видны Бета и Дельта (пришли в ноябре), но на доске они есть.
+    // В октябре не видны Бета и Дельта (услуг октября нет), но на доске они есть.
     const board = buildBoard(cards, month('2026-10'), NOW)
     assert.deepEqual(names([...board.active, ...board.left]), ['Альфа', 'Гамма'])
     assert.deepEqual(board.summary.onBoardClientIds, ['client-Альфа', 'client-Бета', 'client-Гамма', 'client-Дельта'])
@@ -695,83 +546,5 @@ describe('доска целиком', () => {
     assert.equal(daysWithUs({ startedAt: day('2026-11-01'), leftAt: null }, NOW), 3)
     assert.equal(daysWithUs({ startedAt: day('2026-10-01'), leftAt: day('2026-10-11') }, NOW), 10)
     assert.equal(daysWithUs({ startedAt: day('2026-11-10'), leftAt: null }, NOW), 0)
-  })
-})
-
-describe('предварительный отбор услуг в запросе', () => {
-  /**
-   * Проверка условия на строке, как это делает база: сравнения с null ложны,
-   * поле без условия пропускает всё. Поддержан только набор операторов,
-   * который использует servicePrefilter.
-   */
-  function matches(row, where) {
-    if (!where) return true
-    return Object.entries(where).every(([key, cond]) => {
-      if (key === 'OR') return cond.some((w) => matches(row, w))
-      if (cond === null) return row[key] === null
-      return Object.entries(cond).every(([op, bound]) => {
-        if (row[key] === null) return false
-        const t = row[key].getTime()
-        const b = bound.getTime()
-        if (op === 'gte') return t >= b
-        if (op === 'lt') return t < b
-        if (op === 'lte') return t <= b
-        throw new Error(`оператор ${op} не поддержан проверкой`)
-      })
-    })
-  }
-
-  const monthsList = ['2025-11', '2026-02', '2026-09', '2026-10', '2026-11', '2026-12', '2027-03']
-  const days = [
-    null, '2025-10-31', '2025-11-01', '2026-01-15', '2026-02-28', '2026-09-30', '2026-10-01', '2026-10-31',
-    '2026-11-01', '2026-11-04', '2026-11-30', '2026-12-01', '2026-12-31', '2027-02-14',
-  ]
-  const services = []
-  for (const m of monthsList) {
-    for (const from of days) {
-      for (const to of days) services.push(service(m, { workFrom: from, workTo: to }))
-    }
-  }
-
-  const ranges = {
-    'месяц, октябрь': month('2026-10'),
-    'месяц, ноябрь': month('2026-11'),
-    'месяц, январь': month('2026-01'),
-    'месяц, без данных': month('2030-01'),
-    'последний месяц': resolveRange({ mode: 'last', months: 1 }, new Date('2026-11-04T09:00:00.000Z')),
-    'последние три': resolveRange({ mode: 'last', months: 3 }, new Date('2026-11-04T09:00:00.000Z')),
-    'в первую московскую ночь': resolveRange({ mode: 'last', months: 2 }, new Date('2026-10-31T22:00:00.000Z')),
-    'период с серединой месяца': resolveRange({ mode: 'period', from: day('2026-09-15'), to: day('2026-11-10') }),
-    'период только с': resolveRange({ mode: 'period', from: day('2026-11-01') }),
-    'период только по': resolveRange({ mode: 'period', to: day('2026-10-31') }),
-    'период в один день': resolveRange({ mode: 'period', from: day('2026-11-04'), to: day('2026-11-04') }),
-  }
-
-  for (const [name, range] of Object.entries(ranges)) {
-    test(`не отсекает ни одной видимой услуги: ${name}`, () => {
-      const where = servicePrefilter(range)
-      const lost = services.filter((s) => serviceVisible(s, range) && !matches(s, where))
-      assert.deepEqual(lost, [])
-    })
-  }
-
-  test('за всё время условия нет', () => {
-    assert.equal(servicePrefilter(null), undefined)
-  })
-
-  test('но и всю таблицу не читает: у периода с обеими границами дальние услуги отсекаются', () => {
-    const closed = Object.entries(ranges).filter(([, r]) => r.gte && (r.lt || r.lte))
-    assert.ok(closed.length >= 8)
-    for (const [name, range] of closed) {
-      const taken = services.filter((s) => matches(s, servicePrefilter(range))).length
-      assert.ok(taken < services.length * 0.75, `${name}: взято ${taken} из ${services.length}`)
-    }
-  })
-
-  test('сам отбор ничего не прибавляет к видимым: после serviceVisible остаются те же', () => {
-    const range = ranges['месяц, ноябрь']
-    const exact = services.filter((s) => serviceVisible(s, range))
-    const viaQuery = services.filter((s) => matches(s, servicePrefilter(range))).filter((s) => serviceVisible(s, range))
-    assert.equal(viaQuery.length, exact.length)
   })
 })

@@ -1,6 +1,5 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
-import { createWorkHint } from './motivation/workHints.service.js'
 
 const WORK_INCLUDE = {
   client: { select: { id: true, name: true } },
@@ -51,8 +50,6 @@ export async function createWork({ clientId, title, departmentId, assignees, cre
     },
     include: WORK_INCLUDE,
   })
-  // Мотивация: владельцу — подсказка «Пополнить банк?» исполнителям.
-  await createWorkHint(work)
   return work
 }
 

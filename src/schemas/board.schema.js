@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { objectId } from './common.js'
-import { dayStart, workSpanError } from '../services/boardRules.js'
 
 const optional = (schema) => z.preprocess((v) => (v === '' ? undefined : v), schema.optional())
 
@@ -26,21 +25,14 @@ const boundedDate = z.coerce
     `Дата должна быть между ${MIN_YEAR} и ${MAX_YEAR} годом`,
   )
 
-// Необязательный день: начало или конец работ, день выплаты расхода. null
-// значит «не задано» (у срока работ — весь месяц услуги), как и отсутствие
-// значения, поэтому принимаем его везде.
+// Необязательный день: день выплаты расхода. null значит «не задано», как и
+// отсутствие значения.
 const optionalDay = optional(boundedDate.nullable())
 
 // Дата выплаты имеет смысл только у выплаченного расхода: «сняли галочку, но
 // дата осталась» — противоречие, лучше отказать, чем молча стереть.
 const paidAtNeedsPaid = (e) => !e.paidAt || e.paid === true
 const paidAtIssue = { message: 'Дата выплаты указывается только вместе с paid: true', path: ['paidAt'] }
-
-// Границы срока работ между собой. Проверка относительно месяца услуги, когда
-// указана только одна граница, живёт в сервисе: здесь месяца может не быть
-// (при правке он лежит в базе).
-const workSpanCheck = (b) => !b.workFrom || !b.workTo || workSpanError(dayStart(b.workFrom), dayStart(b.workTo)) === null
-const workSpanIssue = (b) => ({ message: workSpanError(dayStart(b.workFrom), dayStart(b.workTo)), path: ['workTo'] })
 
 // id и paid нужны при правке услуги: расходы пересоздаются целиком, и по id
 // сервер находит прежний расход, чтобы не потерять отметку «выплачено». У новой
@@ -99,11 +91,9 @@ export const addClientSchema = z.object({
           title: z.string().trim().min(1, 'Укажите название услуги').max(200),
           month: boundedDate,
           paidAt: optional(boundedDate),
-          workFrom: optionalDay,
-          workTo: optionalDay,
           revenue: money,
           expenses: expenses.optional(),
-        }).refine(workSpanCheck, workSpanIssue))
+        }))
         .max(20)
         .optional(),
     })
@@ -154,13 +144,9 @@ export const addServiceSchema = z.object({
       // День оплаты. В форме обязателен, здесь нет: услуги, заведённые до
       // появления поля, правятся по частям и свою дату получат отдельно.
       paidAt: optional(boundedDate),
-      // Срок работ, оба необязательные: пусто — весь месяц услуги.
-      workFrom: optionalDay,
-      workTo: optionalDay,
       revenue: money,
       expenses: expenses.optional(),
-    })
-    .refine(workSpanCheck, workSpanIssue),
+    }),
 })
 
 export const editServiceSchema = z.object({
@@ -170,13 +156,8 @@ export const editServiceSchema = z.object({
       title: z.string().trim().min(1).max(200).optional(),
       month: boundedDate.optional(),
       paidAt: optional(boundedDate),
-      // null сбрасывает границу: работа снова считается с начала или до
-      // конца месяца услуги.
-      workFrom: optionalDay,
-      workTo: optionalDay,
       revenue: money.optional(),
       expenses: expenses.optional(),
     })
-    .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса')
-    .refine(workSpanCheck, workSpanIssue),
+    .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })

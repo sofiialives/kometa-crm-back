@@ -7,82 +7,31 @@ const BASE = { boardClientId: 'client1', title: 'Ведение канала', m
 const add = (extra) => addServiceSchema.safeParse({ body: { ...BASE, ...extra } })
 const edit = (body) => editServiceSchema.safeParse({ params: { id: 'service1' }, body })
 
-describe('срок работ при создании услуги', () => {
-  test('срока нет — можно, это весь месяц', () => {
-    assert.equal(add({}).success, true)
-  })
-
-  test('обе границы — принимаются и становятся датами', () => {
-    const r = add({ workFrom: '2026-11-05', workTo: '2026-12-10' })
-    assert.equal(r.success, true)
-    assert.equal(r.data.body.workFrom.toISOString(), '2026-11-05T00:00:00.000Z')
-    assert.equal(r.data.body.workTo.toISOString(), '2026-12-10T00:00:00.000Z')
-  })
-
-  test('одна граница — можно, вторая возьмётся из месяца', () => {
-    assert.equal(add({ workFrom: '2026-11-05' }).success, true)
-    assert.equal(add({ workTo: '2026-12-10' }).success, true)
-  })
-
-  test('пустая строка — как будто границы нет, null принимается', () => {
-    const r = add({ workFrom: '', workTo: null })
-    assert.equal(r.success, true)
-    assert.equal(r.data.body.workFrom, undefined)
-    assert.equal(r.data.body.workTo, null)
-  })
-
-  test('один день — можно', () => {
-    assert.equal(add({ workFrom: '2026-11-05', workTo: '2026-11-05' }).success, true)
-  })
-
-  test('начало позже конца — отказ с понятным сообщением', () => {
+describe('срок работ больше не принимается', () => {
+  test('при создании услуги поля отбрасываются, даже с кривыми датами', () => {
     const r = add({ workFrom: '2026-11-10', workTo: '2026-11-09' })
-    assert.equal(r.success, false)
-    assert.equal(r.error.issues[0].message, 'Срок работ: начало позже конца')
-    assert.deepEqual(r.error.issues[0].path, ['body', 'workTo'])
-  })
-
-  test('длиннее 366 дней — отказ', () => {
-    const r = add({ workFrom: '2026-01-01', workTo: '2027-01-02' })
-    assert.equal(r.success, false)
-    assert.match(r.error.issues[0].message, /366/)
-    assert.equal(add({ workFrom: '2026-01-01', workTo: '2027-01-01' }).success, true)
-  })
-
-  test('не дата — отказ', () => {
-    assert.equal(add({ workFrom: 'вчера' }).success, false)
-  })
-})
-
-describe('срок работ при правке услуги', () => {
-  test('null сбрасывает границу', () => {
-    const r = edit({ workFrom: null, workTo: null })
     assert.equal(r.success, true)
-    assert.equal(r.data.body.workFrom, null)
-    assert.equal(r.data.body.workTo, null)
+    assert.equal('workFrom' in r.data.body, false)
+    assert.equal('workTo' in r.data.body, false)
   })
 
-  test('правка только срока — это не пустое тело', () => {
-    assert.equal(edit({ workTo: '2026-12-01' }).success, true)
-    assert.equal(edit({}).success, false)
+  test('в форме нового клиента поля тоже отбрасываются', () => {
+    const r = addClientSchema.safeParse({
+      body: { clientName: 'Ozon', services: [{ title: 'SEO', month: '2026-11-01', revenue: 100, workFrom: '2026-11-03', workTo: 'вчера' }] },
+    })
+    assert.equal(r.success, true)
+    assert.equal('workFrom' in r.data.body.services[0], false)
+    assert.equal('workTo' in r.data.body.services[0], false)
   })
 
-  test('начало позже конца — отказ', () => {
-    assert.equal(edit({ workFrom: '2026-12-02', workTo: '2026-12-01' }).success, false)
-  })
-})
-
-describe('срок работ у услуг в форме нового клиента', () => {
-  const addClient = (service) => addClientSchema.safeParse({
-    body: { clientName: 'Ozon', services: [{ title: 'SEO', month: '2026-11-01', revenue: 100, ...service }] },
+  test('правка одного только срока — пустое тело', () => {
+    assert.equal(edit({ workTo: '2026-12-01' }).success, false)
   })
 
-  test('принимается', () => {
-    assert.equal(addClient({ workFrom: '2026-11-03', workTo: '2026-11-20' }).success, true)
-  })
-
-  test('начало позже конца — отказ', () => {
-    assert.equal(addClient({ workFrom: '2026-11-21', workTo: '2026-11-20' }).success, false)
+  test('правка с другим полем срок отбрасывает', () => {
+    const r = edit({ title: 'Новое', workFrom: '2026-12-01' })
+    assert.equal(r.success, true)
+    assert.equal('workFrom' in r.data.body, false)
   })
 })
 
@@ -205,7 +154,7 @@ describe('границы дат: от 2000 до 2100 года', () => {
 
   test('края диапазона проходят', () => {
     assert.equal(add({ month: '2000-01-01' }).success, true)
-    assert.equal(add({ month: '2100-12-01', workTo: '2100-12-31' }).success, true)
+    assert.equal(add({ month: '2100-12-01' }).success, true)
   })
 
   test('месяц услуги вне диапазона — отказ', () => {
@@ -213,12 +162,6 @@ describe('границы дат: от 2000 до 2100 года', () => {
     refused(add({ month: '2101-01-01' }), ['body', 'month'])
     refused(add({ month: '0026-11-01' }), ['body', 'month'])
     refused(edit({ month: '2101-01-01' }), ['body', 'month'])
-  })
-
-  test('срок работ вне диапазона — отказ', () => {
-    refused(add({ workFrom: '1999-12-31' }), ['body', 'workFrom'])
-    refused(add({ workTo: '2101-01-01' }), ['body', 'workTo'])
-    refused(edit({ workFrom: '1900-01-01' }), ['body', 'workFrom'])
   })
 
   test('день оплаты услуги вне диапазона — отказ', () => {
@@ -236,15 +179,5 @@ describe('границы дат: от 2000 до 2100 года', () => {
       body: { clientName: 'Ozon', services: [{ title: 'SEO', month: '2101-01-01', revenue: 1 }] },
     })
     refused(r, ['body', 'services', 0, 'month'])
-  })
-
-  test('null и пустая строка границу не нарушают', () => {
-    assert.equal(edit({ workFrom: null, workTo: '' }).success, true)
-  })
-
-  test('не дата — понятное сообщение вместо английского', () => {
-    const r = add({ workFrom: 'вчера' })
-    assert.equal(r.success, false)
-    assert.equal(r.error.issues[0].message, 'Некорректная дата')
   })
 })
