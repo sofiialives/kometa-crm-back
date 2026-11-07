@@ -8,6 +8,7 @@ import { loadClosedMonth, snapshotRow } from './monthClose.service.js'
 import { sortByName } from './closeRules.js'
 import { employeeCard, profileCard } from './shape.js'
 import { activeAways } from './callJournal.service.js'
+import { departmentsWithoutProfile, withPosition } from './teamView.js'
 
 /**
  * Раздел «Команда»: таблица сотрудников с банком, баллами, уровнями и
@@ -94,6 +95,10 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
     }))
   }
 
+  // Должность — из User.position, как её ставят в CRM; профиль мотивации
+  // остаётся отдельным полем profile (он нужен для условий баллов).
+  rows = withPosition(rows, new Map(users.map((u) => [u.id, u.position])))
+
   const totals = rows.reduce(
     (acc, r) => ({ bankCents: acc.bankCents + r.bankCents, payoutCents: acc.payoutCents + r.earnedCents }),
     { bankCents: 0, payoutCents: 0 },
@@ -104,6 +109,17 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
   const departments = actor.role === 'admin'
     ? await prisma.department.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } })
     : []
+
+  // Отделы без условий баллов: спокойная подсказка вместо «N без профиля».
+  const scopeDepartments = await prisma.department.findMany({
+    where: { archivedAt: null, ...(scope ? { id: scope } : {}) },
+    select: { id: true, name: true },
+    orderBy: { name: 'asc' },
+  })
+  const activeProfiles = await prisma.motivationProfile.findMany({
+    where: { archivedAt: null, departmentId: { not: null } },
+    select: { departmentId: true },
+  })
 
   return {
     month: monthKey,
@@ -116,6 +132,7 @@ export async function getTeam(actor, { month, departmentId } = {}, now = new Dat
     rows,
     totals: { ...totals, employees: rows.length },
     withoutProfile: rows.filter((r) => !r.profile).length,
+    departmentsWithoutProfile: departmentsWithoutProfile(scopeDepartments, activeProfiles, rows),
   }
 }
 
