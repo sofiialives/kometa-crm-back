@@ -26,8 +26,7 @@ export function monthStart(value) {
  *
  * Следствие: выручка помесячная, половинок месяца не бывает. «С 15 сентября»
  * сентябрьскую выручку уже не захватит — первое число месяца осталось
- * позади. Сама услуга в таком периоде при этом видна, если работа по ней
- * шла в эти дни (см. serviceVisible).
+ * позади.
  */
 export function resolveRange({ mode, month, months, from, to }, now = new Date()) {
   if (mode === 'all') return null
@@ -64,67 +63,15 @@ export function resolveRange({ mode, month, months, from, to }, now = new Date()
 }
 
 // ---------------------------------------------------------------------------
-// Дни, сроки работ, пересечение с периодом
+// Дни и периоды
 // ---------------------------------------------------------------------------
 
 export const DAY_MS = 24 * 60 * 60 * 1000
 
-/** Самый длинный срок работ по одной услуге, дней (оба края включительно). */
-export const MAX_WORK_DAYS = 366
-
-/** Полночь UTC того дня, на который приходится момент: сроки работ хранятся днями. */
+/** Полночь UTC того дня, на который приходится момент: дни на доске хранятся целиком. */
 export function dayStart(value) {
   const d = new Date(value)
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
-}
-
-/** Первое число следующего месяца. */
-function nextMonthStart(value) {
-  const m = monthStart(value)
-  return new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))
-}
-
-/**
- * Срок работ с заполненными границами. Пустая граница — это край месяца
- * услуги: начало месяца слева и его последний день справа. Оба конца — дни
- * (полночь UTC), последний день входит в срок целиком.
- */
-export function workSpan({ month, workFrom, workTo }) {
-  return {
-    from: workFrom ? dayStart(workFrom) : monthStart(month),
-    to: workTo ? dayStart(workTo) : new Date(nextMonthStart(month).getTime() - DAY_MS),
-  }
-}
-
-/** Услуга с заполненными workFrom/workTo — в таком виде её видит фронт. */
-export function fillWorkSpan(service) {
-  const { from, to } = workSpan(service)
-  return { ...service, workFrom: from, workTo: to }
-}
-
-/**
- * Проблема в сроке работ или null. Принимает дни (см. dayStart).
- * Один текст на всех: его же показывает проверка входных данных.
- */
-export function workSpanError(from, to) {
-  if (from.getTime() > to.getTime()) return 'Срок работ: начало позже конца'
-  if ((to.getTime() - from.getTime()) / DAY_MS + 1 > MAX_WORK_DAYS) {
-    return `Срок работ не может быть длиннее ${MAX_WORK_DAYS} дней`
-  }
-  return null
-}
-
-/**
- * Проблема в сроке работ услуги или null. Проверяет срок вместе с месяцем
- * услуги: если задана одна граница, вторая берётся из месяца, и срок «с 5
- * декабря» у ноябрьской услуги вышел бы с началом позже конца.
- */
-export function workSpanProblem({ month, workFrom, workTo }) {
-  if (!workFrom && !workTo) return null
-  const { from, to } = workSpan({ month, workFrom, workTo })
-  const problem = workSpanError(from, to)
-  if (!problem) return null
-  return workFrom && workTo ? problem : `${problem} (вторая граница не задана, взят край месяца услуги)`
 }
 
 /** Момент раньше начала периода. */
@@ -143,93 +90,25 @@ export function inRange(value, range) {
   return !range || (!beforeRange(value, range) && !afterRange(value, range))
 }
 
-/**
- * Пересекается ли отрезок [start, end) с периодом. Края — миллисекунды,
- * end может быть Infinity («пока не закончилось»). Пустой отрезок не
- * пересекается ни с чем.
- */
-export function overlapsRange(range, start, end) {
-  if (!range) return true
-  if (end <= start) return false
-  if (range.gte && end <= range.gte.getTime()) return false
-  if (range.lt && start >= range.lt.getTime()) return false
-  if (range.lte && start > range.lte.getTime()) return false
-  return true
-}
-
 // ---------------------------------------------------------------------------
 // Услуги в периоде
 // ---------------------------------------------------------------------------
 
 /**
- * Месяц услуги внутри периода — только такая услуга даёт выручку и расходы
- * в этом периоде: деньги по ней принадлежат её месяцу, а не месяцам доделок.
+ * Месяц услуги внутри периода. Только такая услуга видна в периоде и даёт
+ * выручку и расходы: деньги по ней принадлежат её месяцу. Срок работ на
+ * доске ничего не решает.
  */
 export function serviceInPeriod(service, range) {
   return inRange(service.month, range)
 }
 
 /**
- * Условие для запроса к базе: отсекает услуги, которые заведомо не видны в
- * периоде, чтобы доска не читала всю таблицу. null (весь период) — без условия.
- *
- * Условие шире, чем serviceVisible, но никогда не уже: видимую услугу оно
- * обязано пропускать, а лишнюю окончательно отсеет serviceVisible. Поэтому
- * здесь нет ни точности, ни пересчёта срока работ: четыре случая — какие из
- * границ срока заданы — и по каждому нужные неравенства.
- *
- * Конец срока включает день целиком, поэтому от начала периода отступаем на
- * сутки назад; месяц услуги, у которой срока нет, — на месяц (до первого
- * числа месяца начала периода).
- *
- * Простое «месяц услуги в пределах года от периода» не годится: срок работ,
- * заданный с двух сторон, может лежать как угодно далеко от месяца услуги.
- */
-export function servicePrefilter(range) {
-  if (!range) return undefined
-
-  const upper = range.lt ? { lt: range.lt } : range.lte ? { lte: range.lte } : {}
-  const monthLower = range.gte ? { gte: monthStart(range.gte) } : {}
-  const dayLower = range.gte ? { gte: new Date(range.gte.getTime() - DAY_MS) } : {}
-  // Поле без границ в условие не попадает: пустой фильтр пропускал бы и null.
-  const clause = (fields) =>
-    Object.fromEntries(Object.entries(fields).filter(([, v]) => v === null || Object.keys(v).length > 0))
-
-  return {
-    OR: [
-      // Месяц в периоде; она же — услуга без срока, работавшая весь месяц.
-      clause({ month: { ...monthLower, ...upper } }),
-      // Срок задан с обеих сторон.
-      clause({ workFrom: upper, workTo: dayLower }),
-      // Задано только начало, конец — конец месяца услуги.
-      clause({ workFrom: upper, workTo: null, month: monthLower }),
-      // Задан только конец, начало — начало месяца услуги.
-      clause({ workFrom: null, workTo: dayLower, month: upper }),
-    ],
-  }
-}
-
-/**
- * Услугу показываем в периоде, если её месяц в периоде ИЛИ срок работ
- * пересекается с периодом. Второй случай — доделки: услуга октября, над
- * которой работали ещё и в ноябре, видна в ноябре, но деньги остаются в
- * октябре. Последний день срока входит целиком, поэтому отрезок заканчивается
- * не в полночь этого дня, а в полночь следующего.
- */
-export function serviceVisible(service, range) {
-  if (!range) return true
-  if (serviceInPeriod(service, range)) return true
-  const { from, to } = workSpan(service)
-  return overlapsRange(range, from.getTime(), to.getTime() + DAY_MS)
-}
-
-/**
  * Выручка, расходы, «не выплачено» и прибыль по набору услуг. Единственное
  * место, где это считается.
  *
- * Считаются только услуги, месяц которых в периоде. Доделки, видимые лишь
- * из-за срока работ, в сумму не входят, иначе деньги одной услуги легли бы в
- * два месяца сразу. Без периода (null) — считаются все.
+ * Считаются только услуги, месяц которых в периоде. Без периода (null) —
+ * все.
  *
  * «Не выплачено» — расходы без отметки; на прибыль не влияет: расход
  * остаётся расходом, выплачен он или ещё нет.
@@ -250,13 +129,12 @@ export function totals(services, range = null) {
 }
 
 /**
- * Услуга для ответа: заполненный срок работ и признак «её месяц в периоде».
- * Цифры самой услуги (выручка, расходы, прибыль) остаются её собственными, и
- * у доделки тоже: по inPeriod фронт отличает те, что идут в итоги.
+ * Услуга для ответа: её цифры (выручка, расходы, прибыль) и признак «месяц
+ * в периоде».
  */
 export function shapeService(service, range) {
   return {
-    ...fillWorkSpan(service),
+    ...service,
     inPeriod: serviceInPeriod(service, range),
     ...totals([service]),
   }
@@ -269,33 +147,22 @@ export function shapeService(service, range) {
 /**
  * Есть ли карточка в выбранном периоде.
  *
- * Если у клиента есть видимая услуга — есть. Если услуги у него заведены, но
- * ни одна в период не попала — нет: клиент, пришедший в ноябре, не должен
- * висеть в октябре с «услуг не было». Месяц начала работы карточку сам по
- * себе не добавляет.
- *
+ * Клиент виден, если у него есть услуга, месяц которой попадает в период.
  * Единственное исключение — уход: клиент, ушедший в этом периоде, виден в
- * нём в «Ушедших», даже если услуг и доделок в нём нет. Иначе уход
- * потерялся бы из счётчика ушедших за месяц.
- *
- * Клиент вообще без услуг виден по своим датам: с месяца начала работы и
- * дальше, пока не ушёл (месяц ухода ещё включён). Карточку только что
- * заведённого клиента без единой услуги иначе нигде не найти.
+ * нём в «Ушедших», даже если услуг в нём нет. Иначе уход потерялся бы из
+ * счётчика ушедших за месяц. Дата начала работы и срок работ видимость не
+ * определяют. Без периода («за всё время») видны все.
  */
-export function cardVisible({ status, startedAt, leftAt, serviceCount, visibleCount }, range) {
+export function cardVisible({ status, leftAt, serviceCount }, range) {
   if (!range) return true
-  if (visibleCount > 0) return true
-  if (status === 'left' && leftAt && inRange(leftAt, range)) return true
-  if (serviceCount > 0) return false
-  const end = leftAt ? nextMonthStart(leftAt).getTime() : Infinity
-  return overlapsRange(range, monthStart(startedAt).getTime(), end)
+  if (serviceCount > 0) return true
+  return status === 'left' && Boolean(leftAt) && inRange(leftAt, range)
 }
 
 /**
  * В какой колонке карточка в выбранном периоде: 'active' или 'left'.
  *
- * В «Ушедших» клиент, который ушёл в этом периоде или раньше: если ушёл
- * раньше, а карточка всё равно видна, значит, по нему идут доделки. Ушёл
+ * В «Ушедших» клиент, который ушёл в этом периоде или раньше. Ушёл
  * позже конца периода — в том периоде он ещё работал, поэтому «В работе».
  * Без периода колонку решает текущий статус.
  */
@@ -317,9 +184,9 @@ export function daysWithUs(card, now = new Date()) {
 
 /**
  * Доска из карточек, прочитанных из базы вместе с услугами и их расходами
- * (и счётчиком _count.services всех услуг): сводка сверху и две колонки. В карточки для периода попадают не все, а
- * сводка знает всех (см. onBoardClientIds). Что видно и в какой колонке — решают правила
- * выше, здесь они только собираются в ответ.
+ * : сводка сверху и две колонки. В карточки для периода попадают не все, а
+ * сводка знает всех (см. onBoardClientIds). Что видно и в какой колонке —
+ * решают правила выше, здесь они только собираются в ответ.
  */
 export function buildBoard(cards, range, now = new Date()) {
   const active = []
@@ -327,16 +194,14 @@ export function buildBoard(cards, range, now = new Date()) {
   const visibleServices = []
 
   for (const c of cards) {
-    // Услуги в карточке уже отобраны запросом (servicePrefilter) и могут быть
-    // не всеми: сколько их всего, говорит счётчик.
+    // Услуги в карточке уже отобраны запросом по месяцу и могут быть не
+    // всеми: сколько их всего, говорит счётчик.
     const serviceCount = c._count.services
-    const visible = c.services.filter((s) => serviceVisible(s, range))
+    const visible = c.services.filter((s) => serviceInPeriod(s, range))
     if (!cardVisible({
       status: c.status,
-      startedAt: c.startedAt,
       leftAt: c.leftAt,
-      serviceCount,
-      visibleCount: visible.length,
+      serviceCount: visible.length,
     }, range)) continue
 
     visibleServices.push(...visible)
@@ -352,10 +217,8 @@ export function buildBoard(cards, range, now = new Date()) {
       // Количество услуг за всё время — так и написано в задании, «не
       // зависящее от периода».
       serviceCountTotal: serviceCount,
-      // Сколько услуг дают деньги в периоде, а сколько видно всего: разница
-      // — доделки, их деньги лежат в другом месяце.
-      serviceCountInPeriod: visible.filter((s) => serviceInPeriod(s, range)).length,
-      serviceCountVisible: visible.length,
+      // Сколько услуг дают деньги в периоде.
+      serviceCountInPeriod: visible.length,
       ...totals(visible, range),
     }
     const column = columnOf(c, range) === 'left' ? left : active
@@ -378,28 +241,6 @@ export function buildBoard(cards, range, now = new Date()) {
     active,
     left,
   }
-}
-
-// ---------------------------------------------------------------------------
-// Список месяцев
-// ---------------------------------------------------------------------------
-
-/**
- * Месяцы, о которых «знает» услуга: её собственный и все, которые захватывает
- * срок работ. Для выпадающего списка: открыв такой месяц, доделки в нём
- * действительно видны.
- */
-export function monthsOfService(service) {
-  const own = monthStart(service.month)
-  const months = [own]
-  const { from, to } = workSpan(service)
-  if (from.getTime() > to.getTime()) return months
-  // Больше года подряд не бывает (MAX_WORK_DAYS), счётчик — страховка от
-  // кривых данных, чтобы цикл не крутился вечно.
-  for (let m = monthStart(from), i = 0; m.getTime() <= to.getTime() && i < 36; m = nextMonthStart(m), i += 1) {
-    if (m.getTime() !== own.getTime()) months.push(m)
-  }
-  return months
 }
 
 // ---------------------------------------------------------------------------
