@@ -225,11 +225,8 @@ async function ownerFeed() {
     const card = { ...r, complexity }
     await sendOnce(`review:${r.id}`, () => tellOwners(reviewText(card), { buttons: reviewButtons(card) }))
   }
-  for (const h of hints) {
-    if (!unsent.has(`hint:${h.id}`)) continue
-    const text = `<b>Новая работа в Иерархии</b>\n«${escapeHtml(short(h.workTitle, 140))}»${h.clientName ? `\nКлиент ${escapeHtml(h.clientName)}` : ''}${h.departmentName ? `${h.clientName ? ', ' : '\n'}${escapeHtml(h.departmentName)}` : ''}\n\nПополнить банк исполнителям?`
-    await sendOnce(`hint:${h.id}`, () => tellOwners(text, { buttons: [row(crmButton('Открыть «На проверке»', '/motivation?section=review&view=pending'))].filter((r) => r.length) }))
-  }
+  // Подсказки «Новая работа, пополнить банк?» Ян просил убрать (7.11): их больше
+  // не создают и не шлют. Старые в базе просто лежат.
 }
 
 /** Раз в минуту. */
