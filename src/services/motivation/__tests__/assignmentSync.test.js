@@ -64,3 +64,27 @@ describe('история баллов: пометки и догрузка', asyn
     assert.throws(() => decodeCursor('мусор'))
   })
 })
+
+describe('персональный профиль в назначении', () => {
+  const linked = linkedOf([
+    { id: 'design-staff', departmentId: 'design', audience: 'staff' },
+    { id: 'design-lead', departmentId: 'design', audience: 'lead' },
+  ])
+  const personal = new Map([['u1', { id: 'personal-u1', userId: 'u1' }]])
+
+  test('персональный профиль главнее профиля отдела и роли', () => {
+    assert.equal(desiredProfileId({ id: 'u1', role: 'staff', departmentId: 'design' }, linked, null, personal), 'personal-u1')
+    assert.equal(desiredProfileId({ id: 'u1', role: 'lead', departmentId: 'design' }, linked, { profileId: 'design-lead' }, personal), 'personal-u1')
+  })
+  test('персональный профиль работает и без отдела', () => {
+    assert.equal(desiredProfileId({ id: 'u1', role: 'staff', departmentId: null }, linked, null, personal), 'personal-u1')
+  })
+  test('у других людей персональный профиль не действует', () => {
+    assert.equal(desiredProfileId({ id: 'u2', role: 'staff', departmentId: 'design' }, linked, null, personal), 'design-staff')
+  })
+  test('без персонального профиля человек возвращается к отдельским условиям', () => {
+    const current = { profileId: 'personal-u1' }
+    assert.equal(desiredProfileId({ id: 'u1', role: 'staff', departmentId: 'design' }, linked, current, new Map()), 'design-staff')
+    assert.equal(desiredProfileId({ id: 'u1', role: 'lead', departmentId: 'design' }, linkedOf([{ id: 'design-staff', departmentId: 'design', audience: 'staff' }]), current, new Map()), 'design-staff')
+  })
+})
