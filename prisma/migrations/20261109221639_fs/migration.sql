@@ -1,6 +1,3 @@
--- CreateEnum
-CREATE TYPE "TaskPriority" AS ENUM ('low', 'medium', 'high');
-
 -- DropForeignKey
 ALTER TABLE "AmbassadorReport" DROP CONSTRAINT "AmbassadorReport_decidedById_fkey";
 
