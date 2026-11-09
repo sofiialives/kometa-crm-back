@@ -11,9 +11,9 @@ import { assignmentsAt } from './profiles.js'
  * новое назначение с текущего момента, старые остаются, и прошлые баллы
  * считаются по тем условиям, что были тогда.
  *
- * Отделы, которым ещё не заведён ни один профиль, не трогаем: там люди
- * работают по профилю, назначенному вручную, как раньше. Это позволяет
- * переводить отделы на новые профили по одному.
+ * Ручного назначения нет. Старые назначения на профили без отдела
+ * закрываются при первой же синхронизации (она идёт при старте сервера),
+ * людям подтягивается профиль их отдела и роли.
  */
 
 export const audienceOf = (role) => (role === 'lead' ? 'lead' : 'staff')
@@ -21,21 +21,20 @@ export const audienceOf = (role) => (role === 'lead' ? 'lead' : 'staff')
 /**
  * Какой профиль должен быть у человека. undefined — решать нечего, оставить
  * как есть; null — условий нет; иначе id профиля.
+ *
+ * Вручную профили не назначаются: любой текущий профиль, который не равен
+ * профилю отдела и роли (старый профиль без отдела, профиль чужого отдела,
+ * удалённый), закрывается. Нет отдела или профиля для него — условий нет.
  */
 export function desiredProfileId(user, linked, current) {
-  // Удалённый профиль или профиль чужого отдела (человека перевели) с
-  // собой не уносим.
-  const p = current?.profile
-  const stale = Boolean(p && (p.archivedAt || (p.departmentId && p.departmentId !== user.departmentId)))
-  if (!user.departmentId) return stale ? null : undefined
+  const has = Boolean(current?.profileId)
+  if (!user.departmentId) return has ? null : undefined
   const own = linked.get(`${user.departmentId}:${audienceOf(user.role)}`)
   if (own) return own.id
+  // Руководителю без своего профиля достаются условия специалистов.
   const staff = user.role === 'lead' ? linked.get(`${user.departmentId}:staff`) : null
   if (staff) return staff.id
-  // Для этой роли условия отделу ещё не заданы: живой ручной профиль
-  // оставляем. Иначе условия руководителя, заведённые первыми, оставили бы
-  // специалистов отдела совсем без баллов.
-  return stale ? null : undefined
+  return has ? null : undefined
 }
 
 async function linkedProfiles(db) {

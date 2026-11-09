@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { validate } from '../middlewares/validate.middleware.js'
 import { authenticate, authorize } from '../middlewares/auth.middleware.js'
 import {
-  assignmentSchema, cancelEventSchema, createEventTypeSchema, createProfileSchema, generalSettingsSchema,
+  cancelEventSchema, createEventTypeSchema, createProfileSchema, generalSettingsSchema,
   globalScaleSchema, manualEventSchema, monthQuerySchema, productSchema, profileScaleSchema, seenSchema, teamQuerySchema,
   topUpSchema, updateEventTypeSchema, updateProfileSchema, userIdParamSchema, userMonthSchema, workLevelsSchema,
   writeOffSchema,
@@ -85,6 +85,7 @@ router.post('/profiles/:id/events', admin, validate(createEventTypeSchema), c.cr
 router.patch('/event-types/:id', admin, validate(updateEventTypeSchema), c.updateEventType)
 router.delete('/event-types/:id', admin, validate(userIdParamSchema), c.deleteEventType)
 
-router.put('/assignments/:userId', admin, validate(assignmentSchema), c.assignProfile)
+// Отключено (410): профиль подбирается по отделу и роли, вручную не назначается.
+router.put('/assignments/:userId', admin, c.assignProfile)
 
 export default router

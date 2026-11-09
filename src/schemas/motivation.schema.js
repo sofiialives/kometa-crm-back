@@ -325,11 +325,6 @@ export const generalSettingsSchema = z.object({
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })
 
-export const assignmentSchema = z.object({
-  params: z.object({ userId: objectId }),
-  body: z.object({ profileId: objectId }),
-})
-
 // Что сотрудник увидел: время самой свежей записи банка и событий из того
 // ответа, который был у него на экране. Не «сейчас»: пополнение, пришедшее,
 // пока страница открыта, он ещё не видел.
