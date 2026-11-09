@@ -217,3 +217,36 @@ export async function rejectReview(actor, id, { reason } = {}, now = new Date())
   })
   return reviewCard(review)
 }
+
+/**
+ * Массовое снятие ждущих заявок: по списку id, по списку людей или все.
+ * Баллы не начисляются; заявки остаются в истории со статусом «отклонена»,
+ * кто снял и когда. Статус именно «отклонена», а не «снята системой»: по
+ * снятой системой заявке ночь предложила бы новый штраф, а по отклонённой
+ * больше не предлагает.
+ *
+ * Всё в одной транзакции под замками людей (те же, что у «Начислить»), а
+ * отбор и запись идут по status = pending: заявку, которую успели решить, не
+ * тронем, двойного снятия нет. Возвращает, сколько снято.
+ */
+export async function withdrawPending(actor, { ids, userIds, all } = {}, now = new Date()) {
+  assertAdmin(actor, 'Снимать заявки может только владелец')
+  const chosen = [Boolean(ids?.length), Boolean(userIds?.length), all === true].filter(Boolean).length
+  if (chosen !== 1) throw ApiError.badRequest('Укажите одно из: ids, userIds или all')
+
+  const filter = ids?.length ? { id: { in: ids } } : userIds?.length ? { userId: { in: userIds } } : {}
+  const note = `Снял ${actor.name || 'владелец'}`
+
+  const withdrawn = await prisma.$transaction(async (tx) => {
+    const found = await tx.motivationReview.findMany({ where: { ...filter, status: 'pending' }, select: { id: true, userId: true } })
+    if (found.length === 0) return 0
+    // Замки в одном порядке, чтобы две очистки не ждали друг друга.
+    for (const userId of [...new Set(found.map((r) => r.userId))].sort()) await lockUser(tx, userId)
+    const res = await tx.motivationReview.updateMany({
+      where: { id: { in: found.map((r) => r.id) }, status: 'pending' },
+      data: { status: 'rejected', decidedById: actor.id, decidedAt: now, decisionNote: note },
+    })
+    return res.count
+  }, { timeout: 30000 })
+  return { withdrawn, pending: await prisma.motivationReview.count({ where: { status: 'pending' } }) }
+}

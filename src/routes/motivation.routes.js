@@ -6,7 +6,7 @@ import {
   globalScaleSchema, manualEventSchema, monthQuerySchema, productSchema, profileScaleSchema, seenSchema, teamQuerySchema,
   topUpSchema, updateEventTypeSchema, updateProfileSchema, userIdParamSchema, userMonthSchema, workLevelsSchema,
   writeOffSchema,
-  reviewListSchema, approveReviewSchema, rejectReviewSchema,
+  reviewListSchema, approveReviewSchema, rejectReviewSchema, withdrawReviewsSchema,
   callDaySchema, callMarkSchema, awaySchema, exportSchema, botJournalSchema, historySchema,
 } from '../schemas/motivation.schema.js'
 import * as c from '../controllers/motivation.controller.js'
@@ -58,6 +58,7 @@ router.post('/events/:id/cancel', admin, validate(cancelEventSchema), c.cancelEv
 
 router.get('/reviews', admin, validate(reviewListSchema), c.listReviews)
 router.get('/reviews/count', admin, c.reviewsCount)
+router.post('/reviews/withdraw', admin, validate(withdrawReviewsSchema), c.withdrawReviews)
 router.post('/reviews/:id/approve', admin, validate(approveReviewSchema), c.approveReview)
 router.post('/reviews/:id/reject', admin, validate(rejectReviewSchema), c.rejectReview)
 

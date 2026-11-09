@@ -124,7 +124,10 @@ export const getBotJournalPeople = asyncHandler(async (req, res) => {
 })
 
 export const getBotJournal = asyncHandler(async (req, res) => {
-  res.json(await botJournal.getBotJournal(req.user, req.query))
+  const { userId } = req.query
+  res.json(userId
+    ? await botJournal.getBotJournal(req.user, req.query)
+    : await botJournal.getBotJournalTeam(req.user, req.query))
 })
 
 export const getHistory = asyncHandler(async (req, res) => {
@@ -197,4 +200,8 @@ export const saveWorkLevels = asyncHandler(async (req, res) => {
 // Ручного назначения больше нет: профиль подбирается по отделу и роли.
 export const assignProfile = asyncHandler(async () => {
   throw new ApiError(410, 'Профиль назначается автоматически по отделу и роли')
+})
+
+export const withdrawReviews = asyncHandler(async (req, res) => {
+  res.json(await review.withdrawPending(req.user, req.body))
 })
