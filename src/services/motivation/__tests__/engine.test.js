@@ -46,8 +46,9 @@ describe('округление и доли', () => {
     assert.deepEqual(amounts(at250), [38, 75, 125, 188, 250])
   })
 
-  test('баллы не выходят за 0 и 100', () => {
-    assert.equal(clampPoints(-5), 0)
+  test('баллы могут уходить в минус, но не дальше −100 и 100', () => {
+    assert.equal(clampPoints(-5), -5)
+    assert.equal(clampPoints(-150), -100)
     assert.equal(clampPoints(130), 100)
     assert.equal(clampPoints(42), 42)
   })
@@ -188,10 +189,15 @@ describe('падение ниже уровня', () => {
   })
 })
 
-describe('ноль баллов: штраф при нуле сгорает', () => {
-  test('0, потом −10, потом +20 — это 20, а не 10', () => {
+describe('шкала может уходить в минус, но не дальше −100 и 100', () => {
+  test('0, потом −10, потом +20 — это 10, штраф при нуле не сгорает, а уходит в минус', () => {
     const r = replayPrize({ levels: SCALE, events: [ev(1, -10), ev(2, 20)] })
-    assert.equal(r.prizePoints, 20)
+    assert.equal(r.prizePoints, 10)
+  })
+
+  test('штрафы накапливаются ниже нуля, но не дальше −100', () => {
+    const r = replayPrize({ levels: SCALE, events: [ev(1, -40), ev(2, -40), ev(3, -40)] })
+    assert.equal(r.prizePoints, -100)
   })
 
   test('сверху то же самое: 95 + 10 даёт 100, потом −5 даёт 95', () => {
@@ -311,9 +317,13 @@ describe('проверка шкалы', () => {
     assert.ok(validateScale([{ threshold: 101, percent: 100 }]).some((e) => e.includes('порог')))
   })
 
-  test('уровни работы начинаются с нуля и растут', () => {
+  test('уровни работы растут, нижняя граница может быть и отрицательной', () => {
     assert.deepEqual(validateWorkLevels(WORK), [])
-    assert.ok(validateWorkLevels([{ title: 'A', minPoints: 10 }]).some((e) => e.includes('с 0')))
+    // Первый уровень не обязан начинаться строго с нуля — это нижняя
+    // граница всей шкалы, в том числе отрицательная («ушёл в минус»).
+    assert.deepEqual(validateWorkLevels([{ title: 'A', minPoints: 10 }]), [])
+    assert.deepEqual(validateWorkLevels([{ title: 'В минусе', minPoints: -20 }, { title: 'A', minPoints: 0 }]), [])
+    assert.ok(validateWorkLevels([{ title: 'A', minPoints: -101 }]).some((e) => e.includes('граница')))
     assert.ok(validateWorkLevels([{ title: 'A', minPoints: 0 }, { title: 'B', minPoints: 0 }]).some((e) => e.includes('больше')))
     assert.ok(validateWorkLevels([{ title: ' ', minPoints: 0 }]).some((e) => e.includes('название')))
   })

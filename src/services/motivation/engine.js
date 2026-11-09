@@ -58,7 +58,10 @@
  *      по нулям.
  */
 
-export const POINTS_MIN = 0
+// Шкала может уходить в минус: штрафами человек может «провалиться» ниже
+// нуля, и это должно быть видно отдельным уровнем работы, а не застывать
+// на нуле. Симметричный предел — тот же запас, что и сверху.
+export const POINTS_MIN = -100
 export const POINTS_MAX = 100
 
 export function clampPoints(value) {
@@ -116,7 +119,8 @@ export function validateScale(levels) {
 }
 
 /**
- * Проверка уровней работы. Первый начинается с нуля, следующие строго
+ * Проверка уровней работы. Первый — нижняя граница всей шкалы (может быть
+ * отрицательным: человек может «уйти в минус» штрафами), следующие строго
  * выше: между уровнями не должно быть дыр, иначе на каких-то баллах
  * человек остался бы вообще без уровня.
  */
@@ -126,13 +130,12 @@ export function validateWorkLevels(levels) {
     return ['Нужен хотя бы один уровень работы']
   }
   if (levels.length > 10) errors.push('Уровней работы не может быть больше десяти')
-  if (levels[0] && levels[0].minPoints !== 0) errors.push('Первый уровень работы начинается с 0 баллов')
 
   levels.forEach((l, i) => {
     const n = i + 1
     if (!l.title || !String(l.title).trim()) errors.push(`Уровень ${n}: нужно название`)
-    if (!Number.isInteger(l.minPoints) || l.minPoints < 0 || l.minPoints > POINTS_MAX) {
-      errors.push(`Уровень ${n}: граница должна быть целым числом от 0 до ${POINTS_MAX}`)
+    if (!Number.isInteger(l.minPoints) || l.minPoints < POINTS_MIN || l.minPoints > POINTS_MAX) {
+      errors.push(`Уровень ${n}: граница должна быть целым числом от ${POINTS_MIN} до ${POINTS_MAX}`)
     }
     if (i > 0 && l.minPoints <= levels[i - 1].minPoints) {
       errors.push(`Уровень ${n}: граница должна быть больше, чем у уровня ${n - 1}`)

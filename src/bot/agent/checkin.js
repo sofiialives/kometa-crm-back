@@ -24,6 +24,7 @@ import { chatOf, hasNotice, nameOf, sendOnce, tell, tellOwners } from './notify.
  */
 
 const PENALTY_KEY = 'checkin_missed'
+const REWARD_KEY = 'checkin_answered'
 const lockUser = (tx, userId) => tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`
 
 /** Запланировать сегодняшний чек-ин, если сегодня его день. */
@@ -113,14 +114,48 @@ export async function isAskedNow(userId, now = new Date()) {
 export async function recordAnswer(userId, answer, now = new Date()) {
   const open = await prisma.botCheckinAnswer.findFirst({
     where: { userId, status: 'asked', checkin: { startedAt: { lte: now }, deadlineAt: { gt: now }, closedAt: null } },
-    select: { id: true },
+    select: { id: true, checkin: { select: { day: true } } },
   })
   if (!open) return false
   const updated = await prisma.botCheckinAnswer.updateMany({
     where: { id: open.id, status: 'asked' },
     data: { status: 'answered', answer: String(answer).slice(0, 500), answeredAt: now },
   })
+  if (updated.count > 0) {
+    // Ответил вовремя — награда события «Ответил на внезапный чек-ин»,
+    // если оно есть и включено в профиле. Нет события — просто без баллов,
+    // как и у остальных правил.
+    try { await rewardAnswer(userId, open.checkin.day, now) } catch (e) { console.error('[агент] чек-ин, награда за ответ:', e.message) }
+  }
   return updated.count > 0
+}
+
+/** Награда за ответ на чек-ин в срок — событием «Ответил…» из профиля. */
+async function rewardAnswer(userId, day, now) {
+  return prisma.$transaction(async (tx) => {
+    await lockUser(tx, userId)
+    const assignment = await assignmentAt(userId, now, tx)
+    const type = assignment?.profile?.eventTypes.find((t) => t.systemKey === REWARD_KEY && t.enabled)
+    if (!type) return null
+    const dedupeKey = `checkin-ok:${day}:${userId}`
+    if (await tx.motivationEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return null
+    await tx.motivationEvent.create({
+      data: {
+        userId,
+        profileId: assignment.profileId,
+        eventTypeId: type.id,
+        kind: 'event',
+        mode: 'auto',
+        title: type.title,
+        prizePoints: type.prizePoints,
+        levelPoints: type.levelPoints,
+        comment: `Чек-ин ${day.split('-').reverse().join('.')}: ответил вовремя`,
+        occurredAt: now,
+        dedupeKey,
+      },
+    })
+    return type.prizePoints
+  })
 }
 
 async function penalize(answer, checkin, now) {

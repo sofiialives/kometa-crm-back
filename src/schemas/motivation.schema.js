@@ -244,7 +244,7 @@ export const updateProfileSchema = z.object({
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
 })
 
-const autoRule = z.enum(['task_on_time', 'personal_task_on_time', 'task_overdue', 'personal_task_overdue', 'task_not_started'])
+const autoRule = z.enum(['task_on_time', 'personal_task_on_time', 'task_overdue', 'personal_task_overdue', 'task_not_started', 'tasks_not_set', 'client_closed_on_time'])
 
 const eventFields = {
   title: z.string().trim().min(1, 'Укажите название события').max(200),

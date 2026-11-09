@@ -4,6 +4,7 @@ import { broadcast, runRemindersOnce } from './reminders.js'
 import { pruneNotices, runAgentOnce, runEvening, runMorning } from './agent/index.js'
 import { drain, startPolling } from './updates.js'
 import { whoAmI } from './telegram.js'
+import { chargeTasksNotSet } from '../services/motivation/autoTasks.service.js'
 
 const MSK = { timezone: 'Europe/Moscow' }
 
@@ -71,6 +72,14 @@ export async function startBot() {
   // 18:00 по будням — тем, у кого остались незакрытые задачи на сегодня.
   cron.schedule('0 18 * * 1-5', () => {
     runEvening().catch((e) => console.error('[агент] вечер:', e.message))
+  }, MSK)
+  // 10:00 по будням — у кого нет ни одной задачи на сегодня, тому штраф
+  // мотивации по правилу tasks_not_set (владелец включает его и задаёт
+  // баллы в настройках мотивации, как и остальные автоправила).
+  cron.schedule('0 10 * * 1-5', () => {
+    chargeTasksNotSet()
+      .then(({ charged }) => { if (charged) console.log(`[мотивация] не расставили задачи к 10:00 — оштрафовано ${charged}`) })
+      .catch((e) => console.error('[мотивация] штраф «не расставил задачи»:', e.message))
   }, MSK)
   cron.schedule('30 3 * * *', () => {
     pruneNotices().catch((e) => console.error('[агент] уборка:', e.message))

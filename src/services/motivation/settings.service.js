@@ -38,6 +38,8 @@ export const RULE_TITLE = {
   task_overdue: 'Просрочена задача из Иерархии',
   personal_task_overdue: 'Просрочена личная задача',
   task_not_started: 'Задача не начата вовремя',
+  tasks_not_set: 'Не расставил задачи на день до 10:00',
+  client_closed_on_time: 'Все задачи по клиенту закрыты в срок (руководителю)',
 }
 
 const PROFILE_VIEW_INCLUDE = {
@@ -247,11 +249,21 @@ async function seedSystemEvents(tx, profileId) {
         profileId,
         title: 'Пропустил звонок',
         example: 'Не было на вечернем звонке без предупреждения',
-        prizePoints: -1,
-        levelPoints: -1,
+        prizePoints: -2,
+        levelPoints: -2,
         mode: 'manual',
         systemKey: 'call_missed',
         position: 3,
+      },
+      {
+        profileId,
+        title: 'Ответил на внезапный чек-ин',
+        example: 'Бот спросил, чем вы заняты, и вы ответили в течение 45 минут',
+        prizePoints: 2,
+        levelPoints: 2,
+        mode: 'manual',
+        systemKey: 'checkin_answered',
+        position: 4,
       },
       {
         profileId,
@@ -261,7 +273,7 @@ async function seedSystemEvents(tx, profileId) {
         levelPoints: -3,
         mode: 'manual',
         systemKey: 'checkin_missed',
-        position: 4,
+        position: 5,
       },
     ],
   })
@@ -520,23 +532,17 @@ export async function updateEventType(actor, id, body) {
 
 /**
  * Удаление события из профиля. Уже начисленное по нему остаётся: название и
- * баллы скопированы в каждую запись журнала. Событие покупки продукта
- * удалить нельзя — на него завязана кнопка владельца; его можно только
- * выключить.
+ * баллы скопированы в каждую запись журнала. Удалить можно и системные
+ * события (кнопка «Клиент купил продукт», журнал звонка, чек-ин бота) — по
+ * прямой просьбе владельца разрешать это админу: кнопка и журнал звонка
+ * продолжают работать и без своего события в профиле, просто не начисляют
+ * баллы (как для любого отсутствующего правила), а повторно завести
+ * системное событие можно, создав его с тем же systemKey вручную.
  */
 export async function deleteEventType(actor, id) {
   assertAdmin(actor)
   const type = await prisma.motivationEventType.findUnique({ where: { id } })
   if (!type) throw ApiError.notFound('Событие не найдено')
-  if (type.systemKey === PRODUCT_KEY) {
-    throw ApiError.badRequest('Это событие нужно для кнопки «Клиент купил новый продукт». Его можно выключить, но не удалить')
-  }
-  if (CALL_KEYS.includes(type.systemKey)) {
-    throw ApiError.badRequest('Это событие нужно журналу звонка. Его можно выключить, но не удалить')
-  }
-  if (type.systemKey === CHECKIN_KEY) {
-    throw ApiError.badRequest('Это событие нужно боту для внезапного чек-ина. Его можно выключить, но не удалить')
-  }
   await prisma.$transaction([
     prisma.motivationEventType.delete({ where: { id } }),
     touchConditions(type.profileId),

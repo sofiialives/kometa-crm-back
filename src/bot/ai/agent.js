@@ -36,7 +36,6 @@ export { noLinks, plainStyle } from './style.js'
 
 const REPLY_MAX = 1500
 const OWNER_REPLY_MAX = 3500
-const NOTE_EVERY_MS = 10 * 60000
 const NOTES_PER_DAY = 5
 
 export const AI_LIMIT_TEXT = 'Лимит вопросов на сегодня закончился\nОн обновится в 00:00 по Москве'
@@ -47,15 +46,14 @@ const ROUND_ACK = 'Спасибо, записал и передам'
 const FRESH_NOTE = '\nЭто свежие данные на сейчас. Если они расходятся с текстом сообщения по поручению, верь им'
 
 /**
- * Важное — Яну: не ночью, не чаще раза в 10 минут и не больше пяти в день
- * от человека. true — ушло.
+ * Важное — Яну: не ночью и не больше пяти в день от человека, а не раз в
+ * 10 минут — важное должно доходить сразу, пока оно ещё важно. true — ушло.
  */
 async function noteToOwner(user, note, text, now = new Date()) {
   if (!String(note ?? '').trim() || isQuietHour(now)) return false
   const day = mskDayKey(now)
   const today = await prisma.botNotice.findMany({ where: { key: { startsWith: `ai-note:${user.id}:${day}:` } }, select: { sentAt: true } })
   if (today.length >= NOTES_PER_DAY) return false
-  if (today.some((n) => Date.now() - n.sentAt.getTime() < NOTE_EVERY_MS)) return false
   await prisma.botNotice.create({ data: { key: `ai-note:${user.id}:${day}:${today.length + 1}` } })
   const person = await prisma.user.findUnique({ where: { id: user.id }, select: { id: true, name: true, role: true, department: { select: { name: true } } } })
   const res = await tellOwners(

@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma.js'
 import { ApiError } from '../utils/ApiError.js'
+import { chargeClientClosedOnTime } from './motivation/autoTasks.service.js'
 
 const WORK_INCLUDE = {
   client: { select: { id: true, name: true } },
@@ -64,7 +65,7 @@ export async function updateWork(id, patch, user) {
   }
 
   const { assignees, ...rest } = patch
-  return prisma.work.update({
+  const updated = await prisma.work.update({
     where: { id },
     data: {
       ...rest,
@@ -72,6 +73,15 @@ export async function updateWork(id, patch, user) {
     },
     include: WORK_INCLUDE,
   })
+
+  // Работу закрыли — руководителю отдела баллы, если весь клиент сдан в
+  // срок (см. autoTasks.service.js). Никогда не бросает и не блокирует
+  // ответ — баллы это отдельная история от смены статуса работы.
+  if (work.status !== 'done' && updated.status === 'done') {
+    chargeClientClosedOnTime(updated).catch((e) => console.error('[мотивация] баллы за клиента в срок:', e.message))
+  }
+
+  return updated
 }
 
 export async function deleteWork(id, user) {

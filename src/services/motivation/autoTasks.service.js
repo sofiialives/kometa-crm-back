@@ -426,3 +426,159 @@ export async function chargeNotStarted(task, at = new Date()) {
     })
   })
 }
+
+// Видимые задачи, как в CRM: личные всегда, из Иерархии — пока жива их
+// работа (см. VISIBLE в bot/agent/taskScope.js — то же условие, продублировано
+// здесь, чтобы сервис мотивации не зависел от слоя бота).
+const VISIBLE_TASK = { OR: [{ origin: 'personal' }, { origin: 'hierarchy', work: { status: 'active' } }] }
+const DAY_MS = 24 * 60 * 60 * 1000
+const TASKS_NOT_SET_RULE = 'tasks_not_set'
+
+/**
+ * Действующая метка отпуска/отлучки или форс-мажора — та же модель
+ * MotivationAway, что и у бота (bot/agent/away.js), продублирована здесь
+ * по той же причине, что и VISIBLE_TASK выше: сервис мотивации не должен
+ * зависеть от слоя бота. Пока метка действует, обхода по «не расставил
+ * задачи» для человека не будет вовсе — ни штрафа, ни проверки.
+ */
+function activeAway(userId, at, db = prisma) {
+  return db.motivationAway.findFirst({
+    where: { userId, endedAt: null, from: { lte: at }, until: { gt: at } },
+    select: { id: true },
+  })
+}
+
+/**
+ * Не расставил ни одной задачи на сегодня к 10:00 по Москве — штраф по
+ * событию правила tasks_not_set из профиля (владелец сам задаёт баллы,
+ * например -2, так же как для остальных автоправил в настройках
+ * мотивации). Один раз в день на человека: вызывается по будням в 10:00
+ * московским cron'ом (src/bot/index.js), повторный вызов в ту же минуту
+ * или при перезапуске задвоения не даёт — защищает dedupeKey.
+ *
+ * Как и остальные автобаллы, работает только если они включены
+ * (settings.autoTasksFrom) и у человека в профиле есть включённое
+ * событие с этим правилом. Нет события — ничего не происходит, как и у
+ * остальных правил: это подсказка владельцу «такое правило можно
+ * включить», а не обязательный штраф всем.
+ */
+export async function chargeTasksNotSet(now = new Date()) {
+  const settings = await getSettingsRow()
+  if (!settings.autoTasksFrom || !autoActiveAt(settings.autoTasksFrom, now)) return { charged: 0 }
+
+  const start = mskDayStart(now)
+  const end = new Date(start.getTime() + DAY_MS)
+  const dayKey = start.toISOString().slice(0, 10)
+
+  const people = await prisma.user.findMany({
+    where: { role: { in: PARTICIPANT_ROLES }, active: true },
+    select: { id: true },
+  })
+
+  let charged = 0
+  for (const person of people) {
+    try {
+      // В отпуске, отлучке или форс-мажоре — обхода для него нет вовсе,
+      // как и у утреннего обхода (bot/agent/morning.js).
+      if (await activeAway(person.id, now)) continue
+
+      const hasTaskToday = await prisma.task.findFirst({
+        where: { AND: [VISIBLE_TASK, { ownerId: person.id, deadline: { gte: start, lt: end } }] },
+        select: { id: true },
+      })
+      if (hasTaskToday) continue
+
+      const found = await autoEventType(person.id, TASKS_NOT_SET_RULE, now, settings)
+      if (!found) continue
+      const { type, profile } = found
+      const dedupeKey = `auto:${TASKS_NOT_SET_RULE}:${person.id}:${dayKey}`
+
+      const created = await prisma.$transaction(async (tx) => {
+        await lockUser(tx, person.id)
+        if (await tx.motivationEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return false
+        if (type.review) {
+          const reviewKey = `review:${TASKS_NOT_SET_RULE}:${person.id}:${dayKey}`
+          if (await tx.motivationReview.findUnique({ where: { dedupeKey: reviewKey }, select: { id: true } })) return false
+          await tx.motivationReview.create({
+            data: {
+              userId: person.id, rule: TASKS_NOT_SET_RULE, eventTypeId: type.id, title: type.title,
+              prizePoints: type.prizePoints, levelPoints: type.levelPoints, occurredAt: now, dedupeKey: reviewKey,
+            },
+          })
+        } else {
+          await tx.motivationEvent.create({
+            data: {
+              userId: person.id, profileId: profile.id, eventTypeId: type.id, kind: 'event', mode: 'auto',
+              title: type.title, prizePoints: type.prizePoints, levelPoints: type.levelPoints,
+              occurredAt: now, dedupeKey,
+            },
+          })
+        }
+        return true
+      })
+      if (created) charged += 1
+    } catch (e) {
+      // Один сломанный человек не должен оставить без проверки остальных.
+      console.error('[motivation] штраф «не расставил задачи» не записался', person.id, e)
+    }
+  }
+  return { charged }
+}
+
+const CLIENT_CLOSED_RULE = 'client_closed_on_time'
+
+/**
+ * Работу закрыли («готово») — если абсолютно все её задачи из Иерархии
+ * закрыты и каждая не позже своего срока, руководитель отдела, который
+ * ведёт эту работу, получает баллы события client_closed_on_time из
+ * СВОЕГО профиля — заметно больше обычного «задача в срок», так как это
+ * разом весь пласт задач по клиенту. Хоть одна не закрыта или просрочена
+ * — ничего не начисляется. У отдела нет руководителя — то же самое.
+ *
+ * Вызывается после смены статуса работы на «done» (см. work.service.js).
+ * Один раз на работу — повтор защищён dedupeKey. Никогда не бросает:
+ * смена статуса работы не должна зависеть от того, как прошли баллы.
+ */
+export async function chargeClientClosedOnTime(work, now = new Date()) {
+  try {
+    if (work.status !== 'done') return null
+    const settings = await getSettingsRow()
+
+    const department = await prisma.department.findUnique({ where: { id: work.departmentId }, select: { leadId: true } })
+    if (!department?.leadId) return null
+
+    const tasks = await prisma.task.findMany({
+      where: { workId: work.id, origin: 'hierarchy' },
+      select: { status: true, doneAt: true, deadline: true },
+    })
+    if (tasks.length === 0 || !tasks.every((t) => isOnTime(t))) return null
+
+    const found = await autoEventType(department.leadId, CLIENT_CLOSED_RULE, now, settings)
+    if (!found) return null
+    const { type, profile } = found
+    const dedupeKey = `auto:${CLIENT_CLOSED_RULE}:${work.id}`
+
+    return prisma.$transaction(async (tx) => {
+      await lockUser(tx, department.leadId)
+      if (await tx.motivationEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return null
+      return tx.motivationEvent.create({
+        data: {
+          userId: department.leadId,
+          profileId: profile.id,
+          eventTypeId: type.id,
+          kind: 'event',
+          mode: 'auto',
+          title: type.title,
+          prizePoints: type.prizePoints,
+          levelPoints: type.levelPoints,
+          comment: `Работа «${work.title}» закрыта, все ${tasks.length} задач по клиенту — в срок`,
+          occurredAt: now,
+          dedupeKey,
+        },
+      })
+    })
+  } catch (e) {
+    console.error('[motivation] баллы руководителю за клиента в срок не записались', work?.id, e)
+    return null
+  }
+}

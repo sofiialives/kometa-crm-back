@@ -25,6 +25,7 @@ import { claimNotice, crmButton, nameOf, ownerIds, releaseNotice, row, sendOnce,
 
 const WATERMARK = 'feed:watermark'
 const OWNER_INIT = 'feed:owner-init'
+const OWNER_AUTO_INIT = 'feed:owner-auto-init'
 const OVERLAP_MS = 5 * 60000
 /**
  * Отметка «до какого момента лента разобрана». Двигается по времени самих
@@ -229,6 +230,47 @@ async function ownerFeed() {
   // не создают и не шлют. Старые в базе просто лежат.
 }
 
+/**
+ * Что сказать Яну об уже начисленном автоматически (без его решения):
+ * кому, за что и сколько — чтобы он видел, почему у сотрудника изменились
+ * баллы, даже если сам ничего не нажимал.
+ */
+function ownerAutoLine(e) {
+  const taskPart = e.taskTitle ? ` «${short(e.taskTitle, 80)}»` : ''
+  const sign = e.prizePoints < 0 ? 'снято' : e.prizePoints > 0 ? 'начислено' : 'изменено'
+  return `<b>${nameOf(e.user)}</b>: ${escapeHtml(e.title)}${taskPart}\nУ тебя включено это автоправило в профиле — агент сам ${sign} ${points(e.prizePoints)}${e.comment ? `\n<i>${escapeHtml(short(e.comment, 160))}</i>` : ''}`
+}
+
+/**
+ * Яну: баллы, которые агент начислил сам, без его решения (не через
+ * «На проверке» — те заявки видны в ownerFeed отдельно). Чтобы по каждому
+ * автоматическому минусу или плюсу у сотрудника Ян видел объяснение, а не
+ * только заглянув в карточку человека.
+ */
+async function ownerAutoFeed() {
+  const owners = await ownerIds()
+  if (!owners.length) return
+  const since = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+  const events = await prisma.motivationEvent.findMany({
+    where: { mode: 'auto', review: null, createdAt: { gt: since } },
+    include: { user: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'desc' },
+    take: 300,
+  }).then((rows) => rows.reverse())
+
+  // Первый запуск: то, что уже лежит в журнале, не рассылаем — Ян разберёт
+  // это во вкладке «Мотивация», а не получит сразу пачку старых сообщений.
+  if (await claimNotice(OWNER_AUTO_INIT)) {
+    await prisma.botNotice.createMany({ data: events.map((e) => ({ key: `owner-auto:${e.id}` })), skipDuplicates: true })
+    return
+  }
+  const unsent = await unsentKeys(events.map((e) => `owner-auto:${e.id}`))
+  for (const e of events) {
+    if (!unsent.has(`owner-auto:${e.id}`)) continue
+    await sendOnce(`owner-auto:${e.id}`, () => tellOwners(ownerAutoLine(e)))
+  }
+}
+
 /** Раз в минуту. */
 export async function tickFeed(now = new Date()) {
   // Отметку ставим и ночью: выкатили вечером — утром не придёт ночное старьё.
@@ -239,6 +281,7 @@ export async function tickFeed(now = new Date()) {
     if (mark > since) await prisma.botNotice.update({ where: { key: WATERMARK }, data: { sentAt: mark } })
   }
   await ownerFeed()
+  await ownerAutoFeed()
 }
 
 /** Нажатие «Начислить» / «Не начислять» у Яна. Возвращает новый текст сообщения. */

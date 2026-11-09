@@ -572,6 +572,13 @@ enum MotivationAutoRule {
   task_overdue
   personal_task_overdue
   task_not_started
+  // Ни одной задачи со сроком на сегодня к 10:00 по Москве — проверяет
+  // src/bot/index.js (cron '0 10 * * 1-5') через chargeTasksNotSet.
+  tasks_not_set
+  // Для профиля руководителя отдела: работу закрыли, и абсолютно все её
+  // задачи из Иерархии закрыты не позже срока — chargeClientClosedOnTime
+  // в autoTasks.service.js, вызывается из work.service.js.
+  client_closed_on_time
 }
 
 // Для кого условия внутри отдела: обычный специалист или руководитель.
