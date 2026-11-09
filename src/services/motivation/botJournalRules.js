@@ -112,6 +112,18 @@ export function summarize(items) {
   }
 }
 
+/** Сумма сводок нескольких людей — итог по команде или отделу. */
+export function sumSummaries(list) {
+  const total = summarize([])
+  for (const s of list) {
+    for (const [key, value] of Object.entries(s)) {
+      if (typeof value === 'number') total[key] += value
+      else for (const [k, v] of Object.entries(value)) total[key][k] += v
+    }
+  }
+  return total
+}
+
 /** По дням, свежие сверху; внутри дня — по времени. Переписка — к своему дню. */
 export function groupByDay(items, messages = []) {
   const days = new Map()

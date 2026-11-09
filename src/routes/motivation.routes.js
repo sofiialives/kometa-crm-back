@@ -2,11 +2,11 @@ import { Router } from 'express'
 import { validate } from '../middlewares/validate.middleware.js'
 import { authenticate, authorize } from '../middlewares/auth.middleware.js'
 import {
-  assignmentSchema, cancelEventSchema, createEventTypeSchema, createProfileSchema, generalSettingsSchema,
+  cancelEventSchema, createEventTypeSchema, createProfileSchema, generalSettingsSchema,
   globalScaleSchema, manualEventSchema, monthQuerySchema, productSchema, profileScaleSchema, seenSchema, teamQuerySchema,
   topUpSchema, updateEventTypeSchema, updateProfileSchema, userIdParamSchema, userMonthSchema, workLevelsSchema,
   writeOffSchema,
-  reviewListSchema, approveReviewSchema, rejectReviewSchema,
+  reviewListSchema, approveReviewSchema, rejectReviewSchema, withdrawReviewsSchema,
   callDaySchema, callMarkSchema, awaySchema, exportSchema, botJournalSchema, historySchema,
 } from '../schemas/motivation.schema.js'
 import * as c from '../controllers/motivation.controller.js'
@@ -58,6 +58,7 @@ router.post('/events/:id/cancel', admin, validate(cancelEventSchema), c.cancelEv
 
 router.get('/reviews', admin, validate(reviewListSchema), c.listReviews)
 router.get('/reviews/count', admin, c.reviewsCount)
+router.post('/reviews/withdraw', admin, validate(withdrawReviewsSchema), c.withdrawReviews)
 router.post('/reviews/:id/approve', admin, validate(approveReviewSchema), c.approveReview)
 router.post('/reviews/:id/reject', admin, validate(rejectReviewSchema), c.rejectReview)
 
@@ -85,6 +86,7 @@ router.post('/profiles/:id/events', admin, validate(createEventTypeSchema), c.cr
 router.patch('/event-types/:id', admin, validate(updateEventTypeSchema), c.updateEventType)
 router.delete('/event-types/:id', admin, validate(userIdParamSchema), c.deleteEventType)
 
-router.put('/assignments/:userId', admin, validate(assignmentSchema), c.assignProfile)
+// Отключено (410): профиль подбирается по отделу и роли, вручную не назначается.
+router.put('/assignments/:userId', admin, c.assignProfile)
 
 export default router

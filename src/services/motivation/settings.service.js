@@ -1,6 +1,6 @@
 import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
-import { assertAdmin, EMPLOYEE_SELECT, isParticipant, PARTICIPANT_ROLES } from './access.js'
+import { assertAdmin, EMPLOYEE_SELECT, PARTICIPANT_ROLES } from './access.js'
 import { validateScale, validateWorkLevels } from './engine.js'
 import { assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_INCLUDE, retireProfile } from './profiles.js'
 import { employeeCard, eventTypeCard } from './shape.js'
@@ -586,28 +586,4 @@ export async function updateGeneral(actor, patch) {
     checkinFrom: row.checkinFrom ? dayKeyOf(row.checkinFrom) : null,
     personalTaskDailyLimit: row.personalTaskDailyLimit,
   }
-}
-
-/**
- * Назначить сотруднику профиль. Новая запись с текущего момента, старые не
- * трогаются: события до перевода посчитаны по прежним условиям и так и
- * останутся. Тот же профиль ещё раз ничего не создаёт.
- */
-export async function assignProfile(actor, userId, profileId) {
-  assertAdmin(actor)
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: EMPLOYEE_SELECT })
-  if (!user || !isParticipant(user)) {
-    throw ApiError.badRequest('Профиль назначается сотрудникам и руководителям: у владельца нет банка и баллов')
-  }
-  await loadProfile(profileId)
-
-  const current = (await assignmentsAt([userId])).get(userId)
-  if (current?.profileId === profileId) {
-    return { ...employeeCard(user), profileId, assignedAt: current.from }
-  }
-
-  const created = await prisma.motivationAssignment.create({
-    data: { userId, profileId, from: new Date(), createdById: actor.id },
-  })
-  return { ...employeeCard(user), profileId, assignedAt: created.from }
 }

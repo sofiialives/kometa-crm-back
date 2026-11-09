@@ -42,7 +42,17 @@ export const userMonthSchema = z.object({
 })
 
 export const botJournalSchema = z.object({
-  query: z.object({ userId: objectId, month: optional(month) }),
+  // Один человек (userId), вся команда (scope=all) или отдел (departmentId):
+  // ровно что-то одно.
+  query: z.object({
+    userId: optional(objectId),
+    scope: z.literal('all').optional(),
+    departmentId: optional(objectId),
+    month: optional(month),
+  }).refine(
+    (q) => [q.userId, q.scope, q.departmentId].filter(Boolean).length === 1,
+    { message: 'Укажите одно из: userId, scope=all или departmentId' },
+  ),
 })
 
 // «История баллов»: месяц или всё время, отдел, человек и догрузка.
@@ -140,6 +150,18 @@ export const approveReviewSchema = z.object({
     // Сколько было подсказано на экране владельца — сервер сверит с текущим.
     seenPrizePoints: optional(points),
   }),
+})
+
+// Массовое снятие: ровно один способ выбора.
+export const withdrawReviewsSchema = z.object({
+  body: z.object({
+    ids: z.array(objectId).min(1).max(1000).optional(),
+    userIds: z.array(objectId).min(1).max(200).optional(),
+    all: z.literal(true).optional(),
+  }).refine(
+    (b) => [b.ids, b.userIds, b.all].filter(Boolean).length === 1,
+    { message: 'Укажите одно из: ids, userIds или all' },
+  ),
 })
 
 export const rejectReviewSchema = z.object({
@@ -323,11 +345,6 @@ export const generalSettingsSchema = z.object({
         .optional(),
     })
     .refine((b) => Object.keys(b).length > 0, 'Пустое тело запроса'),
-})
-
-export const assignmentSchema = z.object({
-  params: z.object({ userId: objectId }),
-  body: z.object({ profileId: objectId }),
 })
 
 // Что сотрудник увидел: время самой свежей записи банка и событий из того

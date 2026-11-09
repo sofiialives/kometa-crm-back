@@ -22,20 +22,28 @@ describe('профиль по отделу и роли', () => {
   test('руководителю без своего профиля — условия специалистов отдела', () => {
     assert.equal(desiredProfileId({ role: 'lead', departmentId: 'seo' }, linked, null), 'seo-staff')
   })
-  test('отдел на старых ручных профилях — назначение не трогаем', () => {
-    const current = { profileId: 'manual', profile: { archivedAt: null } }
-    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'ads' }, linked, current), undefined)
+  test('старый ручной профиль без отдела заменяется профилем отдела', () => {
+    const current = { profileId: 'manual', profile: { archivedAt: null, departmentId: null } }
+    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'design' }, linked, current), 'design-staff')
   })
-  test('удалённый ручной профиль снимается', () => {
-    const current = { profileId: 'old', profile: { archivedAt: new Date() } }
+  test('отдел без профилей: ручной профиль закрывается', () => {
+    const current = { profileId: 'manual', profile: { archivedAt: null } }
     assert.equal(desiredProfileId({ role: 'staff', departmentId: 'ads' }, linked, current), null)
   })
-  test('заданы условия только руководителю — специалисты остаются на старом ручном профиле', () => {
+  test('нет отдела: ручной профиль закрывается', () => {
+    assert.equal(desiredProfileId({ role: 'staff', departmentId: null }, linked, { profileId: 'manual' }), null)
+  })
+  test('нечего менять: уже без условий или нет назначения', () => {
+    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'ads' }, linked, { profileId: null }), undefined)
+    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'ads' }, linked, null), undefined)
+    assert.equal(desiredProfileId({ role: 'staff', departmentId: null }, linked, null), undefined)
+  })
+  test('условия только руководителя: специалист без условий, руководитель с профилем', () => {
     const onlyLead = linkedOf([{ id: 'x-lead', departmentId: 'x', audience: 'lead' }])
-    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'x' }, onlyLead, { profileId: 'manual', profile: { archivedAt: null } }), undefined)
+    assert.equal(desiredProfileId({ role: 'staff', departmentId: 'x' }, onlyLead, { profileId: 'manual' }), null)
     assert.equal(desiredProfileId({ role: 'lead', departmentId: 'x' }, onlyLead, null), 'x-lead')
   })
-  test('перевели в отдел без профилей — условия прежнего отдела снимаются', () => {
+  test('перевели в отдел без профилей: условия прежнего отдела снимаются', () => {
     const current = { profileId: 'design-staff', profile: { archivedAt: null, departmentId: 'design' } }
     assert.equal(desiredProfileId({ role: 'staff', departmentId: 'ads' }, linked, current), null)
   })
