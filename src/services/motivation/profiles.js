@@ -61,7 +61,9 @@ export async function retireProfile(db, profile, now = new Date()) {
     return 'deleted'
   }
   const title = await archivedName(db, 'motivationProfile', 'title', profile.title, profile.id, now)
-  await db.motivationProfile.update({ where: { id: profile.id }, data: { archivedAt: now, title } })
+  // Персональный профиль в архиве освобождает человека: userId уникален,
+  // а новый персональный профиль тому же человеку завести можно.
+  await db.motivationProfile.update({ where: { id: profile.id }, data: { archivedAt: now, title, userId: null } })
   return 'archived'
 }
 

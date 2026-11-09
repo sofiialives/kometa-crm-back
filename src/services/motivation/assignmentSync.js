@@ -22,12 +22,18 @@ export const audienceOf = (role) => (role === 'lead' ? 'lead' : 'staff')
  * Какой профиль должен быть у человека. undefined — решать нечего, оставить
  * как есть; null — условий нет; иначе id профиля.
  *
+ * Если у человека есть активный персональный профиль (personal: userId →
+ * профиль), он и выбирается. Иначе профиль отдела и роли.
+ *
  * Вручную профили не назначаются: любой текущий профиль, который не равен
  * профилю отдела и роли (старый профиль без отдела, профиль чужого отдела,
  * удалённый), закрывается. Нет отдела или профиля для него — условий нет.
  */
-export function desiredProfileId(user, linked, current) {
+export function desiredProfileId(user, linked, current, personal = new Map()) {
   const has = Boolean(current?.profileId)
+  // Персональный профиль главнее профиля отдела и роли.
+  const mine = personal.get(user.id)
+  if (mine) return mine.id
   if (!user.departmentId) return has ? null : undefined
   const own = linked.get(`${user.departmentId}:${audienceOf(user.role)}`)
   if (own) return own.id
@@ -39,10 +45,18 @@ export function desiredProfileId(user, linked, current) {
 
 async function linkedProfiles(db) {
   const rows = await db.motivationProfile.findMany({
-    where: { archivedAt: null, departmentId: { not: null } },
+    where: { archivedAt: null, userId: null, departmentId: { not: null } },
     select: { id: true, departmentId: true, audience: true },
   })
   return new Map(rows.map((p) => [`${p.departmentId}:${p.audience}`, p]))
+}
+
+async function personalProfiles(db) {
+  const rows = await db.motivationProfile.findMany({
+    where: { archivedAt: null, userId: { not: null } },
+    select: { id: true, userId: true },
+  })
+  return new Map(rows.map((p) => [p.userId, p]))
 }
 
 // Один замок на все пересчёты назначений: два одновременных (правка
@@ -67,12 +81,12 @@ async function syncInside(db, userIds, now) {
     select: { id: true, role: true, departmentId: true },
   })
   if (users.length === 0) return 0
-  const [linked, current] = await Promise.all([linkedProfiles(db), assignmentsAt(users.map((u) => u.id), now, db)])
+  const [linked, personal, current] = await Promise.all([linkedProfiles(db), personalProfiles(db), assignmentsAt(users.map((u) => u.id), now, db)])
 
   const changes = []
   for (const user of users) {
     const cur = current.get(user.id)
-    const target = desiredProfileId(user, linked, cur)
+    const target = desiredProfileId(user, linked, cur, personal)
     if (target === undefined) continue
     if ((cur?.profileId ?? null) === target) continue
     // Человека без единого назначения не записываем в «без условий»:

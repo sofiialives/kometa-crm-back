@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { ApiError } from '../../utils/ApiError.js'
 import { assertAdmin, EMPLOYEE_SELECT, PARTICIPANT_ROLES } from './access.js'
 import { validateScale, validateWorkLevels } from './engine.js'
-import { assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_INCLUDE, retireProfile } from './profiles.js'
+import { assignmentAt, assignmentsAt, getGlobalScale, getSettingsRow, getWorkLevels, PROFILE_INCLUDE, retireProfile } from './profiles.js'
 import { employeeCard, eventTypeCard } from './shape.js'
 import { dayKeyOf } from './month.js'
 import { mskDateStart } from './taskRules.js'
@@ -40,7 +40,16 @@ export const RULE_TITLE = {
   task_not_started: 'Задача не начата вовремя',
 }
 
-const PROFILE_VIEW_INCLUDE = { ...PROFILE_INCLUDE, department: { select: { id: true, name: true, archivedAt: true } } }
+const PROFILE_VIEW_INCLUDE = {
+  ...PROFILE_INCLUDE,
+  department: { select: { id: true, name: true, archivedAt: true } },
+  user: { select: { id: true, name: true, email: true } },
+}
+
+/** Названия профилей формируются сами: «Отдел SEO статьи · Специалист», «Имя Фамилия · персонально». */
+export const departmentProfileTitle = (departmentName, audience) =>
+  `${/^отдел\b/i.test(departmentName) ? departmentName : `Отдел ${departmentName}`} · ${AUDIENCE_LABEL[audience]}`
+export const personalProfileTitle = (user) => `${user.name?.trim() || user.email} · персонально`
 // Событие «Не ответил на внезапный чек-ин» — его снимает бот.
 const CHECKIN_KEY = 'checkin_missed'
 
@@ -52,6 +61,9 @@ function profileView(profile, usage) {
     // который назначают людям вручную.
     department: profile.department ? { id: profile.department.id, name: profile.department.name } : null,
     audience: profile.audience,
+    // Персональный профиль: чьи это условия. У профилей отдела — null.
+    userId: profile.userId ?? null,
+    user: profile.user ? { id: profile.user.id, name: profile.user.name || profile.user.email } : null,
     startBankCents: profile.startBankCents,
     customScale: profile.customScale,
     workHints: profile.workHints ?? {},
@@ -104,10 +116,29 @@ export async function getSettings(actor) {
     prisma.department.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
   ])
   const assignments = await assignmentsAt(users.map((u) => u.id))
+  const personalOf = new Map(profiles.filter((p) => p.userId).map((p) => [p.userId, p.id]))
 
   return {
     profiles: profiles.map((p) => profileView(p, usage.get(p.id))),
-    departments,
+    departments: departments.map((d) => {
+      const own = (audience) => profiles.find((p) => p.departmentId === d.id && p.audience === audience && !p.userId)
+      return {
+        ...d,
+        staffProfileId: own('staff')?.id ?? null,
+        leadProfileId: own('lead')?.id ?? null,
+        people: users
+          .filter((u) => u.active && u.departmentId === d.id)
+          .map((u) => ({
+            id: u.id,
+            name: u.name || u.email,
+            avatarUrl: u.avatarUrl,
+            avatarColor: u.avatarColor,
+            role: u.role,
+            position: u.position,
+            personalProfileId: personalOf.get(u.id) ?? null,
+          })),
+      }
+    }),
     scale: globalScale.map((l) => ({ position: l.position, threshold: l.threshold, percent: l.percent })),
     workLevels: workLevels.map((l) => ({ position: l.position, title: l.title, minPoints: l.minPoints, hint: l.hint })),
     general: {
@@ -121,7 +152,7 @@ export async function getSettings(actor) {
     },
     employees: users.map((u) => {
       const a = assignments.get(u.id)
-      return { ...employeeCard(u), profileId: a?.profileId ?? null, assignedAt: a?.from ?? null }
+      return { ...employeeCard(u), profileId: a?.profileId ?? null, assignedAt: a?.from ?? null, personalProfileId: personalOf.get(u.id) ?? null }
     }),
   }
 }
@@ -160,121 +191,161 @@ function touchConditions(profileId, db = prisma) {
   return db.motivationProfile.update({ where: { id: profileId }, data: { conditionsUpdatedAt: new Date() } })
 }
 
+/** Копия событий и шкалы одного профиля в другой (новый). */
+async function copyConditions(tx, source, profileId) {
+  if (source.eventTypes.length) {
+    await tx.motivationEventType.createMany({
+      data: source.eventTypes.map((t) => ({
+        profileId,
+        title: t.title,
+        example: t.example,
+        prizePoints: t.prizePoints,
+        levelPoints: t.levelPoints,
+        mode: t.mode,
+        autoRule: t.autoRule,
+        review: t.review,
+        systemKey: t.systemKey,
+        enabled: t.enabled,
+        position: t.position,
+      })),
+    })
+  }
+  if (source.prizeLevels.length) {
+    await tx.motivationPrizeLevel.createMany({
+      data: source.prizeLevels.map((l) => ({ profileId, position: l.position, threshold: l.threshold, percent: l.percent })),
+    })
+  }
+}
+
+/** Стандартный набор событий, которые должны быть в каждом профиле. */
+async function seedSystemEvents(tx, profileId) {
+  // Системные события нужны кнопкам и журналу, поэтому есть в каждом
+  // профиле с самого начала. Цену владелец поменяет как обычно.
+  await tx.motivationEventType.createMany({
+    data: [
+      {
+        profileId,
+        title: 'Клиент купил дополнительный продукт',
+        example: 'Клиент, с которым вы работали, заказал у агентства ещё одну услугу',
+        prizePoints: 10,
+        levelPoints: 10,
+        mode: 'manual',
+        systemKey: PRODUCT_KEY,
+        position: 1,
+      },
+      {
+        profileId,
+        title: 'Был на вечернем звонке',
+        example: 'Владелец отметил вас в журнале звонка',
+        prizePoints: 1,
+        levelPoints: 1,
+        mode: 'manual',
+        systemKey: 'call_attended',
+        position: 2,
+      },
+      {
+        profileId,
+        title: 'Пропустил звонок',
+        example: 'Не было на вечернем звонке без предупреждения',
+        prizePoints: -1,
+        levelPoints: -1,
+        mode: 'manual',
+        systemKey: 'call_missed',
+        position: 3,
+      },
+      {
+        profileId,
+        title: 'Не ответил на внезапный чек-ин',
+        example: 'Бот спросил, чем вы заняты, а ответа не было 45 минут и вы не предупреждали, что отойдёте',
+        prizePoints: -3,
+        levelPoints: -3,
+        mode: 'manual',
+        systemKey: 'checkin_missed',
+        position: 4,
+      },
+    ],
+  })
+}
+
 /**
- * Новый профиль: пустой или копия существующего. Копировать удобно для
- * похожих должностей — «Бэкенд-разработчик» из «Разработчика» отличается
- * парой событий, набивать всё заново незачем.
+ * Новый профиль. Три вида:
+ *  - отдела и роли: { departmentId, audience } — название собирается само,
+ *    условия пустые (стандартный набор системных событий) или копия copyFromId;
+ *  - персональный: { userId } — условия копируются с профиля, по которому
+ *    человек работает сейчас (copyFromId меняет источник, empty: true — пустой);
+ *  - старый, только с названием: { title }.
  *
- * В пустой профиль сразу кладём «Клиент купил дополнительный продукт»: это
- * событие по заданию есть во всех профилях, и на него завязана отдельная
- * кнопка у владельца.
+ * Название отдела/персонального профиля владелец не вводит. Стартовая сумма
+ * банка у новых профилей всегда 0.
  */
-export async function createProfile(actor, { title, departmentId = null, audience = 'staff', copyFromId }) {
+export async function createProfile(actor, { title, departmentId: rawDepartmentId = null, audience = 'staff', copyFromId, userId = null, empty = false }) {
   assertAdmin(actor)
+  // Фронт шлёт для персонального и departmentId с audience: они только
+  // подсказка, персональный профиль к отделу не привязывается.
+  const departmentId = userId ? null : rawDepartmentId
+
+  let person = null
+  if (userId) {
+    person = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, email: true, role: true, active: true } })
+    if (!person || !person.active || !PARTICIPANT_ROLES.includes(person.role)) {
+      throw ApiError.badRequest('Персональные условия можно задать только действующему участнику мотивации')
+    }
+  }
   const department = departmentId ? await loadDepartment(departmentId) : null
-  const name = title?.trim() || `${department.name} · ${AUDIENCE_LABEL[audience]}`
+  let name = person
+    ? personalProfileTitle(person)
+    : department
+      ? departmentProfileTitle(department.name, audience)
+      : title?.trim()
+  if (!name) throw ApiError.badRequest('Выберите отдел или человека')
+
+  // Два человека с одним именем: название профиля уникально.
+  if (person) {
+    const clash = await prisma.motivationProfile.findFirst({ where: { title: { equals: name, mode: 'insensitive' } }, select: { id: true } })
+    if (clash) name = `${name} ${person.id.slice(-4)}`
+  }
   await assertTitleFree(name)
 
-  return prisma.$transaction(async (tx) => {
-    if (department) {
+  const id = await prisma.$transaction(async (tx) => {
+    if (person) {
+      // Под замком человека: двойной клик не создаст два персональных профиля.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`motivation-profile:user:${person.id}`}))`
+      const has = await tx.motivationProfile.findFirst({ where: { userId: person.id, archivedAt: null }, select: { id: true } })
+      if (has) throw ApiError.conflict('У этого человека уже есть персональные условия')
+    } else if (department) {
       // Под замком пары «отдел и роль»: двойной клик не создаст два
       // профиля «Дизайн · Специалист».
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`motivation-profile:${department.id}:${audience}`}))`
       await assertPairFree(department.id, audience, null, tx)
     }
-    const source = copyFromId ? await loadProfile(copyFromId, tx) : null
+
+    let source = null
+    if (copyFromId) source = await loadProfile(copyFromId, tx)
+    else if (person && !empty) {
+      // Текущие условия человека: профиль, по которому он работает сейчас.
+      const current = await assignmentAt(person.id, new Date(), tx)
+      if (current?.profile && !current.profile.archivedAt) source = await loadProfile(current.profile.id, tx)
+    }
 
     const profile = await tx.motivationProfile.create({
       data: {
         title: name,
         departmentId: department?.id ?? null,
-        audience,
-        startBankCents: source?.startBankCents ?? 0,
+        userId: person?.id ?? null,
+        audience: department ? audience : person ? (person.role === 'lead' ? 'lead' : 'staff') : audience,
         customScale: source?.customScale ?? false,
         workHints: source?.workHints ?? {},
       },
     })
 
-    if (source) {
-      if (source.eventTypes.length) {
-        await tx.motivationEventType.createMany({
-          data: source.eventTypes.map((t) => ({
-            profileId: profile.id,
-            title: t.title,
-            example: t.example,
-            prizePoints: t.prizePoints,
-            levelPoints: t.levelPoints,
-            mode: t.mode,
-            autoRule: t.autoRule,
-            review: t.review,
-            systemKey: t.systemKey,
-            enabled: t.enabled,
-            position: t.position,
-          })),
-        })
-      }
-      if (source.prizeLevels.length) {
-        await tx.motivationPrizeLevel.createMany({
-          data: source.prizeLevels.map((l) => ({
-            profileId: profile.id, position: l.position, threshold: l.threshold, percent: l.percent,
-          })),
-        })
-      }
-    } else {
-      // Системные события нужны кнопкам и журналу, поэтому есть в каждом
-      // профиле с самого начала. Цену владелец поменяет как обычно.
-      await tx.motivationEventType.createMany({
-        data: [
-          {
-            profileId: profile.id,
-            title: 'Клиент купил дополнительный продукт',
-            example: 'Клиент, с которым вы работали, заказал у агентства ещё одну услугу',
-            prizePoints: 10,
-            levelPoints: 10,
-            mode: 'manual',
-            systemKey: PRODUCT_KEY,
-            position: 1,
-          },
-          {
-            profileId: profile.id,
-            title: 'Был на вечернем звонке',
-            example: 'Владелец отметил вас в журнале звонка',
-            prizePoints: 1,
-            levelPoints: 1,
-            mode: 'manual',
-            systemKey: 'call_attended',
-            position: 2,
-          },
-          {
-            profileId: profile.id,
-            title: 'Пропустил звонок',
-            example: 'Не было на вечернем звонке без предупреждения',
-            prizePoints: -1,
-            levelPoints: -1,
-            mode: 'manual',
-            systemKey: 'call_missed',
-            position: 3,
-          },
-          {
-            profileId: profile.id,
-            title: 'Не ответил на внезапный чек-ин',
-            example: 'Бот спросил, чем вы заняты, а ответа не было 45 минут и вы не предупреждали, что отойдёте',
-            prizePoints: -3,
-            levelPoints: -3,
-            mode: 'manual',
-            systemKey: 'checkin_missed',
-            position: 4,
-          },
-        ],
-      })
-    }
-
+    if (source) await copyConditions(tx, source, profile.id)
+    else await seedSystemEvents(tx, profile.id)
     return profile.id
-  }).then(async (id) => {
-    // Профиль отдела сразу достаётся людям этого отдела.
-    if (department) await syncAssignmentsSafe()
-    return profileView(await loadProfile(id))
   })
+
+  // Профиль достаётся людям сразу: отдела — всему отделу, персональный — человеку.
+  if (department || person) await syncAssignmentsSafe()
+  return profileView(await loadProfile(id))
 }
 
 /**
@@ -292,9 +363,16 @@ export async function updateProfile(actor, id, { title, departmentId, audience, 
   const nextAudience = audience ?? profile.audience
   let ownerChanged = false
   if (nextDepartmentId !== profile.departmentId || nextAudience !== profile.audience) {
+    if (profile.userId) throw ApiError.badRequest('Персональные условия нельзя перевести на отдел: удалите их и создайте профиль отдела')
     if (nextDepartmentId) {
-      await loadDepartment(nextDepartmentId)
+      const dep = await loadDepartment(nextDepartmentId)
       await assertPairFree(nextDepartmentId, nextAudience, id)
+      // Название следует за отделом и ролью, если владелец не задал своё.
+      if (title === undefined) {
+        const auto = departmentProfileTitle(dep.name, nextAudience)
+        await assertTitleFree(auto, id)
+        data.title = auto
+      }
     }
     data.departmentId = nextDepartmentId
     data.audience = nextAudience
