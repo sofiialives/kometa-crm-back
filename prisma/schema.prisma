@@ -88,6 +88,7 @@ model User {
   // профиль. Поэтому связей несколько.
   motivationAssignments     MotivationAssignment[] @relation("MotivationAssignmentUser")
   motivationAssignmentsMade MotivationAssignment[] @relation("MotivationAssignmentCreatedBy")
+  motivationPersonalProfile MotivationProfile?     @relation("MotivationProfileUser")
   motivationBankEntries     MotivationBankEntry[]  @relation("MotivationBankEntryUser")
   motivationBankEntriesMade MotivationBankEntry[]  @relation("MotivationBankEntryCreatedBy")
   motivationEvents          MotivationEvent[]      @relation("MotivationEventUser")
@@ -675,6 +676,11 @@ model MotivationProfile {
   departmentId String?
   department   Department?        @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   audience     MotivationAudience @default(staff)
+
+  // Персональный профиль: условия одного человека. Пока он есть, человек
+  // работает по нему, а не по профилю отдела. У профилей отдела пусто.
+  userId String? @unique
+  user   User?   @relation("MotivationProfileUser", fields: [userId], references: [id], onDelete: SetNull)
 
   // Профиль удалили, но по нему уже начисляли баллы: он уходит в архив,
   // история остаётся, а людям он больше не назначается.
