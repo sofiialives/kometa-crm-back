@@ -219,9 +219,14 @@ export const createProfileSchema = z.object({
       title: profileTitle.optional(),
       departmentId: objectId.nullable().optional(),
       audience: audience.optional(),
+      // Персональный профиль человека (вместо departmentId).
+      userId: objectId.optional(),
+      // Необязательно: без него профиль отдела пустой, персональный копирует текущие условия человека.
       copyFromId: optional(objectId),
+      // Персональный профиль с нуля, не копируя текущие условия.
+      empty: z.boolean().optional(),
     })
-    .refine((b) => b.title || b.departmentId, { message: 'Выберите отдел или укажите название профиля', path: ['departmentId'] }),
+    .refine((b) => b.title || b.departmentId || b.userId, { message: 'Выберите отдел или человека', path: ['departmentId'] }),
 })
 
 export const updateProfileSchema = z.object({
