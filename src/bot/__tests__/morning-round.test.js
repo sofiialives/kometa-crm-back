@@ -26,7 +26,7 @@ const yan = { id: 'yan', name: 'Ян', role: 'admin', active: true, departmentId
  * активности и телеграму применяются по настоящему условию запроса, поэтому
  * тест ловит и забытого admin, и человека без бота.
  */
-function world(t, { users = [roman, nina, oleg, yan], overdue = {}, hier = {}, counts = {}, away = {}, ended = [], tasks = [] } = {}) {
+function world(t, { users = [roman, nina, oleg, yan], overdue = {}, hier = {}, counts = {}, away = {}, ended = [], tasks = [], asks = {} } = {}) {
   const h = botHarness(t)
   // Настоящая модель и её счётчики в тестах не нужны: без ключа ИИ выключен.
   const key = env.anthropicApiKey
@@ -96,7 +96,13 @@ function world(t, { users = [roman, nina, oleg, yan], overdue = {}, hier = {}, c
     return r
   })
   patch(t, prisma.botRound, 'findMany', async ({ where }) => db.rounds.filter((r) => r.kind === where.kind && r.status === where.status && r.deadlineAt <= where.deadlineAt.lte))
-  patch(t, prisma.botRoundTarget, 'findFirst', async ({ where }) => db.targets.find((x) => x.roundId === where.roundId && x.userId === where.userId) ?? null)
+  // Опрос Яна, который уже идёт с человеком: asks[userId].
+  patch(t, prisma.botRoundTarget, 'findFirst', async ({ where }) => (where.round?.kind
+    ? asks[where.userId] ?? null
+    : db.targets.find((x) => x.roundId === where.roundId && x.userId === where.userId) ?? null))
+  // Сообщения людей мимо обхода: ответ на опрос Яна, чек-ин, команда.
+  db.own = []
+  patch(t, prisma.botMessage, 'findMany', async ({ where }) => db.own.filter((m) => where.userId.in.includes(m.userId) && where.direction.in.includes(m.direction) && m.createdAt >= where.createdAt.gte))
   patch(t, prisma.botRoundTarget, 'create', async ({ data }) => {
     const x = { id: `t${db.targets.length + 1}`, status: 'pending', summary: null, messages: [], sentAt: null, ...data }
     db.targets.push(x)
@@ -677,5 +683,38 @@ describe('строки отчёта моделью: учёт вызовов и �
 
   test('лимит на отчёт вмещает 25 человек', () => {
     assert.ok(aiLimit('morningReport', 'admin') >= 25)
+  })
+})
+
+describe('обход не спорит с опросом Яна', () => {
+  test('у человека идёт опрос Яна: утреннее ему не пишем, в отчёте отдельной строкой', async (t) => {
+    const { h, db } = world(t, { asks: { oleg: { id: 'ask1' } } })
+    await runMorningRound(NOW, { ask: ask() })
+    assert.equal(toUser(h, 'oleg').length, 0)
+    assert.equal(toUser(h, 'roman').length, 1)
+    assert.equal(db.targets.find((x) => x.userId === 'oleg').status, 'busy')
+    // Догоняющий проход тоже не пишет: ключ занят.
+    await runMorningRound(new Date(NOW.getTime() + 5 * 60000), { ask: ask() })
+    assert.equal(toUser(h, 'oleg').length, 0)
+    for (const x of db.targets) if (x.sentAt) x.sentAt = NOW
+    db.own.push({ userId: 'oleg', direction: 'reply', text: 'Да, на связи, делаю отчёт', createdAt: new Date('2026-11-03T06:36:00Z') })
+    h.sent.length = 0
+    await sendMorningReport('r1', REPORT_AT, { lines: async () => null })
+    const toYan = toUser(h, 'yan')[0].text
+    assert.match(toYan, /Ответили 1 из 3/)
+    assert.match(toYan, /<b>Утреннее не слал, шёл твой опрос<\/b> Олег, SEO/)
+    assert.match(toYan, /Ответил «Да, на связи, делаю отчёт»/)
+  })
+
+  test('ответ мимо обхода тоже ответ: командой после сообщения, а не в разговор', async (t) => {
+    const { h, db } = world(t)
+    await runMorningRound(NOW, { ask: ask() })
+    for (const x of db.targets) if (x.sentAt) x.sentAt = NOW
+    db.own.push({ userId: 'roman', direction: 'in', text: 'Поставь галочку на макет', createdAt: new Date('2026-11-03T06:50:00Z') })
+    // До 9:30 — это вчерашнее и не ответ.
+    db.own.push({ userId: 'nina', direction: 'in', text: 'Старое', createdAt: new Date('2026-11-03T06:00:00Z') })
+    h.sent.length = 0
+    await sendMorningReport('r1', REPORT_AT, { lines: async () => null })
+    assert.match(toUser(h, 'yan')[0].text, /Ответили 1 из 3/)
   })
 })

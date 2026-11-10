@@ -7,6 +7,7 @@ import {
   autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, estimateComplexity, isOnTime,
   mskDayStart, overdueNights, ruleFor,
 } from './taskRules.js'
+import { isWorkday, mskDayKey } from '../../bot/plan.js'
 
 /**
  * Автобаллы за задачи (этап 2). Правила — в taskRules.js, здесь только
@@ -292,6 +293,8 @@ export async function chargeOverdue(now = new Date()) {
  * Просрочка задачи: каждая разобранная ночь — штраф или заявка владельцу,
  * смотря как настроено событие в профиле человека на ту ночь.
  */
+const OWNER_DECIDES = new Set(['task_overdue', 'personal_task_overdue'])
+
 async function chargeTask(task, settings, now, open = () => true) {
   const rule = ruleFor(task, 'overdue')
   let nights = overdueNights({
@@ -308,7 +311,10 @@ async function chargeTask(task, settings, now, open = () => true) {
   for (const night of nights) {
     const found = await autoEventType(task.ownerId, rule, night.at, settings)
     if (!found) continue
-    const outcome = found.type.review
+    // Просрочку Ян решает сам: бот не снимает баллы, а кладёт заявку в
+    // «На проверке», как бы ни было настроено событие. Иначе за задачу с
+    // перенесённым сроком или закрытую мимо CRM баллы уходят молча.
+    const outcome = found.type.review || OWNER_DECIDES.has(rule)
       ? await proposeNight(task, rule, night, found.type, settings)
       : await chargeNight(task, rule, night, found, settings)
     if (outcome === 'capped') break
@@ -469,6 +475,8 @@ export async function chargeTasksNotSet(now = new Date()) {
   const start = mskDayStart(now)
   const end = new Date(start.getTime() + DAY_MS)
   const dayKey = start.toISOString().slice(0, 10)
+  // Праздник по производственному календарю бота: задачи не нужны.
+  if (!isWorkday(mskDayKey(now))) return { charged: 0 }
 
   const people = await prisma.user.findMany({
     where: { role: { in: PARTICIPANT_ROLES }, active: true },

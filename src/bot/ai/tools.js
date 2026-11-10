@@ -3,6 +3,7 @@ import { askReminderTime, createReminder } from '../agent/remind.js'
 import { tellChat } from '../agent/notify.js'
 import { askReportNow, createDraft, finishAnswer, roundStatus, setRoundDeadline } from '../agent/rounds.js'
 import { proposeTask } from '../agent/offers.js'
+import { setTaskStatusByTitle } from '../agent/tasks.js'
 import { escapeHtml, uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
 import { personBrief, teamBrief, worksBrief } from './context.js'
@@ -63,7 +64,7 @@ export function staffTools(ctx) {
     },
     {
       name: 'come_back',
-      description: 'Отметить, что человек вернулся и на месте.',
+      description: 'Отметить, что человек вернулся после отлучки. Только если он сам пишет, что вернулся или снова на месте. Просьба про задачу или ответ «на связи» это не возвращение.',
       input_schema: NONE,
       run: async () => {
         await comeBack(user, now)
@@ -116,6 +117,26 @@ export function staffTools(ctx) {
         })
         ctx.quiet = true
         return 'Бот переспросил кнопкой. Ничего больше не пиши.'
+      },
+    },
+    {
+      name: 'set_task_status',
+      description: 'Отметить свою задачу: done это готово, поставь галочку, сделал, закрыл; progress это взял в работу, начал. title это название задачи или его кусок, как сказал человек.',
+      input_schema: object({
+        title: { type: 'string', description: 'Название задачи или его кусок.' },
+        status: { type: 'string', enum: ['done', 'progress'] },
+      }),
+      run: async (input) => {
+        // Модель иногда зовёт то же действие второй раз подряд: человеку уже ответили.
+        if (ctx.taskMarked) return 'Уже отмечено. Ничего больше не пиши.'
+        const res = await setTaskStatusByTitle(user, String(input.title ?? ''), input.status === 'progress' ? 'progress' : 'done', ctx.chatId)
+        if (res.ok) {
+          // Бот уже ответил «Отметил …», второй такой же ответ модели не нужен.
+          ctx.quiet = true
+          ctx.taskMarked = true
+          return 'Готово, бот ответил человеку. Ничего больше не пиши.'
+        }
+        return `Не отметил. ${res.note}\nСпроси человека, какую именно, коротко.`
       },
     },
     {
@@ -205,7 +226,7 @@ export function teamTools(ctx, { team = false } = {}) {
       description: 'Написать людям: опросить, узнать, как дела, попросить скрин, передать сообщение. Каждому своё сообщение. Если в самом сообщении просящего названы по имени конкретные люди, их не больше трёх, сейчас не ночь и в текстах нет ссылок, бот отправит сразу и сам скажет просящему, кому написал. Иначе покажет черновик с кнопкой «Отправить». В ответе инструмента написано, что случилось.',
       input_schema: object({
         topic: { type: 'string', description: 'Что нужно узнать или передать, одной строкой, для отчёта.' },
-        minutes: nullable('integer', 'Сколько минут собирать ответы, от 10 до 480. null, если не сказали, тогда 60.'),
+        minutes: nullable('integer', 'Сколько минут собирать ответы, от 10 до 480, только если просящий сам назвал время или срок отчёта. null, если не назвал: тогда каждый ответ бот перешлёт просящему сразу, как человек напишет, а через 60 минут скажет, кто промолчал.'),
         collect: { type: 'boolean', description: 'true, если нужны ответы и отчёт. false, если просто передать.' },
         new_round: { type: 'boolean', description: 'true, только если Ян прямо просит ещё одно поручение, пока этим же людям идёт прежнее. Иначе false.' },
         messages: {

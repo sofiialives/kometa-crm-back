@@ -235,10 +235,16 @@ async function ownerFeed() {
  * кому, за что и сколько — чтобы он видел, почему у сотрудника изменились
  * баллы, даже если сам ничего не нажимал.
  */
-function ownerAutoLine(e) {
-  const taskPart = e.taskTitle ? ` «${short(e.taskTitle, 80)}»` : ''
-  const sign = e.prizePoints < 0 ? 'снято' : e.prizePoints > 0 ? 'начислено' : 'изменено'
-  return `<b>${nameOf(e.user)}</b>: ${escapeHtml(e.title)}${taskPart}\nУ тебя включено это автоправило в профиле — агент сам ${sign} ${points(e.prizePoints)}${e.comment ? `\n<i>${escapeHtml(short(e.comment, 160))}</i>` : ''}`
+export function ownerAutoLine(e) {
+  const taskPart = e.taskTitle ? ` «${escapeHtml(short(e.taskTitle, 80))}»` : ''
+  return `${nameOf(e.user)}, ${points(e.prizePoints)}, ${escapeHtml(lowerFirst(e.title))}${taskPart}`
+}
+
+const lowerFirst = (t) => String(t ?? '').replace(/^\p{Lu}(?!\p{Lu})/u, (c) => c.toLowerCase())
+
+/** Все автоначисления прохода одним сообщением, а не по одному на человека. */
+export function ownerAutoText(events) {
+  return [`<b>Бот сам начислил по правилам из профилей</b>`, ...events.map(ownerAutoLine), 'Отменить можно в карточке человека в CRM'].join('\n')
 }
 
 /**
@@ -265,9 +271,21 @@ async function ownerAutoFeed() {
     return
   }
   const unsent = await unsentKeys(events.map((e) => `owner-auto:${e.id}`))
-  for (const e of events) {
-    if (!unsent.has(`owner-auto:${e.id}`)) continue
-    await sendOnce(`owner-auto:${e.id}`, () => tellOwners(ownerAutoLine(e)))
+  const fresh = []
+  for (const e of events) if (unsent.has(`owner-auto:${e.id}`) && (await claimNotice(`owner-auto:${e.id}`))) fresh.push(e)
+  // Длинный список делим, чтобы телеграм не резал сообщение посередине.
+  for (let i = 0; i < fresh.length; i += 30) {
+    const part = fresh.slice(i, i + 30)
+    let res
+    try {
+      res = await tellOwners(ownerAutoText(part))
+    } catch (e) {
+      // Часть рассылки могла уйти: ключи держим, второй раз не шлём.
+      console.error(`[агент] автоначисления владельцу: ${e.name}`)
+      break
+    }
+    // Телеграм попросил подождать — вернём в очередь, следующий проход отправит.
+    if (!res?.ok && res?.retry && !res?.unsure) for (const e of part) await releaseNotice(`owner-auto:${e.id}`)
   }
 }
 

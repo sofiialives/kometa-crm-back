@@ -385,3 +385,38 @@ export async function reportTaskLate(user, taskId, text, now = new Date(), taskI
   const startAt = list.find((t) => t.startAt)?.startAt
   await tellOwners(`<b>${list.length > 1 ? 'Не успевает начать задачи' : 'Не успевает начать задачу'}</b>\n${await labelFor(user)}\n${[...titles, ...more].join('\n')}${startAt ? `\nПо плану в ${hm(startAt)}` : ''}\n<i>${escapeHtml(text.slice(0, 400))}</i>`)
 }
+
+// Сколько своих открытых задач показываем агенту, когда название не нашлось.
+const PICK_MAX = 8
+const norm = (s) => String(s ?? '').toLowerCase().replace(/ё/g, 'е').replace(/[«»"'“”„.,!?:;()]/g, ' ').replace(/\s+/g, ' ').trim()
+
+/**
+ * «Поставь галочку на отчёт», «взял в работу баннер»: агент передаёт
+ * кусок названия и что сделать. Только свои задачи и только незакрытые.
+ * Одна подходит — статус меняет сервис задач (с баллами за срок, как в CRM)
+ * и бот сам отвечает человеку. Ноль или несколько — список агенту, чтобы
+ * переспросил, а не угадывал.
+ */
+export async function setTaskStatusByTitle(user, query, status, chatId = null) {
+  const words = norm(query).split(' ').filter((w) => w.length > 1)
+  const open = await prisma.task.findMany({
+    where: { AND: [VISIBLE, { ownerId: user.id, status: { in: status === 'progress' ? ['today'] : ['today', 'progress'] } }] },
+    orderBy: { deadline: 'asc' },
+    take: 200,
+    select: { id: true, title: true, status: true, deadline: true },
+  })
+  const exact = open.filter((t) => norm(t.title) === norm(query))
+  const found = exact.length ? exact : words.length ? open.filter((t) => words.every((w) => norm(t.title).includes(w))) : []
+  if (found.length !== 1) {
+    const list = (found.length ? found : open).slice(0, PICK_MAX).map((t) => `«${short(t.title, 80)}»`).join('\n')
+    return { ok: false, note: found.length ? `Подходят несколько:\n${list}` : open.length ? `Такой открытой задачи нет. Открытые:\n${list}` : 'Открытых задач нет' }
+  }
+  try {
+    const task = await updateTaskStatus(found[0].id, status, user)
+    const text = status === 'done' ? `Отметил «${escapeHtml(short(task.title, 120))}» выполненной` : `«${escapeHtml(short(task.title, 120))}» в процессе`
+    if (chatId) await tell(user.id, text)
+    return { ok: true, title: task.title }
+  } catch (e) {
+    return { ok: false, note: e.status ? e.message : 'Не получилось, пусть отметит в CRM' }
+  }
+}

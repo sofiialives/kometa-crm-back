@@ -29,7 +29,9 @@ const MAX_CALLS_PER_STEP = 10
 
 /** Описание инструментов для API — без функций. */
 export function toolDefs(tools) {
-  return tools.map(({ name, description, input_schema }) => ({ name, description, input_schema, strict: true }))
+  // Строгая схема нужна только там, где есть поля: API принимает не больше
+  // 20 строгих инструментов на запрос, а у руководителя их больше.
+  return tools.map(({ name, description, input_schema }) => ({ name, description, input_schema, strict: Object.keys(input_schema?.properties ?? {}).length > 0 }))
 }
 
 /** Инструмент по имени из ответа модели: она изредка путает регистр. */
