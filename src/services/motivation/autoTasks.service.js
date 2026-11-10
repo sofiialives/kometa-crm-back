@@ -292,6 +292,8 @@ export async function chargeOverdue(now = new Date()) {
  * Просрочка задачи: каждая разобранная ночь — штраф или заявка владельцу,
  * смотря как настроено событие в профиле человека на ту ночь.
  */
+const OWNER_DECIDES = new Set(['task_overdue', 'personal_task_overdue'])
+
 async function chargeTask(task, settings, now, open = () => true) {
   const rule = ruleFor(task, 'overdue')
   let nights = overdueNights({
@@ -308,7 +310,10 @@ async function chargeTask(task, settings, now, open = () => true) {
   for (const night of nights) {
     const found = await autoEventType(task.ownerId, rule, night.at, settings)
     if (!found) continue
-    const outcome = found.type.review
+    // Просрочку Ян решает сам: бот не снимает баллы, а кладёт заявку в
+    // «На проверке», как бы ни было настроено событие. Иначе за задачу с
+    // перенесённым сроком или закрытую мимо CRM баллы уходят молча.
+    const outcome = found.type.review || OWNER_DECIDES.has(rule)
       ? await proposeNight(task, rule, night, found.type, settings)
       : await chargeNight(task, rule, night, found, settings)
     if (outcome === 'capped') break

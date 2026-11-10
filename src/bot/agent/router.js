@@ -188,15 +188,17 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   const waiting = text ? state.take(user.id) : null
   if (waiting && (await onWaiting(me, waiting, text, logged, now))) return
 
+  // Агента уже спрашивали: второй раз за то же сообщение не зовём.
+  let tried = false
   if (target && !isCommandText) {
     // Идёт опрос: «не успею, застрял на правках» — это ответ, а не
     // «задерживаюсь». Агент поймёт и ответ, и команду в нём, у него те же
     // действия. Чек-ин, если был открыт, уже закрыт этим же сообщением.
-    if (await agentReady(user, 'round')) {
-      await ask()
-      return
+    if (await agentReady(user, 'own')) {
+      tried = true
+      if (await ask()) return
     }
-    // Агента нет — команды разбирают правила, а слова всё равно уйдут в отчёт.
+    // Агент не ответил — команды разбирают правила, а слова всё равно уйдут в отчёт.
     await linkMessages(target.id, loggedIds)
   }
 
@@ -221,7 +223,8 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   // «Что у меня на сегодня», «мои задачи», «что по звонкам» — список из CRM
   // столбиком, без ИИ: бесплатно и не превращается в сплошной абзац.
   // В разговоре по поручению «мои задачи на сегодня такие» — ответ, а не просьба о списке.
-  const found = target ? null : listIntent(text)
+  // Агент в опросе не ответил — тогда это всё же просьба о списке.
+  const found = target && !tried ? null : listIntent(text)
   // Список по отделу собирает агент: другим, кроме руководителя, это просто их задачи.
   const list = found === 'team' && user.role !== 'lead' ? 'tasks' : found
   if (list) {
@@ -230,7 +233,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
   }
   // Правила не поняли — агент. Нет ключа, лимит, сбой — подсказка, как раньше.
   // Незнакомые команды (/что-то) на ИИ не тратим.
-  if (!isCommandText && (await ask())) return
+  if (!isCommandText && !tried && (await ask())) return
   if (!text && files.length) {
     await tellChat(chatId, 'Файл получил, но открыть сейчас не могу', { userId: user.id })
     return

@@ -49,6 +49,17 @@ export function plural(n, one, few, many) {
   return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many
 }
 
+// Иерархия расписана на месяцы вперёд, в том числе по услугам, которые клиент
+// ещё не купил: утром говорим только о том, что на этой неделе.
+const SOON_DAYS = 7
+const soon = (end) => new Date(end.getTime() + SOON_DAYS * 24 * 60 * 60 * 1000)
+// Ответы на утро считаем с 9:30: человек мог ответить на опрос Яна или чек-ин
+// чуть раньше обхода, это тоже «на связи».
+const ANSWER_FROM_MIN = 9 * 60 + 30
+// Опрос Яна, отправленный человеку за это время до обхода, заменяет утреннее
+// сообщение: второе подряд только раздражает.
+const BUSY_MS = 60 * 60 * 1000
+
 const mskMinutes = (now) => mskHour(now) * 60 + new Date(now).getUTCMinutes()
 
 // ─── Кому пишем ──────────────────────────────────────────────────────────────
@@ -97,7 +108,7 @@ export async function offerFor(userId, now = new Date()) {
     select: TASK_SELECT,
   })
   const found = overdue ?? await prisma.task.findFirst({
-    where: { AND: [VISIBLE, { ownerId: userId, origin: 'hierarchy', status: 'today', deadline: { gte: end } }] },
+    where: { AND: [VISIBLE, { ownerId: userId, origin: 'hierarchy', status: 'today', deadline: { gte: end, lt: soon(end) } }] },
     orderBy: { deadline: 'asc' },
     select: TASK_SELECT,
   })
@@ -122,7 +133,7 @@ export async function morningFacts(userId, now = new Date()) {
   const [today, overdue, hierarchy] = await Promise.all([
     prisma.task.count({ where: { AND: [VISIBLE, { ownerId: userId, deadline: { gte: start, lt: end } }] } }),
     prisma.task.count({ where: { AND: [VISIBLE, { ownerId: userId }, metricWhere('overdue', now)] } }),
-    prisma.task.count({ where: { AND: [VISIBLE, { ownerId: userId, origin: 'hierarchy', status: 'today' }] } }),
+    prisma.task.count({ where: { AND: [VISIBLE, { ownerId: userId, origin: 'hierarchy', status: 'today', deadline: { lt: soon(end) } }] } }),
   ])
   return { today, overdue, hierarchy }
 }
@@ -166,10 +177,31 @@ async function ensureRound(owner, now, day) {
   })
 }
 
+/** С человеком уже идёт разговор по опросу Яна или руководителя. */
+export async function busyWithAsk(userId, now = new Date()) {
+  return Boolean(await prisma.botRoundTarget.findFirst({
+    where: {
+      userId,
+      status: { in: ['sent', 'answered'] },
+      sentAt: { gte: new Date(new Date(now).getTime() - BUSY_MS) },
+      round: { kind: { not: 'morning' }, status: 'sent', collect: true, deadlineAt: { gt: now } },
+    },
+    select: { id: true },
+  }))
+}
+
 /** Написать одному: данные, текст агента или шаблон, цель поручения, отправка один раз. */
 async function writeTo({ person, round, day, now, ask, deadline, eachMs }) {
   const key = `morning-round:${day}:${person.id}`
   if (await hasNotice(key)) return false
+  if (await busyWithAsk(person.id, now)) {
+    const old = await prisma.botRoundTarget.findFirst({ where: { roundId: round.id, userId: person.id } })
+    if (old) await prisma.botRoundTarget.update({ where: { id: old.id }, data: { status: 'busy' } })
+    else await prisma.botRoundTarget.create({ data: { roundId: round.id, userId: person.id, text: '', status: 'busy' } })
+    // Ключ занят: догоняющий проход больше не пишет этому человеку.
+    await claimNotice(key)
+    return false
+  }
   const [offer, facts] = await Promise.all([offerFor(person.id, now), morningFacts(person.id, now)])
   const left = deadline - Date.now()
   const text = left > 1000
@@ -266,7 +298,9 @@ const OFFER_WORDS = {
 }
 
 // Кому сообщение не ушло совсем (ожидание, пропуск) и кому не дошло.
-const SHOWN_STATUSES = ['sent', 'answered', 'failed', 'pending', 'skipped']
+const SHOWN_STATUSES = ['sent', 'answered', 'busy', 'failed', 'pending', 'skipped']
+// Кому утреннее ушло или кого заменил опрос Яна: с ними на связи.
+const TALKED = ['sent', 'answered', 'busy']
 
 /**
  * Свежие данные для отчёта, прямо из базы: сколько задач у человека на
@@ -286,7 +320,17 @@ export async function gatherMorning(round, now = new Date()) {
   })
   const { start, end } = dayBounds(now)
   const sentAt = round.sentAt
-  const ids = targets.filter((t) => ['sent', 'answered'].includes(t.status)).map((t) => t.userId)
+  const ids = targets.filter((t) => TALKED.includes(t.status)).map((t) => t.userId)
+  // Ответ человека, даже если он ушёл не в обход: на опрос Яна, на чек-ин,
+  // командой. Привязка к обходу тут не важна, важно, что человек на связи.
+  const from = new Date(mskDayStart(mskDayKey(sentAt ?? now)).getTime() + ANSWER_FROM_MIN * 60000)
+  const own = ids.length
+    ? await prisma.botMessage.findMany({
+      where: { userId: { in: ids }, direction: { in: IN }, createdAt: { gte: from }, roundTargetId: { notIn: targets.map((t) => t.id) } },
+      orderBy: { createdAt: 'asc' },
+      select: { userId: true, direction: true, text: true, createdAt: true, fileId: true, fileKind: true, fileMime: true, source: true },
+    })
+    : []
   const today = { AND: [VISIBLE, { ownerId: { in: ids }, deadline: { gte: start, lt: end } }] }
   const offerIds = targets.map((t) => t.offeredTaskId).filter(Boolean)
   const [totals, freshs, titles, offered] = await Promise.all([
@@ -324,8 +368,8 @@ export async function gatherMorning(round, now = new Date()) {
       label: labels.get(t.userId),
       status: t.status,
       summary: t.summary,
-      messages: t.messages,
-      answered: t.messages.some((m) => IN.includes(m.direction)),
+      messages: [...t.messages, ...own.filter((m) => m.userId === t.userId)],
+      answered: [...t.messages, ...own].some((m) => (m.userId ?? t.userId) === t.userId && IN.includes(m.direction)),
       tasks: {
         count: total.get(t.userId) ?? 0,
         fresh: fresh.get(t.userId) ?? 0,
@@ -376,7 +420,8 @@ export function personTemplate(p) {
  * или null. Кто не ответил и ничего не поставил, одной строкой имён в конце.
  */
 export function morningReportText({ people, ai = null }) {
-  const written = people.filter((p) => ['sent', 'answered'].includes(p.status))
+  const written = people.filter((p) => TALKED.includes(p.status))
+  const busy = people.filter((p) => p.status === 'busy')
   const failed = people.filter((p) => p.status === 'failed')
   const notGot = people.filter((p) => ['pending', 'skipped'].includes(p.status))
   const answered = written.filter((p) => p.answered)
@@ -392,6 +437,7 @@ export function morningReportText({ people, ai = null }) {
     lines.push('', `<b>${escapeHtml(p.label)}</b>`, ...(got?.length ? got.map((l) => escapeHtml(l)) : personTemplate(p)))
   }
   if (silent.length) lines.push('', `<b>Не ответили и ничего не поставили</b> ${silent.map((p) => escapeHtml(p.label)).join('; ')}`)
+  if (busy.length) lines.push('', `<b>Утреннее не слал, шёл твой опрос</b> ${busy.map((p) => escapeHtml(p.label)).join('; ')}`)
   if (failed.length) lines.push('', `<b>Сообщение не дошло</b> ${failed.map((p) => escapeHtml(p.label)).join('; ')}`)
   if (notGot.length) lines.push('', `<b>Не получили сообщение</b> ${notGot.map((p) => escapeHtml(p.label)).join('; ')}`)
   return lines.join('\n')
@@ -425,7 +471,7 @@ export async function sendMorningReport(roundId, now = new Date(), deps = {}) {
     const ai = await (deps.lines ?? morningLines)({
       ownerId: round.ownerId,
       role: round.owner?.role ?? 'admin',
-      people: people.filter((p) => ['sent', 'answered'].includes(p.status) && (p.answered || p.tasks.count > 0)),
+      people: people.filter((p) => TALKED.includes(p.status) && (p.answered || p.tasks.count > 0)),
     }).catch((e) => {
       console.error(`[агент] утренний отчёт моделью: ${e.name}`)
       return null

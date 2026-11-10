@@ -88,7 +88,7 @@ describe('агент — цикл с инструментами', () => {
 
   test('запрос для Sonnet 5.5: размышления adaptive, инструмент auto, строгие схемы, кэш', async () => {
     let seen
-    const tool = { name: 'come_back', description: 'd', input_schema: { type: 'object', properties: {}, required: [], additionalProperties: false }, run: async () => 'ок' }
+    const tool = { name: 'tell_owner', description: 'd', input_schema: { type: 'object', properties: { note: { type: 'string' } }, required: ['note'], additionalProperties: false }, run: async () => 'ок' }
     await runAgent({ ...base, tools: [tool] }, { ...ok, create: async (p) => { seen = p; return say('ок') } })
     assert.deepEqual(seen.thinking, { type: 'adaptive' })
     assert.deepEqual(seen.tool_choice, { type: 'auto' })

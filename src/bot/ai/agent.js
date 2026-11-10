@@ -41,7 +41,7 @@ const NOTES_PER_DAY = 5
 export const AI_LIMIT_TEXT = 'Лимит вопросов на сегодня закончился\nОн обновится в 00:00 по Москве'
 export const AI_MONTH_TEXT = 'Бюджет на ИИ в этом месяце закончился\nДо 1-го числа я понимаю только команды'
 const AI_FAIL_TEXT = 'Не получилось ответить, сбой у ИИ\nПопробуй ещё раз через минуту'
-const ROUND_ACK = 'Спасибо, записал и передам'
+const ROUND_ACK = 'Принял'
 // В разговоре по поручению данные CRM главнее текста сообщения, которое писалось раньше.
 const FRESH_NOTE = '\nЭто свежие данные на сейчас. Если они расходятся с текстом сообщения по поручению, верь им'
 
@@ -75,7 +75,7 @@ const READ_ONLY = new Set(['get_team', 'get_person', 'get_works', 'get_round', '
 const acted = (tools = []) => tools.some((t) => !READ_ONLY.has(t))
 // Действия, которые сами отвечают человеку стандартной фразой. tell_owner
 // сюда не входит: человеку он ничего не пишет, только Яну.
-const SPEAKS = new Set(['set_away', 'come_back', 'running_late', 'set_reminder', 'end_day', 'force_majeure'])
+const SPEAKS = new Set(['set_away', 'come_back', 'running_late', 'set_reminder', 'end_day', 'force_majeure', 'set_task_status'])
 
 // Передал Яну, а сам ничего не сказал: человек должен понять, что его
 // услышали. Фраза зависит от того, ушла ли заметка на самом деле.
@@ -130,22 +130,24 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
   const team = owner || lead
 
   // Идёт разговор по поручению: всё, что сюда дошло, уйдёт в отчёт.
-  const target = owner ? null : await activeTarget(user.id, now)
   const ids = loggedIds.length ? loggedIds : [logged?.id].filter(Boolean)
-  const ack = async () => {
-    await tellChat(chatId, ROUND_ACK, { userId: user.id, roundTargetId: target.id })
-    return true
-  }
+  let target = owner ? null : await activeTarget(user.id, now)
   if (target) {
     await linkMessages(target.id, ids)
-    // Разговор затянулся — дальше просто записываем.
-    if (target.replies >= ROUND_REPLIES_MAX) return ack()
+    // Разговор по поручению затянулся: слова уже в отчёте, дальше человек
+    // говорит с агентом как обычно, а не получает «записал» на всё подряд.
+    if (target.replies >= ROUND_REPLIES_MAX) target = null
   }
 
   // Деньги и лимит — до того, как считать данные CRM и качать фото.
-  const check = await preflight({ userId: user.id, role: user.role, kind: target ? 'round' : kind })
+  let check = await preflight({ userId: user.id, role: user.role, kind: target ? 'round' : kind })
+  // Лимит на разговоры по поручению кончился — пробуем как обычное сообщение.
+  if (check.status !== 'ok' && target) {
+    target = null
+    check = await preflight({ userId: user.id, role: user.role, kind })
+  }
   if (check.status !== 'ok') {
-    if (target) return ack()
+    // Слова уже в отчёте. Команду («отхожу», «мои задачи») разберут правила.
     if (check.status === 'off' || kind !== 'own') return false
     // Не «не понял тебя»: иначе кажется, что бот сломался.
     await tellChat(chatId, limitText(check, owner), { userId: user.id })
@@ -208,9 +210,11 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
       await tellChat(chatId, told, { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null })
       return true
     }
-    // В опросе человек всегда должен понять, что его услышали: агент
-    // записал ответ, но ничего не сказал — короткое «записал».
-    if (target && !res.tools.some((t) => SPEAKS.has(t))) return ack()
+    // В опросе агент записал ответ, но ничего не сказал — короткое «принял».
+    if (target && res.tools.includes('finish_answer') && !res.tools.some((t) => SPEAKS.has(t))) {
+      await tellChat(chatId, ROUND_ACK, { userId: user.id, roundTargetId: target.id })
+      return true
+    }
     // Действие уже выполнено и само ответило человеку — даже если потом
     // запрос сорвался, «не понял» не нужно.
     if (acted(res.tools) || ctx.quiet) return true
@@ -233,7 +237,7 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
       await tellChat(chatId, told, { userId: user.id, source: 'ai', roundTargetId: target?.id ?? null }).catch(() => {})
       return true
     }
-    if (target) return ack()
+    // Сбой: слова уже в отчёте, команду разберут правила, иначе честно про сбой.
     return false
   } finally {
     stop()
