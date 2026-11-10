@@ -19,7 +19,7 @@ describe('один отчёт: срок меняем, а не заводим н�
     const text = await setRoundDeadline(owner, null, 30, NOW)
     assert.match(text, /Срок отчёта теперь 17:30\. Скажи об этом коротко\. Новое поручение не создавай/)
     assert.deepEqual(found[0][0].where, { ownerId: 'owner', kind: 'ask', status: 'sent', collect: true })
-    assert.deepEqual(changed[0][0], { where: { id: 'r1', status: 'sent' }, data: { deadlineAt: new Date('2026-11-04T14:30:00Z') } })
+    assert.deepEqual(changed[0][0], { where: { id: 'r1', status: 'sent' }, data: { deadlineAt: new Date('2026-11-04T14:30:00Z'), live: false } })
     await setRoundDeadline(owner, 'r1', 1, NOW)
     assert.equal(changed[1][0].data.deadlineAt.toISOString(), '2026-11-04T14:10:00.000Z')
     await setRoundDeadline(owner, 'r1', 5000, NOW)

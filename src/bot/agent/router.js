@@ -13,7 +13,7 @@ import { lateForTask, reportTaskLate, takeTask } from './tasks.js'
 import { askReminderTime, cancelReminder, createReminder, REMIND_MINUTES, tooFarReminder } from './remind.js'
 import { agentReady, agentReply } from '../ai/agent.js'
 import { decideStyleNote } from '../ai/styleNotes.js'
-import { activeTarget, decideDraft, decideReport, linkMessages } from './rounds.js'
+import { activeTarget, decideDraft, decideReport, forwardReply, linkMessages } from './rounds.js'
 import { decideOffer } from './offers.js'
 import { listIntent, listText } from './lists.js'
 
@@ -200,6 +200,7 @@ export async function onText(user, chatId, text, now = new Date(), { media = nul
     }
     // Агент не ответил — команды разбирают правила, а слова всё равно уйдут в отчёт.
     await linkMessages(target.id, loggedIds)
+    await forwardReply(target.id, loggedIds).catch((e) => console.error(`[агент] пересылка ответа: ${e.name}`))
   }
 
   // Руководитель поручает или спрашивает о своих людях — сразу агенту:

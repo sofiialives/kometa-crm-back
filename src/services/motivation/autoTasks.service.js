@@ -7,6 +7,7 @@ import {
   autoActiveAt, autoKey, autoKeyPrefix, capGain, capPenalty, estimateComplexity, isOnTime,
   mskDayStart, overdueNights, ruleFor,
 } from './taskRules.js'
+import { isWorkday, mskDayKey } from '../../bot/plan.js'
 
 /**
  * Автобаллы за задачи (этап 2). Правила — в taskRules.js, здесь только
@@ -474,6 +475,8 @@ export async function chargeTasksNotSet(now = new Date()) {
   const start = mskDayStart(now)
   const end = new Date(start.getTime() + DAY_MS)
   const dayKey = start.toISOString().slice(0, 10)
+  // Праздник по производственному календарю бота: задачи не нужны.
+  if (!isWorkday(mskDayKey(now))) return { charged: 0 }
 
   const people = await prisma.user.findMany({
     where: { role: { in: PARTICIPANT_ROLES }, active: true },

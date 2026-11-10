@@ -2,7 +2,7 @@ import { prisma } from '../../config/prisma.js'
 import { isParticipant } from '../../services/motivation/access.js'
 import { escapeHtml, sendChatAction } from '../telegram.js'
 import { nameOf, tellChat, tellOwners } from '../agent/notify.js'
-import { activeTarget, countReply, linkMessages, ROUND_REPLIES_MAX } from '../agent/rounds.js'
+import { activeTarget, countReply, forwardReply, linkMessages, ROUND_REPLIES_MAX } from '../agent/rounds.js'
 import { isQuietHour, mskDayKey } from '../plan.js'
 import { aiEnabled, askJson } from './client.js'
 import { labelOf, staffBrief, teamBrief } from './context.js'
@@ -134,6 +134,8 @@ export async function agentReply({ user, chatId, text = '', logged = null, logge
   let target = owner ? null : await activeTarget(user.id, now)
   if (target) {
     await linkMessages(target.id, ids)
+    // Опрос без срока: Ян получает ответ сразу, не дожидаясь отчёта.
+    await forwardReply(target.id, ids).catch((e) => console.error(`[агент] пересылка ответа: ${e.name}`))
     // Разговор по поручению затянулся: слова уже в отчёте, дальше человек
     // говорит с агентом как обычно, а не получает «записал» на всё подряд.
     if (target.replies >= ROUND_REPLIES_MAX) target = null

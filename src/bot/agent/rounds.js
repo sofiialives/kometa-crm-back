@@ -88,22 +88,62 @@ function caseForms(token) {
   return { base: t, ends }
 }
 
+// Латиница в CRM («Vladislav», «Alex»), а Ян пишет кириллицей и коротко:
+// «Влад», «Алекс». Транслит по звукам, сначала сочетания букв.
+const LATIN = [['shch', 'щ'], ['sch', 'щ'], ['zh', 'ж'], ['kh', 'х'], ['ch', 'ч'], ['sh', 'ш'], ['ts', 'ц'], ['ya', 'я'], ['yu', 'ю'], ['yo', 'е'], ['ye', 'е'], ['iy', 'ий'], ['ey', 'ей'], ['ay', 'ай'], ['oy', 'ой'], ['x', 'кс'], ['a', 'а'], ['b', 'б'], ['v', 'в'], ['w', 'в'], ['g', 'г'], ['d', 'д'], ['e', 'е'], ['z', 'з'], ['i', 'и'], ['y', 'и'], ['k', 'к'], ['c', 'к'], ['q', 'к'], ['l', 'л'], ['m', 'м'], ['n', 'н'], ['o', 'о'], ['p', 'п'], ['r', 'р'], ['s', 'с'], ['t', 'т'], ['u', 'у'], ['f', 'ф'], ['h', 'х'], ['j', 'дж']]
+
+/** «Vladislav» → «владислав». Не латиница — null. */
+export function toCyrillic(word) {
+  let w = String(word).toLowerCase()
+  if (!/^[a-z]+$/.test(w)) return null
+  let out = ''
+  while (w) {
+    const [from, to] = LATIN.find(([f]) => w.startsWith(f)) ?? [w[0], '']
+    out += to
+    w = w.slice(from.length)
+  }
+  // Nikolai, Sergei, Alexei: «и» после гласной в конце это «й».
+  return out.replace(/([аеиоуыэюя])и$/, '$1й')
+}
+
+// Короткие имена, которыми зовут в команде. Тёзок по короткому имени
+// («Саша» это и Александр, и Александра) разбирает hasNamesake: тогда черновик.
+const SHORT_NAMES = {
+  владислав: ['влад'], александр: ['саша'], александра: ['саша'], алексей: ['леша'],
+  дмитрий: ['дима'], николай: ['коля'], анастасия: ['настя'], екатерина: ['катя'], евгений: ['женя'], евгения: ['женя'],
+  сергей: ['серега'], михаил: ['миша'], максим: ['макс'], константин: ['костя'], юлиан: ['юля'], юлия: ['юля'],
+  анна: ['аня'], мария: ['маша'], ольга: ['оля'], татьяна: ['таня'], елена: ['лена'], светлана: ['света'], наталья: ['наташа'], наталия: ['наташа'],
+  вячеслав: ['слава'], станислав: ['стас'], ярослав: ['слава'], владимир: ['вова'], павел: ['паша'], иван: ['ваня'], артем: ['тема'],
+  даниил: ['даня'], данил: ['даня'], кирилл: ['кир'], роман: ['рома'], виктория: ['вика'], валерия: ['лера'], ксения: ['ксюша'], дарья: ['даша'],
+}
+
+/** Как ещё можно назвать эту часть имени: кириллицей и коротким именем. */
+export function nameVariants(token) {
+  const t = String(token).toLowerCase().replace(/ё/g, 'е')
+  const full = toCyrillic(t) ?? t
+  return [...new Set([t, full, ...(SHORT_NAMES[full] ?? [])])]
+}
+
 /**
  * Какие части имени человека («Николай», «Волков») есть в тексте просьбы, в
- * любом падеже. Короткая основа («Люба», «Света») засчитывается только с
+ * любом падеже. «Vladislav» узнаётся и как «Владислав», и как «Влад». Короткая основа («Люба», «Света») засчитывается только с
  * большой буквы: иначе «любой» и «в свете» назвали бы человека.
  */
 export function namedTokens(person, texts) {
   const words = texts.flatMap((text) => String(text ?? '').replace(/ё/g, 'е').replace(/Ё/g, 'Е').match(/[\p{L}]+/gu) ?? [])
-  return nameTokens(person).filter((token) => {
-    const { base, ends } = caseForms(token)
-    if (base.length < 3) return false
+  return nameTokens(person).filter((token) => nameVariants(token).some((variant) => {
+    const { base, ends } = caseForms(variant)
+    // Короткое имя из списка («Аня», «Оля»): основа из двух букв, только с
+    // большой буквы. Само имя из двух букв («Ян») не засчитываем, как и раньше.
+    const full = toCyrillic(token) ?? token.toLowerCase().replace(/ё/g, 'е')
+    const isShort = variant !== full && (SHORT_NAMES[full] ?? []).includes(variant)
+    if (base.length < (isShort ? 2 : 3)) return false
     return words.some((word) => {
       const w = word.toLowerCase()
       if (!w.startsWith(base) || !ends.includes(w.slice(base.length))) return false
       return base.length > 4 || /^\p{Lu}/u.test(word)
     })
-  })
+  }))
 }
 
 /** Назван ли человек в тексте просьбы: его имя или фамилия, в любом падеже. */
@@ -181,7 +221,7 @@ async function draftReason({ owner, people, texts, unchecked, now }) {
  * Что написать просящему, когда сообщения ушли без черновика: кому и что
  * именно. sent — [{ label, text }], остальные списки — подписи.
  */
-export function directNote({ sent, failed, skipped, notSent = [], collect, deadlineAt }) {
+export function directNote({ sent, failed, skipped, notSent = [], collect, deadlineAt, live = false }) {
   const lines = []
   if (sent.length) {
     lines.push('Написал')
@@ -193,7 +233,7 @@ export function directNote({ sent, failed, skipped, notSent = [], collect, deadl
   if (notSent.length) plainLines.push('Не уйдёт', ...notSent)
   if (!sent.length && !failed.length && !skipped.length) plainLines.push('Никому не написал')
   lines.push(...plainLines.map((l) => escapeHtml(l)))
-  if (collect && sent.length) lines.push(`Отчёт пришлю к ${hm(deadlineAt)}`)
+  if (collect && sent.length) lines.push(live ? 'Ответы пришлю сразу, как напишут' : `Отчёт пришлю к ${hm(deadlineAt)}`)
   return lines.join('\n')
 }
 
@@ -213,10 +253,12 @@ export function draftText({ people, skipped }) {
 }
 
 /** Короткое сообщение с кнопками: что, кому, до скольки и какие ссылки. */
-export function confirmText({ topic, collect, deadlineAt, count, links, unchecked = false }) {
+export function confirmText({ topic, collect, deadlineAt, count, links, unchecked = false, live = false }) {
   const lines = [
     `<b>Тема</b> ${escapeHtml(cut(topic, 300))}`,
-    collect ? `Кому ${count}, ответы соберу до ${hm(deadlineAt)} и пришлю отчёт` : `Кому ${count}, просто напишу, отчёт не нужен`,
+    !collect ? `Кому ${count}, просто напишу, отчёт не нужен`
+      : live ? `Кому ${count}, каждый ответ пришлю сразу, до ${hm(deadlineAt)} жду, потом скажу, кто промолчал`
+        : `Кому ${count}, ответы соберу до ${hm(deadlineAt)} и пришлю отчёт`,
   ]
   if (links.length) lines.push(`В сообщениях есть ссылки, проверь их\n${links.slice(0, 10).map((l) => escapeHtml(cut(l, 80))).join('\n')}`)
   // Проверка чужих задач прошла не по всем: решает человек, глядя на тексты.
@@ -260,7 +302,8 @@ export async function setRoundDeadline(owner, roundId, minutes, now = new Date()
   const round = await runningRound(owner, roundId)
   if (!round) return 'Идущего поручения с отчётом нет, менять нечего. Если нужно новое, вызови message_people.'
   const deadlineAt = new Date(now.getTime() + clampMinutes(minutes) * 60000)
-  const changed = await prisma.botRound.updateMany({ where: { id: round.id, status: 'sent' }, data: { deadlineAt } })
+  // Назвали время — значит, нужен отчёт к нему, а не ответы по одному.
+  const changed = await prisma.botRound.updateMany({ where: { id: round.id, status: 'sent' }, data: { deadlineAt, live: false } })
   if (!changed.count) return 'Отчёт уже собирается, срок не поменять. Скажи об этом коротко.'
   return `Срок отчёта теперь ${hm(deadlineAt)}. Скажи об этом коротко. Новое поручение не создавай.`
 }
@@ -341,6 +384,8 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
       collect: Boolean(collect),
       deadlineAt,
       direct,
+      // Время отчёта не назвали — ответы уходят сразу, по мере прихода.
+      live: Boolean(collect) && !Number.isInteger(minutes),
       ...(direct ? { status: 'sent', sentAt: now } : {}),
       targets: { create: people.map((p) => ({ userId: p.person.id, text: p.text })) },
     },
@@ -358,7 +403,7 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
       await tellChat(chatId, 'Отправка сорвалась посередине\nКому-то могло уже дойти, повторять не буду', { userId: owner.id }).catch(() => {})
       return { shown: true, direct: true, text: 'Отправка сорвалась посередине, часть людей могла получить сообщение. Повторно не отправляй, просящему бот уже сказал.' }
     }
-    const note = directNote({ sent: out.sentPeople, failed: out.failedLabels, skipped: out.skipped, notSent: skipped, collect: round.collect, deadlineAt })
+    const note = directNote({ sent: out.sentPeople, failed: out.failedLabels, skipped: out.skipped, notSent: skipped, collect: round.collect, deadlineAt, live: round.live })
     const shown = await tellChat(chatId, note, { userId: owner.id })
     const summary = directSummary({ sent: out.sent, failed: out.failedLabels.length, skipped: out.skipped.length, notSent: skipped.length })
     return {
@@ -372,7 +417,7 @@ export async function createDraft(owner, chatId, { topic, minutes, collect = tru
   // Кнопки — отдельным коротким сообщением: длинный черновик телеграм режет
   // на части, и кнопки не должны потеряться вместе с частью.
   const asked = shown.ok && await tellChat(chatId, confirmText({
-    topic: subject, collect: round.collect, deadlineAt, count: people.length, links, unchecked: foreign.incomplete,
+    topic: subject, collect: round.collect, deadlineAt, live: round.live, count: people.length, links, unchecked: foreign.incomplete,
   }), { userId: owner.id, buttons: BUTTONS(round.id) })
   if (!asked?.ok) {
     await prisma.botRound.update({ where: { id: round.id }, data: { status: 'cancelled', closedAt: now } })
@@ -413,7 +458,7 @@ export async function decideDraft(user, roundId, go, now = new Date()) {
   if (!claimed.count) return 'Уже отправлено'
 
   const out = await deliverRound(user, round)
-  return sentNote({ sent: out.sent, failed: out.failed, skipped: out.skipped, collect: round.collect, deadlineAt })
+  return sentNote({ sent: out.sent, failed: out.failed, skipped: out.skipped, collect: round.collect, deadlineAt, live: round.live })
 }
 
 /**
@@ -459,9 +504,9 @@ async function deliverRound(user, round, labels = new Map()) {
 }
 
 /** Что дописать под черновиком после кнопки «Отправить». */
-export function sentNote({ sent, failed, skipped, collect, deadlineAt }) {
+export function sentNote({ sent, failed, skipped, collect, deadlineAt, live = false }) {
   const tail = failed ? `, не дошло ${failed}` : ''
-  const head = collect ? `Отправил ${sent}${tail}\nОтчёт пришлю к ${hm(deadlineAt)}` : `Отправил ${sent}${tail}`
+  const head = collect ? `Отправил ${sent}${tail}\n${live ? 'Ответы пришлю сразу, как напишут' : `Отчёт пришлю к ${hm(deadlineAt)}`}` : `Отправил ${sent}${tail}`
   if (!skipped.length) return head
   const lines = skipped.map((label) => `Не отправил ${escapeHtml(label)}, задачи уже сделаны`)
   return [sent || failed ? head : 'Никому не отправил', ...lines].join('\n')
@@ -482,6 +527,38 @@ export async function linkMessages(targetId, messageIds) {
   const ids = messageIds.filter(Boolean)
   if (!ids.length) return
   await prisma.botMessage.updateMany({ where: { id: { in: ids } }, data: { roundTargetId: targetId } })
+}
+
+/**
+ * Опрос без названного срока: ответ человека сразу тому, кто поручил, его
+ * словами и с файлами. Одно сообщение человека — одна пересылка, даже если
+ * сюда пришли и агент, и правила (ключ по первой записи).
+ */
+export async function forwardReply(targetId, messageIds) {
+  const ids = messageIds.filter(Boolean)
+  if (!ids.length) return false
+  const target = await prisma.botRoundTarget.findUnique({
+    where: { id: targetId },
+    include: { user: PERSON, round: { select: { ownerId: true, kind: true, live: true, status: true } } },
+  })
+  if (!target || target.round.kind !== 'ask' || !target.round.live || target.round.status !== 'sent') return false
+  const chatId = await chatOf(target.round.ownerId)
+  if (!chatId) return false
+  const messages = await prisma.botMessage.findMany({
+    where: { id: { in: ids }, roundTargetId: targetId, direction: { in: IN } },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, direction: true, text: true, fileId: true, fileKind: true, fileMime: true, createdAt: true },
+  })
+  if (!messages.length || !(await claimNotice(`round-fwd:${messages[0].id}`))) return false
+  const label = labelsFor([target.user]).get(target.userId)
+  const words = messages.map((m) => m.text).filter((t) => t && !/^\[[^\]]+\]$/.test(t)).join('\n')
+  const files = messages.filter((m) => m.fileId).length
+  const lines = [`<b>${escapeHtml(label)}</b>, ${hm(messages[0].createdAt)}`]
+  if (words) lines.push(escapeHtml(cut(words, 1500)))
+  if (files) lines.push(`Файлов ${files}, ниже`)
+  const res = await tellChat(chatId, lines.join('\n'), { userId: target.round.ownerId, source: 'report' })
+  if (files && (res.ok || res.unsure)) await sendFiles(chatId, target.round.ownerId, label, messages)
+  return Boolean(res.ok)
 }
 
 /** Агент счёл ответ полным: суть — для отчёта. */
@@ -592,6 +669,17 @@ export function reportText({ round, answered, silent, failed, skipped = [], ai, 
     lines.push('', `<b>Не ответили</b> ${who.join('; ')}`)
   }
   return lines.join('\n')
+}
+
+/** Итог опроса, где ответы ушли сразу: кто не ответил. Все ответили — null. */
+export function liveCloseText({ round, answered, silent, failed }) {
+  if (!silent.length && !failed.length) return null
+  const who = [...silent.map((p) => escapeHtml(p.label)), ...failed.map((p) => `${escapeHtml(p.label)}, сообщение не дошло`)]
+  return [
+    `<b>Опрос закрыт</b> ${escapeHtml(cut(round.topic, 200))}`,
+    `Ответили ${answered.length} из ${answered.length + silent.length}`,
+    `<b>Не ответили</b> ${who.join('; ')}`,
+  ].join('\n')
 }
 
 /**
@@ -742,6 +830,14 @@ export async function sendRoundReport(roundId, now = new Date()) {
       return { ok: false, reason: 'no_chat' }
     }
     const people = await gather(round)
+    if (round.live) {
+      // Ответы уже ушли по одному. В срок — только кто промолчал, а если
+      // ответили все, ничего: лишнее сообщение не нужно.
+      const text = liveCloseText({ round, ...people })
+      if (text) await sendPart(round.id, 'text', () => tellChat(chatId, text, { userId: round.ownerId, source: 'report' }))
+      await close()
+      return { ok: true, reason: 'live' }
+    }
     const text = round.reportText ?? await composeReport(round, people, now)
     if (!round.reportText) await prisma.botRound.update({ where: { id: round.id }, data: { reportText: text } })
     // Отчёт несёт слова сотрудников — в памяти агента он не его реплика.
