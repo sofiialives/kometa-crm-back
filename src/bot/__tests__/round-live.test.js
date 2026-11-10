@@ -28,16 +28,20 @@ describe('имена латиницей и коротко', () => {
     assert.equal(isNamedIn({ name: 'Анна Тестова' }, ['Узнай у Ани']), true)
     assert.equal(isNamedIn({ name: 'Анна Тестова' }, ['кани и ани']), false)
     assert.equal(isNamedIn({ name: 'Ян' }, ['напиши Яну']), false)
+    // Короткие имена, совпадающие с обычными словами, не считаются.
+    assert.equal(isNamedIn({ name: 'Артём Ким' }, ['Тема такая, узнай, как дела']), false)
+    assert.equal(isNamedIn({ name: 'Вячеслав' }, ['Слава богу, всё готово']), false)
     // Короткая основа только с большой буквы: «влад» в середине слова не имя.
     assert.equal(isNamedIn({ name: 'Vladislav' }, ['владелец просил']), false)
   })
 })
 
 describe('ответы на опрос сразу', () => {
-  function world(t, { live = true, kind = 'ask', status = 'sent', messages } = {}) {
+  const yan = { id: 'yan', name: 'Ян', role: 'admin', active: true, departmentId: null, department: null }
+  function world(t, { live = true, kind = 'ask', status = 'sent', messages, owner = yan } = {}) {
     const h = botHarness(t)
     patch(t, prisma.telegramLink, 'findFirst', async () => ({ chatId: 'chat-yan' }))
-    patch(t, prisma.botRoundTarget, 'findUnique', async () => ({ id: 't1', userId: 'v', user: person, round: { ownerId: 'yan', kind, live, status } }))
+    patch(t, prisma.botRoundTarget, 'findUnique', async () => ({ id: 't1', userId: 'v', user: person, round: { ownerId: owner.id, owner, kind, live, status } }))
     patch(t, prisma.botMessage, 'findMany', async () => messages ?? [{ id: 'm1', direction: 'in', text: 'Начал, собираю базу', createdAt: at('2026-11-10T08:52:00Z') }])
     return h
   }
@@ -58,7 +62,8 @@ describe('ответы на опрос сразу', () => {
   })
 
   test('опрос с названным временем, утренний обход, закрытый опрос: не пересылаем', async (t) => {
-    for (const opts of [{ live: false }, { kind: 'morning' }, { status: 'closed' }]) {
+    const otherLead = { id: 'l2', name: 'Нина', role: 'lead', active: true, departmentId: 'd2', department: { name: 'SEO' } }
+    for (const opts of [{ live: false }, { kind: 'morning' }, { status: 'closed' }, { owner: { ...yan, active: false } }, { owner: otherLead }]) {
       await t.test(JSON.stringify(opts), async (tt) => {
         const h = world(tt, opts)
         assert.equal(await forwardReply('t1', ['m1']), false)

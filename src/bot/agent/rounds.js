@@ -106,15 +106,17 @@ export function toCyrillic(word) {
   return out.replace(/([аеиоуыэюя])и$/, '$1й')
 }
 
-// Короткие имена, которыми зовут в команде. Тёзок по короткому имени
+// Короткие имена, которыми зовут в команде. Без тех, что совпадают с
+// обычными словами («тема», «слава», «света»): иначе «Тема такая» назвало бы
+// Артёма и письмо ушло бы без черновика. Тёзок по короткому имени
 // («Саша» это и Александр, и Александра) разбирает hasNamesake: тогда черновик.
 const SHORT_NAMES = {
   владислав: ['влад'], александр: ['саша'], александра: ['саша'], алексей: ['леша'],
   дмитрий: ['дима'], николай: ['коля'], анастасия: ['настя'], екатерина: ['катя'], евгений: ['женя'], евгения: ['женя'],
   сергей: ['серега'], михаил: ['миша'], максим: ['макс'], константин: ['костя'], юлиан: ['юля'], юлия: ['юля'],
-  анна: ['аня'], мария: ['маша'], ольга: ['оля'], татьяна: ['таня'], елена: ['лена'], светлана: ['света'], наталья: ['наташа'], наталия: ['наташа'],
-  вячеслав: ['слава'], станислав: ['стас'], ярослав: ['слава'], владимир: ['вова'], павел: ['паша'], иван: ['ваня'], артем: ['тема'],
-  даниил: ['даня'], данил: ['даня'], кирилл: ['кир'], роман: ['рома'], виктория: ['вика'], валерия: ['лера'], ксения: ['ксюша'], дарья: ['даша'],
+  анна: ['аня'], мария: ['маша'], ольга: ['оля'], татьяна: ['таня'], елена: ['лена'], наталья: ['наташа'], наталия: ['наташа'],
+  станислав: ['стас'], владимир: ['вова'], павел: ['паша'], иван: ['ваня'],
+  даниил: ['даня'], данил: ['даня'], роман: ['рома'], виктория: ['вика'], валерия: ['лера'], ксения: ['ксюша'], дарья: ['даша'],
 }
 
 /** Как ещё можно назвать эту часть имени: кириллицей и коротким именем. */
@@ -162,9 +164,11 @@ async function hasNamesake(owner, people, texts) {
   // «Фёдор» и «Федор» или падежи разошлись бы. Кандидаты — только те, кому
   // просящий может писать.
   const team = await prisma.user.findMany({ where: teamWhere(owner), select: { id: true, name: true } })
-  const bases = (person) => new Set(nameTokens(person).map(nameBase).filter(Boolean))
+  // Те же варианты, что у namedTokens: латиница и короткие имена. Иначе «Саша»
+  // нашёл бы Alexandr, а тёзку Александру проверка бы не увидела.
+  const bases = (person) => new Set(nameTokens(person).flatMap(nameVariants).map(nameBase).filter(Boolean))
   for (const p of people) {
-    const found = namedTokens(p.person, texts).map(nameBase).filter(Boolean)
+    const found = namedTokens(p.person, texts).map((t) => nameBase(toCyrillic(t) ?? t)).filter(Boolean)
     if (!found.length) continue
     if (team.some((c) => c.id !== p.person.id && found.every((b) => bases(c).has(b)))) return true
   }
@@ -539,9 +543,12 @@ export async function forwardReply(targetId, messageIds) {
   if (!ids.length) return false
   const target = await prisma.botRoundTarget.findUnique({
     where: { id: targetId },
-    include: { user: PERSON, round: { select: { ownerId: true, kind: true, live: true, status: true } } },
+    include: { user: PERSON, round: { select: { ownerId: true, kind: true, live: true, status: true, owner: PERSON } } },
   })
   if (!target || target.round.kind !== 'ask' || !target.round.live || target.round.status !== 'sent') return false
+  // Того, кто поручил, могли отключить или перевести: чужому отделу ответ не шлём.
+  const owner = target.round.owner
+  if (!owner?.active || !['admin', 'lead'].includes(owner.role) || !inTeam(owner, target.user)) return false
   const chatId = await chatOf(target.round.ownerId)
   if (!chatId) return false
   const messages = await prisma.botMessage.findMany({
@@ -549,7 +556,9 @@ export async function forwardReply(targetId, messageIds) {
     orderBy: { createdAt: 'asc' },
     select: { id: true, direction: true, text: true, fileId: true, fileKind: true, fileMime: true, createdAt: true },
   })
-  if (!messages.length || !(await claimNotice(`round-fwd:${messages[0].id}`))) return false
+  if (!messages.length) return false
+  const key = `round-fwd:${messages[0].id}`
+  if (!(await claimNotice(key))) return false
   const label = labelsFor([target.user]).get(target.userId)
   const words = messages.map((m) => m.text).filter((t) => t && !/^\[[^\]]+\]$/.test(t)).join('\n')
   const files = messages.filter((m) => m.fileId).length
@@ -557,6 +566,9 @@ export async function forwardReply(targetId, messageIds) {
   if (words) lines.push(escapeHtml(cut(words, 1500)))
   if (files) lines.push(`Файлов ${files}, ниже`)
   const res = await tellChat(chatId, lines.join('\n'), { userId: target.round.ownerId, source: 'report' })
+  // Телеграм попросил подождать: ключ свободен, следующее сообщение человека
+  // или итог опроса не потеряют ответ, он есть в отчёте по get_round.
+  if (!res.ok && res.retry && !res.unsure) await releaseNotice(key)
   if (files && (res.ok || res.unsure)) await sendFiles(chatId, target.round.ownerId, label, messages)
   return Boolean(res.ok)
 }
@@ -834,7 +846,12 @@ export async function sendRoundReport(roundId, now = new Date()) {
       // Ответы уже ушли по одному. В срок — только кто промолчал, а если
       // ответили все, ничего: лишнее сообщение не нужно.
       const text = liveCloseText({ round, ...people })
-      if (text) await sendPart(round.id, 'text', () => tellChat(chatId, text, { userId: round.ownerId, source: 'report' }))
+      const res = text ? await sendPart(round.id, 'text', () => tellChat(chatId, text, { userId: round.ownerId, source: 'report' })) : { ok: true }
+      if (!res.ok && !res.unsure) {
+        if (res.exhausted) await tellChat(chatId, `Итог опроса «${escapeHtml(cut(round.topic, 80))}» не дошёл из-за сбоя\nСпроси меня, кто не ответил`, { userId: round.ownerId }).catch(() => {})
+        await (res.retry ? retry() : close())
+        return { ok: false, reason: 'telegram' }
+      }
       await close()
       return { ok: true, reason: 'live' }
     }

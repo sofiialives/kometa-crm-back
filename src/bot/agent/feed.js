@@ -276,8 +276,14 @@ async function ownerAutoFeed() {
   // Длинный список делим, чтобы телеграм не резал сообщение посередине.
   for (let i = 0; i < fresh.length; i += 30) {
     const part = fresh.slice(i, i + 30)
-    const res = await tellOwners(ownerAutoText(part))
-    if (!res?.ok && res?.retry && !res?.unsure) for (const e of part) await releaseNotice(`owner-auto:${e.id}`)
+    let res = null
+    try {
+      res = await tellOwners(ownerAutoText(part))
+    } finally {
+      // Не дошло и не «может быть дошло» — вернём в очередь, Ян не должен
+      // остаться без объяснения, за что сняли баллы.
+      if (!res?.ok && !res?.unsure) for (const e of part) await releaseNotice(`owner-auto:${e.id}`)
+    }
   }
 }
 
