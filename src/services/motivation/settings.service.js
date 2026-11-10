@@ -504,8 +504,8 @@ export async function updateEventType(actor, id, body) {
   if (CALL_KEYS.includes(type.systemKey) && mode !== 'manual') {
     throw ApiError.badRequest('Звонок отмечают в журнале звонка — автоматическим это событие быть не может')
   }
-  if (type.systemKey === CHECKIN_KEY && mode !== 'manual') {
-    throw ApiError.badRequest('Это событие снимает бот на внезапном чек-ине — правило по задачам к нему не подходит')
+  if ([CHECKIN_KEY, 'checkin_answered'].includes(type.systemKey) && mode !== 'manual') {
+    throw ApiError.badRequest('Это событие ставит бот на внезапном чек-ине — правило по задачам к нему не подходит')
   }
 
   const data = { mode, autoRule, review }
