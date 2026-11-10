@@ -132,20 +132,34 @@ export function nameVariants(token) {
  * большой буквы: иначе «любой» и «в свете» назвали бы человека.
  */
 export function namedTokens(person, texts) {
+  return namedMatches(person, texts).map((m) => m.token)
+}
+
+/**
+ * Части имени человека и слова просьбы, по которым они узнаны: «Николай» по
+ * слову «николаю». По словам сравниваются тёзки (hasNamesake).
+ */
+export function namedMatches(person, texts) {
   const words = texts.flatMap((text) => String(text ?? '').replace(/ё/g, 'е').replace(/Ё/g, 'Е').match(/[\p{L}]+/gu) ?? [])
-  return nameTokens(person).filter((token) => nameVariants(token).some((variant) => {
-    const { base, ends } = caseForms(variant)
-    // Короткое имя из списка («Аня», «Оля»): основа из двух букв, только с
-    // большой буквы. Само имя из двух букв («Ян») не засчитываем, как и раньше.
+  const out = []
+  for (const token of nameTokens(person)) {
     const full = toCyrillic(token) ?? token.toLowerCase().replace(/ё/g, 'е')
-    const isShort = variant !== full && (SHORT_NAMES[full] ?? []).includes(variant)
-    if (base.length < (isShort ? 2 : 3)) return false
-    return words.some((word) => {
-      const w = word.toLowerCase()
-      if (!w.startsWith(base) || !ends.includes(w.slice(base.length))) return false
-      return base.length > 4 || /^\p{Lu}/u.test(word)
-    })
-  }))
+    const hit = new Set()
+    for (const variant of nameVariants(token)) {
+      const { base, ends } = caseForms(variant)
+      // Короткое имя из списка («Аня», «Оля»): основа из двух букв, только с
+      // большой буквы. Само имя из двух букв («Ян») не засчитываем, как и раньше.
+      const isShort = variant !== full && (SHORT_NAMES[full] ?? []).includes(variant)
+      if (base.length < (isShort ? 2 : 3)) continue
+      for (const word of words) {
+        const w = word.toLowerCase()
+        if (!w.startsWith(base) || !ends.includes(w.slice(base.length))) continue
+        if (base.length > 4 || /^\p{Lu}/u.test(word)) hit.add(w)
+      }
+    }
+    if (hit.size) out.push({ token, words: [...hit] })
+  }
+  return out
 }
 
 /** Назван ли человек в тексте просьбы: его имя или фамилия, в любом падеже. */
@@ -160,14 +174,23 @@ export function isNamedIn(person, texts) {
  * пределах видимости просящего, не по всей базе.
  */
 async function hasNamesake(owner, people, texts) {
-  // Тот же разбор, что и у получателей: если текст просьбы называет ещё
-  // кого-то из тех, кому просящий может писать, модель могла выбрать не того
-  // («Саша» это и Alexandr, и Александра). Тогда черновик.
+  // Тёзка — другой человек, которого просьба называет теми же словами: «Саше»
+  // это и Alexandr, и Александра, даже если модель выбрала обоих. «Николаю
+  // Волкову» Николая Петрова не называет: слова «волкову» у него нет.
+  // Сравниваем только с теми, кому просящий может писать.
   const team = await prisma.user.findMany({ where: teamWhere(owner), select: { id: true, name: true } })
-  // Названы имя и фамилия, а у тёзки совпало только имя — текст их различает.
-  const chosen = new Set(people.map((p) => p.person.id))
-  const least = Math.min(...people.map((p) => namedTokens(p.person, texts).length))
-  return team.some((c) => !chosen.has(c.id) && namedTokens(c, texts).length >= Math.max(1, least))
+  return namesakeIn(team, people.map((p) => p.person), texts)
+}
+
+/** Есть ли в team кто-то, кроме самого получателя, кого просьба называет теми же словами. */
+export function namesakeIn(team, recipients, texts) {
+  const wordsOf = (person) => new Set(namedMatches(person, texts).flatMap((m) => m.words))
+  for (const p of recipients) {
+    const mine = wordsOf(p)
+    if (!mine.size) continue
+    if (team.some((c) => c.id !== p.id && [...mine].every((w) => wordsOf(c).has(w)))) return true
+  }
+  return false
 }
 
 // Просьбы о данных и деньгах уходят людям только через черновик. Текст

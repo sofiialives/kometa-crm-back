@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '../../config/prisma.js'
 import { ownerAutoText } from '../agent/feed.js'
-import { confirmText, directNote, forwardReply, isNamedIn, liveCloseText, nameVariants, sentNote, toCyrillic } from '../agent/rounds.js'
+import { confirmText, directNote, forwardReply, isNamedIn, liveCloseText, namesakeIn, nameVariants, sentNote, toCyrillic } from '../agent/rounds.js'
 import { botHarness } from './harness.js'
 import { patch } from './patch.js'
 
@@ -98,5 +98,26 @@ describe('Яну про автоначисления', () => {
     assert.match(text, /Денис Костоглодов, \+1 балл, личная задача закрыта в срок «Подписка ChatGPT»/)
     assert.match(text, /Роман Котов, −2 балла|Роман Котов, -2 балла/)
     assert.doesNotMatch(text, /агент сам|—/)
+  })
+})
+
+describe('тёзки по словам просьбы', () => {
+  const vlad = { id: 'v', name: 'Vladislav' }
+  const alex = { id: 'a', name: 'Alex' }
+  const sashaM = { id: 's1', name: 'Alexandr' }
+  const sashaF = { id: 's2', name: 'Александра Ким' }
+  const volkov = { id: 'n1', name: 'Николай Волков' }
+  const petrov = { id: 'n2', name: 'Николай Петров' }
+  const team = [vlad, alex, sashaM, sashaF, volkov, petrov]
+  test('Влад и Алекс разные люди: черновик не нужен', () => {
+    assert.equal(namesakeIn(team, [vlad, alex], ['Узнай у Влада и Алекса']), false)
+  })
+  test('«Саше»: Alexandr и Александра, даже если выбраны оба', () => {
+    assert.equal(namesakeIn(team, [sashaM], ['Напиши Саше']), true)
+    assert.equal(namesakeIn(team, [sashaM, sashaF], ['Напиши Саше']), true)
+  })
+  test('имя и фамилия различают тёзок, одно имя нет', () => {
+    assert.equal(namesakeIn(team, [volkov], ['Напиши Николаю Волкову']), false)
+    assert.equal(namesakeIn(team, [volkov], ['Напиши Николаю']), true)
   })
 })
