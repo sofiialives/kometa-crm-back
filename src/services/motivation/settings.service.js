@@ -219,63 +219,47 @@ async function copyConditions(tx, source, profileId) {
   }
 }
 
+/**
+ * События по умолчанию в каждом профиле, список Яна от 9.11 в его порядке.
+ * Системные (systemKey) нужны кнопкам, журналу звонка и чек-ину. Задачи «в
+ * срок» и просрочки — на решение владельцу («баллы начисляю сам»), «не
+ * расставил задачи до 10:00» — сразу. «Нет ответа 45 минут» и прочие плюсы и
+ * минусы ставит владелец вручную. Суммы он меняет как обычно. Тот же список
+ * дописан в уже созданные профили миграцией 20261111110000_default_events.
+ */
+export const DEFAULT_EVENTS = [
+  { title: 'Клиент купил дополнительный продукт', example: 'Клиент, с которым вы работали, заказал у агентства ещё одну услугу', points: 10, mode: 'manual', systemKey: PRODUCT_KEY },
+  { title: 'Был на вечернем звонке', example: 'Владелец отметил вас в журнале звонка', points: 1, mode: 'manual', systemKey: 'call_attended' },
+  { title: 'Пропустил звонок', example: 'Не было на вечернем звонке без предупреждения', points: -2, mode: 'manual', systemKey: 'call_missed' },
+  { title: 'Ответил на внезапный чек-ин', example: 'Бот спросил, чем вы заняты, и вы ответили в течение 45 минут', points: 2, mode: 'manual', systemKey: 'checkin_answered' },
+  { title: 'Не ответил на внезапный чек-ин', example: 'Бот спросил, чем вы заняты, а ответа не было 45 минут и вы не предупреждали, что отойдёте', points: -3, mode: 'manual', systemKey: 'checkin_missed' },
+  { title: RULE_TITLE.task_on_time, points: 5, mode: 'auto', autoRule: 'task_on_time', review: true },
+  { title: RULE_TITLE.personal_task_on_time, points: 1, mode: 'auto', autoRule: 'personal_task_on_time', review: true },
+  { title: RULE_TITLE.personal_task_overdue, points: -2, mode: 'auto', autoRule: 'personal_task_overdue', review: true },
+  { title: RULE_TITLE.task_overdue, points: -2, mode: 'auto', autoRule: 'task_overdue', review: true },
+  { title: 'Больше 45 минут нет ответа агенту без предупреждения', example: 'Агент написал по делу, а ответа не было 45 минут и вы не предупреждали, что отойдёте', points: -3, mode: 'manual' },
+  { title: 'Больше 45 минут нет ответа Яну без предупреждения', example: 'Ян написал, а ответа не было 45 минут и вы не предупреждали, что отойдёте', points: -3, mode: 'manual' },
+  { title: 'После 10:00 не стоит ни одной задачи', points: -2, mode: 'auto', autoRule: 'tasks_not_set', review: false },
+  { title: 'Прочие плюсы', example: 'По договорённости с Яном в личке', points: 1, mode: 'manual' },
+  { title: 'Прочие минусы', example: 'По договорённости с Яном в личке', points: -1, mode: 'manual' },
+  { title: 'Задача отмечена выполненной, а по факту нет', example: 'Неважно, из Иерархии или личная', points: -10, mode: 'manual' },
+]
+
 /** Стандартный набор событий, которые должны быть в каждом профиле. */
 async function seedSystemEvents(tx, profileId) {
-  // Системные события нужны кнопкам и журналу, поэтому есть в каждом
-  // профиле с самого начала. Цену владелец поменяет как обычно.
   await tx.motivationEventType.createMany({
-    data: [
-      {
-        profileId,
-        title: 'Клиент купил дополнительный продукт',
-        example: 'Клиент, с которым вы работали, заказал у агентства ещё одну услугу',
-        prizePoints: 10,
-        levelPoints: 10,
-        mode: 'manual',
-        systemKey: PRODUCT_KEY,
-        position: 1,
-      },
-      {
-        profileId,
-        title: 'Был на вечернем звонке',
-        example: 'Владелец отметил вас в журнале звонка',
-        prizePoints: 1,
-        levelPoints: 1,
-        mode: 'manual',
-        systemKey: 'call_attended',
-        position: 2,
-      },
-      {
-        profileId,
-        title: 'Пропустил звонок',
-        example: 'Не было на вечернем звонке без предупреждения',
-        prizePoints: -2,
-        levelPoints: -2,
-        mode: 'manual',
-        systemKey: 'call_missed',
-        position: 3,
-      },
-      {
-        profileId,
-        title: 'Ответил на внезапный чек-ин',
-        example: 'Бот спросил, чем вы заняты, и вы ответили в течение 45 минут',
-        prizePoints: 2,
-        levelPoints: 2,
-        mode: 'manual',
-        systemKey: 'checkin_answered',
-        position: 4,
-      },
-      {
-        profileId,
-        title: 'Не ответил на внезапный чек-ин',
-        example: 'Бот спросил, чем вы заняты, а ответа не было 45 минут и вы не предупреждали, что отойдёте',
-        prizePoints: -3,
-        levelPoints: -3,
-        mode: 'manual',
-        systemKey: 'checkin_missed',
-        position: 5,
-      },
-    ],
+    data: DEFAULT_EVENTS.map((e, i) => ({
+      profileId,
+      title: e.title,
+      example: e.example ?? null,
+      prizePoints: e.points,
+      levelPoints: e.points,
+      mode: e.mode,
+      autoRule: e.autoRule ?? null,
+      review: e.review ?? false,
+      systemKey: e.systemKey ?? null,
+      position: i + 1,
+    })),
   })
 }
 
