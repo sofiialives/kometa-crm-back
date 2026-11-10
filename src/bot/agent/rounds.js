@@ -160,19 +160,14 @@ export function isNamedIn(person, texts) {
  * пределах видимости просящего, не по всей базе.
  */
 async function hasNamesake(owner, people, texts) {
-  // Тот же разбор имён, что и в namedTokens, а не contains в базе: иначе
-  // «Фёдор» и «Федор» или падежи разошлись бы. Кандидаты — только те, кому
-  // просящий может писать.
+  // Тот же разбор, что и у получателей: если текст просьбы называет ещё
+  // кого-то из тех, кому просящий может писать, модель могла выбрать не того
+  // («Саша» это и Alexandr, и Александра). Тогда черновик.
   const team = await prisma.user.findMany({ where: teamWhere(owner), select: { id: true, name: true } })
-  // Те же варианты, что у namedTokens: латиница и короткие имена. Иначе «Саша»
-  // нашёл бы Alexandr, а тёзку Александру проверка бы не увидела.
-  const bases = (person) => new Set(nameTokens(person).flatMap(nameVariants).map(nameBase).filter(Boolean))
-  for (const p of people) {
-    const found = namedTokens(p.person, texts).map((t) => nameBase(toCyrillic(t) ?? t)).filter(Boolean)
-    if (!found.length) continue
-    if (team.some((c) => c.id !== p.person.id && found.every((b) => bases(c).has(b)))) return true
-  }
-  return false
+  // Названы имя и фамилия, а у тёзки совпало только имя — текст их различает.
+  const chosen = new Set(people.map((p) => p.person.id))
+  const least = Math.min(...people.map((p) => namedTokens(p.person, texts).length))
+  return team.some((c) => !chosen.has(c.id) && namedTokens(c, texts).length >= Math.max(1, least))
 }
 
 // Просьбы о данных и деньгах уходят людям только через черновик. Текст
