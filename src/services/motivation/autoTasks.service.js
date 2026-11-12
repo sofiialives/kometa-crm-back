@@ -27,6 +27,39 @@ import { isWorkday, mskDayKey } from '../../bot/plan.js'
 
 const RETURNED_REASON = 'Задачу вернули из «Готово»'
 
+/**
+ * Отчёт владельцу о том, что бот начислил или снял автоматически (без
+ * решения, review: false) — по заданию такие отчёты должны приходить сами,
+ * а не ждать, пока владелец ответит. Сервис мотивации не должен
+ * зависеть от слоя бота (см. выше), поэтому саму отправку внедряет бот
+ * при старте через setAutoNotifier (src/bot/index.js); до этого — молча
+ * копим в лог. Падение отправки никогда не должно портить начисление баллов.
+ */
+let notifyOwnersFn = null
+export function setAutoNotifier(fn) {
+  notifyOwnersFn = typeof fn === 'function' ? fn : null
+}
+async function notifyAuto(text) {
+  if (!notifyOwnersFn) return
+  try {
+    await notifyOwnersFn(text)
+  } catch (e) {
+    console.error('[motivation] отчёт владельцу не ушёл:', e.message)
+  }
+}
+
+/**
+ * Простой текст отчёта: имя, знак баллов, название правила и повод. Без
+ * html-разметки и форматирования под телеграм-бот — это дело бота: сервис
+ * мотивации отдаёт только факт, оформляет его notifyOwnersFn на стороне бота.
+ */
+async function autoLine(userId, pts, ruleTitle, about) {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } })
+  const who = user?.name?.trim() || user?.email || 'Сотрудник'
+  const sign = pts > 0 ? '+' : ''
+  return `${who}: ${sign}${pts} баллов — ${ruleTitle}${about ? ` (${about})` : ''}`
+}
+
 // Запись занимает место, если она живая или её отменил человек — см.
 // holdsSlot в taskRules.js. Отменённая системой место освобождает.
 const HOLDS_SLOT = { OR: [{ cancelledAt: null }, { cancelledById: { not: null } }] }
@@ -115,7 +148,7 @@ export async function awardOnTime(task, settings) {
   if (!found) return null
   const { type, profile } = found
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     await lockUser(tx, task.ownerId)
     // Пока ждали замка, задачу могли вернуть из «Готово» — тогда баллов нет.
     const fresh = await tx.task.findUnique({ where: { id: task.id }, select: { status: true, doneAt: true } })
@@ -168,6 +201,12 @@ export async function awardOnTime(task, settings) {
       data: autoEventData({ task, rule, type, profile, prizePoints, levelPoints, at, key: at.getTime() }),
     })
   })
+  // review:true ушло заявкой в «Ждут решения» — её и так увидит владелец
+  // там; отчёт отдельно нужен только тому, что списалось/начислилось сразу.
+  if (result && !type.review) {
+    await notifyAuto(await autoLine(task.ownerId, result.prizePoints, type.title, `задача «${task.title}»`))
+  }
+  return result
 }
 
 /**
@@ -290,11 +329,13 @@ export async function chargeOverdue(now = new Date()) {
 }
 
 /**
- * Просрочка задачи: каждая разобранная ночь — штраф или заявка владельцу,
- * смотря как настроено событие в профиле человека на ту ночь.
+ * Просрочка задачи: разобранная ночь — штраф сразу или заявка владельцу,
+ * смотря как настроено событие в профиле человека на ту ночь (по
+ * умолчанию — сразу, без решения: review: false). И для задачи из
+ * Иерархии, и для личной — штраф одноразовый, флэт, за первую же
+ * разобранную ночь просрочки, а не за каждую последующую ночь подряд:
+ * иначе «просрочил один раз» каждую полночь списывало бы ещё раз.
  */
-const OWNER_DECIDES = new Set(['task_overdue', 'personal_task_overdue'])
-
 async function chargeTask(task, settings, now, open = () => true) {
   const rule = ruleFor(task, 'overdue')
   let nights = overdueNights({
@@ -304,28 +345,36 @@ async function chargeTask(task, settings, now, open = () => true) {
     now,
   })
   nights = nights.filter(open)
-  // Личная просрочка штрафуется один раз — за первую же разобранную ночь.
-  if (rule === 'personal_task_overdue') nights = nights.slice(0, 1)
+  // Просрочка штрафуется один раз — за первую же разобранную ночь, и у
+  // задачи из Иерархии, и у личной.
+  if (rule === 'personal_task_overdue' || rule === 'task_overdue') nights = nights.slice(0, 1)
 
   let charged = 0
   for (const night of nights) {
     const found = await autoEventType(task.ownerId, rule, night.at, settings)
     if (!found) continue
-    // Просрочку Ян решает сам: бот не снимает баллы, а кладёт заявку в
-    // «На проверке», как бы ни было настроено событие. Иначе за задачу с
-    // перенесённым сроком или закрытую мимо CRM баллы уходят молча.
-    const outcome = found.type.review || OWNER_DECIDES.has(rule)
+    // По умолчанию штраф списывается сразу (review: false на событии).
+    // Админ может вручную включить «на решение» в условиях профиля —
+    // тогда бот кладёт заявку в «На проверке» вместо списания.
+    const outcome = found.type.review
       ? await proposeNight(task, rule, night, found.type, settings)
       : await chargeNight(task, rule, night, found, settings)
     if (outcome === 'capped') break
-    if (outcome === 'created') charged += 1
+    if (outcome === 'created') {
+      charged += 1
+      // review:false — списалось сразу, без решения владельца: по заданию
+      // такое должно отправляться ему отчётом, а не ждать, пока он ответит.
+      if (!found.type.review) {
+        await notifyAuto(await autoLine(task.ownerId, found.type.prizePoints, found.type.title, `задача «${task.title}»`))
+      }
+    }
   }
   return charged
 }
 
 /** Штраф за одну ночь просрочки сразу в журнал. */
 function chargeNight(task, rule, night, { type, profile }, settings) {
-  const key = rule === 'personal_task_overdue' ? 'once' : night.dayKey
+  const key = rule === 'personal_task_overdue' || rule === 'task_overdue' ? 'once' : night.dayKey
   return prisma.$transaction(async (tx) => {
     await lockUser(tx, task.ownerId)
     const dedupeKey = autoKey(rule, task.id, key)
@@ -351,10 +400,10 @@ function chargeNight(task, rule, night, { type, profile }, settings) {
 }
 
 /**
- * Просрочка на решение владельцу: вместо штрафа — заявка. У задачи из
- * Иерархии каждая ночь добавляет штраф в одну ждущую заявку («просрочено
- * 3 ночи, снять 6»), пока владелец не решит; лимит на задачу тот же, в него
- * идут и уже начисленные по заявкам штрафы. Личная просрочка — одна заявка.
+ * Просрочка на решение владельцу (только если он сам включил «на решение»
+ * в условиях события — по умолчанию списывается сразу, см. chargeTask):
+ * вместо штрафа — заявка, одна на задачу, за первую же разобранную ночь.
+ * Лимит на задачу тот же, в него идут и уже начисленные по заявкам штрафы.
  * Отклонил владелец заявку по задаче — больше по ней не предлагаем.
  */
 function proposeNight(task, rule, night, type, settings) {
@@ -394,7 +443,7 @@ function proposeNight(task, rule, night, type, settings) {
       await tx.motivationReview.create({
         data: reviewData({
           task, rule, type, prizePoints, levelPoints, at: night.at,
-          key: rule === 'personal_task_overdue' ? 'once' : night.dayKey,
+          key: rule === 'personal_task_overdue' || rule === 'task_overdue' ? 'once' : night.dayKey,
           nights: [night.dayKey],
         }),
       })
@@ -524,7 +573,10 @@ export async function chargeTasksNotSet(now = new Date()) {
         }
         return true
       })
-      if (created) charged += 1
+      if (created) {
+        charged += 1
+        if (!found.type.review) await notifyAuto(await autoLine(person.id, found.type.prizePoints, found.type.title, null))
+      }
     } catch (e) {
       // Один сломанный человек не должен оставить без проверки остальных.
       console.error('[motivation] штраф «не расставил задачи» не записался', person.id, e)

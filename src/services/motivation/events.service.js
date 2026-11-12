@@ -31,10 +31,11 @@ const EVENT_INCLUDE = {
 }
 
 // Баллы на одно событие. Шкала — сто баллов на месяц, поэтому больше ста
-// за раз не бывает даже в корректировке.
+// за раз не бывает даже в корректировке. Значение может быть дробным
+// (например, 2.5 или -0.5).
 function assertPoints(value, label) {
-  if (!Number.isInteger(value) || value < -100 || value > 100) {
-    throw ApiError.badRequest(`${label}: целое число от −100 до 100`)
+  if (!Number.isFinite(value) || value < -100 || value > 100) {
+    throw ApiError.badRequest(`${label}: число от −100 до 100`)
   }
 }
 

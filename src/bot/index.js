@@ -4,7 +4,8 @@ import { broadcast, runRemindersOnce } from './reminders.js'
 import { pruneNotices, runAgentOnce, runEvening, runMorning } from './agent/index.js'
 import { drain, startPolling } from './updates.js'
 import { whoAmI } from './telegram.js'
-import { chargeTasksNotSet } from '../services/motivation/autoTasks.service.js'
+import { chargeTasksNotSet, setAutoNotifier } from '../services/motivation/autoTasks.service.js'
+import { tellOwners } from './agent/notify.js'
 
 const MSK = { timezone: 'Europe/Moscow' }
 
@@ -53,6 +54,11 @@ export async function startBot() {
     return
   }
 
+  // Отчёты о том, что мотивация начислила/списала автоматически (задачи
+  // в срок и просрочки, «не расставил задачи», молчание агенту) — сразу
+  // владельцу, без токена бота отправлять некому. См. комментарий у
+  // setAutoNotifier в autoTasks.service.js.
+  setAutoNotifier(tellOwners)
   startPolling()
   // Выкладка на Render: дождаться ответов агента на начатые сообщения.
   process.once('SIGTERM', () => {

@@ -6,9 +6,11 @@ import { proposeTask } from '../agent/offers.js'
 import { setTaskStatusByTitle } from '../agent/tasks.js'
 import { escapeHtml, uploadDocument } from '../telegram.js'
 import { parseUntil } from '../parse.js'
-import { personBrief, teamBrief, worksBrief } from './context.js'
+import { personBrief, personInScope, teamBrief, teamWhere, worksBrief } from './context.js'
 import { documentFile, tableFile } from './files.js'
 import { forgetStyle, listStyleNotes, rememberStyle } from './styleNotes.js'
+import { prisma } from '../../config/prisma.js'
+import { addManual } from '../../services/motivation/events.service.js'
 
 /**
  * Инструменты агента. Каждый — описание для модели и функция. Действия
@@ -320,6 +322,60 @@ export function teamTools(ctx, { team = false } = {}) {
       },
     },
   ]
+}
+
+/**
+ * Баллы текстом в чате бота: «отними у Андрея 2 балла», «накинь всем по
+ * баллу за хороший месяц». Только у владельца (вызывается ему одному,
+ * см. toolsFor в agent.js) — тот же путь, что и ручная корректировка в
+ * CRM (events.service.js, addManual), поэтому комментарий обязателен и
+ * каждому отдельная запись в истории. Балл может быть дробным.
+ */
+export function pointsTools(ctx) {
+  const { user } = ctx
+  return [{
+    name: 'adjust_points',
+    description: 'Добавить или снять баллы мотивации одному человеку или всем сразу — когда Ян прямо просит это текстом в чате. person_id — id человека из get_team/get_person; null — всем, кем Ян управляет. points — число со знаком, можно дробное (например 2.5 или -0.5), положительное добавляет, отрицательное снимает. reason — короткая причина, обязательна, видна в истории баллов человека.',
+    input_schema: object({
+      person_id: nullable('string', 'id человека из get_team/get_person. null — всем в команде.'),
+      points: { type: 'number', description: 'Сколько баллов, со знаком. Можно дробное.' },
+      reason: { type: 'string', description: 'Короткая причина для истории баллов.' },
+    }),
+    run: async (input) => {
+      const amount = Math.round(Number(input.points) * 100) / 100
+      if (!Number.isFinite(amount) || amount === 0) return 'Не понял число баллов, оно не может быть нулём. Спроси ещё раз, сколько и кому.'
+      if (Math.abs(amount) > 100) return 'Баллов за раз не больше 100. Спроси, сколько именно.'
+      const reason = String(input.reason ?? '').trim() || 'По запросу в чате бота'
+
+      let targets
+      if (input.person_id) {
+        const person = await personInScope(user, input.person_id)
+        if (!person) return 'Такого человека нет среди тех, кем ты управляешь. Возьми id из get_team или get_person.'
+        targets = [person]
+      } else {
+        targets = await prisma.user.findMany({ where: { AND: [teamWhere(user), { active: true }] }, select: { id: true, name: true } })
+        if (!targets.length) return 'В команде пока никого нет, кому ставить баллы.'
+      }
+
+      const done = []
+      const failed = []
+      for (const t of targets) {
+        try {
+          await addManual(user, {
+            userId: t.id, prizePoints: amount, levelPoints: amount, comment: reason,
+            requestKey: `ai-points:${Date.now()}:${t.id}:${Math.random().toString(36).slice(2, 8)}`,
+          })
+          done.push(t.name || t.id)
+        } catch (e) {
+          failed.push(`${t.name || t.id}: ${e.message}`)
+        }
+      }
+      const sign = amount > 0 ? '+' : ''
+      let summary = done.length ? `Поставил ${sign}${amount} баллов: ${done.join(', ')}.` : 'Никому не поставил.'
+      if (failed.length) summary += ` Не получилось: ${failed.join('; ')}.`
+      return `${summary} Скажи Яну коротко, что сделано. Этот инструмент для этой просьбы больше не зови.`
+    },
+  }]
 }
 
 /** В разговоре по поручению — записать ответ. */

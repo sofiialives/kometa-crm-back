@@ -220,12 +220,16 @@ async function copyConditions(tx, source, profileId) {
 }
 
 /**
- * События по умолчанию в каждом профиле, список Яна от 9.11 в его порядке.
- * Системные (systemKey) нужны кнопкам, журналу звонка и чек-ину. Задачи «в
- * срок» и просрочки — на решение владельцу («баллы начисляю сам»), «не
- * расставил задачи до 10:00» — сразу. «Нет ответа 45 минут» и прочие плюсы и
- * минусы ставит владелец вручную. Суммы он меняет как обычно. Тот же список
- * дописан в уже созданные профили миграцией 20261111110000_default_events.
+ * События по умолчанию в каждом профиле, список Яна от 9.11 в его порядке,
+ * правки от 12.11 (дробные баллы, всё автоматическое — без решения
+ * владельца). Системные (systemKey) нужны кнопкам, журналу звонка,
+ * чек-ину и штрафу за молчание агенту. Задачи «в срок» и просрочки,
+ * «не расставил задачи до 10:00» и «не ответил агенту 45 минут» —
+ * начисляются и снимаются сразу, автоматически (review: false). Прочие
+ * плюсы и минусы, и вечерний звонок — ставит владелец вручную, текстом в
+ * боте или кнопкой в CRM. Суммы он меняет как обычно, в том числе дробные.
+ * Тот же список дописан в уже созданные профили миграциями
+ * 20261111110000_default_events и 20261112120000_fractional_points.
  */
 export const DEFAULT_EVENTS = [
   { title: 'Клиент купил дополнительный продукт', example: 'Клиент, с которым вы работали, заказал у агентства ещё одну услугу', points: 10, mode: 'manual', systemKey: PRODUCT_KEY },
@@ -233,11 +237,16 @@ export const DEFAULT_EVENTS = [
   { title: 'Пропустил звонок', example: 'Не было на вечернем звонке без предупреждения', points: -2, mode: 'manual', systemKey: 'call_missed' },
   { title: 'Ответил на внезапный чек-ин', example: 'Бот спросил, чем вы заняты, и вы ответили в течение 45 минут', points: 2, mode: 'manual', systemKey: 'checkin_answered' },
   { title: 'Не ответил на внезапный чек-ин', example: 'Бот спросил, чем вы заняты, а ответа не было 45 минут и вы не предупреждали, что отойдёте', points: -3, mode: 'manual', systemKey: 'checkin_missed' },
-  { title: RULE_TITLE.task_on_time, points: 5, mode: 'auto', autoRule: 'task_on_time', review: true },
-  { title: RULE_TITLE.personal_task_on_time, points: 1, mode: 'auto', autoRule: 'personal_task_on_time', review: true },
-  { title: RULE_TITLE.personal_task_overdue, points: -2, mode: 'auto', autoRule: 'personal_task_overdue', review: true },
-  { title: RULE_TITLE.task_overdue, points: -2, mode: 'auto', autoRule: 'task_overdue', review: true },
-  { title: 'Больше 45 минут нет ответа агенту без предупреждения', example: 'Агент написал по делу, а ответа не было 45 минут и вы не предупреждали, что отойдёте', points: -3, mode: 'manual' },
+  // Все четыре правила ниже — полностью автоматически, без решения
+  // владельца (review: false): баллы начисляются или снимаются сразу же,
+  // как задача закрыта в срок или просрочена.
+  { title: RULE_TITLE.task_on_time, points: 5, mode: 'auto', autoRule: 'task_on_time', review: false },
+  { title: RULE_TITLE.personal_task_on_time, points: 1, mode: 'auto', autoRule: 'personal_task_on_time', review: false },
+  { title: RULE_TITLE.personal_task_overdue, points: -3, mode: 'auto', autoRule: 'personal_task_overdue', review: false },
+  { title: RULE_TITLE.task_overdue, points: -20, mode: 'auto', autoRule: 'task_overdue', review: false },
+  // Автоматически: бот сам считает 45 минут молчания по поручению агента
+  // (rounds.js, penalizeNoReply) и списывает баллы по этому systemKey.
+  { title: 'Больше 45 минут нет ответа агенту без предупреждения', example: 'Агент написал по делу, а ответа не было 45 минут и вы не предупреждали, что отойдёте', points: -5, mode: 'manual', systemKey: 'agent_no_reply' },
   { title: 'Больше 45 минут нет ответа Яну без предупреждения', example: 'Ян написал, а ответа не было 45 минут и вы не предупреждали, что отойдёте', points: -3, mode: 'manual' },
   { title: 'После 10:00 не стоит ни одной задачи', points: -2, mode: 'auto', autoRule: 'tasks_not_set', review: false },
   { title: 'Прочие плюсы', example: 'По договорённости с Яном в личке', points: 1, mode: 'manual' },

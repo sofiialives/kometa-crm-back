@@ -14,7 +14,7 @@ import { taskPrompt, TASK_SCHEMA } from './prompts.js'
 import { noLinks, plainStyle } from './style.js'
 import { currentTurn, ownerSystem, roundSection, staffSystem } from './system.js'
 import { personalNotesBlock, sharedNotesBlock } from './styleNotes.js'
-import { roundTools, staffTools, styleTools, teamTools } from './tools.js'
+import { pointsTools, roundTools, staffTools, styleTools, teamTools } from './tools.js'
 
 export { untilFrom } from './tools.js'
 export { noLinks, plainStyle } from './style.js'
@@ -105,7 +105,7 @@ export function limitText({ status, why }, owner) {
 
 /** Инструменты по тому, кто пишет и идёт ли разговор по поручению. */
 function toolsFor(ctx, { owner, lead, target }) {
-  if (owner) return [...teamTools(ctx), ...styleTools(ctx)]
+  if (owner) return [...teamTools(ctx), ...styleTools(ctx), ...pointsTools(ctx)]
   return [
     ...staffTools(ctx),
     ...styleTools(ctx),

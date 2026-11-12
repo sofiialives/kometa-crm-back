@@ -736,8 +736,8 @@ model MotivationEventType {
   // Баллы в шкалу премии и в шкалу уровня работы. По умолчанию одинаковые,
   // но админ может развести их, если событие должно влиять на шкалы
   // по-разному. Знак входит в число: штраф — отрицательные баллы.
-  prizePoints Int
-  levelPoints Int
+  prizePoints Float
+  levelPoints Float
 
   mode MotivationEventMode @default(manual)
 
@@ -931,8 +931,8 @@ model MotivationEvent {
   // Название и баллы копируются в момент начисления. Админ может потом
   // поменять событие в профиле, но уже начисленное от этого не меняется.
   title       String
-  prizePoints Int
-  levelPoints Int
+  prizePoints Float
+  levelPoints Float
 
   // Задачу держим без внешнего ключа: личные задачи ночная уборка CRM
   // удаляет, а запись о баллах за неё должна остаться.
@@ -995,8 +995,8 @@ model MotivationReview {
   // Название события и подсказанные баллы — на момент заявки. Владелец
   // может начислить другое число.
   title       String
-  prizePoints Int
-  levelPoints Int
+  prizePoints Float
+  levelPoints Float
 
   // Задачу держим без внешнего ключа, как и в журнале баллов: личные
   // задачи ночная уборка удаляет.
@@ -1121,8 +1121,8 @@ model MotivationMonthResult {
 
   bankCents    Int
   earnedCents  Int
-  prizePoints  Int
-  levelPoints  Int
+  prizePoints  Float
+  levelPoints  Float
   currentLevel Int
   levelsCount  Int
   eventsCount  Int

@@ -6,9 +6,10 @@ import { noLinks, plainStyle } from '../ai/style.js'
 import { inTeam, labelOf, labelsFor, personInScope, speaker, TALK_BEGIN, TALK_END, teamWhere } from '../ai/context.js'
 import { cut, plain } from '../ai/limits.js'
 import { activeAway } from './away.js'
-import { hm } from './format.js'
-import { chatOf, claimNotice, hasNotice, releaseNotice, tell, tellChat } from './notify.js'
+import { hm, points } from './format.js'
+import { chatOf, claimNotice, hasNotice, releaseNotice, tell, tellChat, tellOwners } from './notify.js'
 import { allTitlesDone, foreignTitles, SCAN_MAX, taskStates } from './roundTasks.js'
+import { assignmentAt } from '../../services/motivation/profiles.js'
 
 /**
  * Поручения агенту: «опроси команду, меня не будет два часа», «напиши
@@ -24,6 +25,10 @@ import { allTitlesDone, foreignTitles, SCAN_MAX, taskStates } from './roundTasks
 export const ROUND_DEFAULT_MIN = 60
 export const ROUND_MAX_MIN = 8 * 60
 const ROUND_MIN_MIN = 10
+// Штраф за молчание агенту: 45 минут без ответа и без предупреждения —
+// событие профиля «Больше 45 минут нет ответа агенту без предупреждения».
+const NO_REPLY_KEY = 'agent_no_reply'
+const NO_REPLY_MS = 45 * 60 * 1000
 // Сколько раз агент отвечает человеку в одном разговоре по поручению.
 export const ROUND_REPLIES_MAX = 6
 // Черновик без решения дольше трёх часов — устарел.
@@ -900,6 +905,48 @@ export async function sendRoundReport(roundId, now = new Date()) {
 }
 
 /**
+ * Штраф за молчание: агент написал по делу (поручение владельца или
+ * руководителя), а человек не ответил 45 минут и не предупредил, что
+ * отойдёт. Полностью автоматически — без решения владельца; событие берём
+ * из профиля человека по systemKey, баллы и текст там же. Отошёл или на
+ * форс-мажоре — не штрафуем. dedupeKey защищает от повтора: следующий
+ * проход тикера за ту же цель больше не спишет.
+ */
+async function penalizeNoReply(target, now) {
+  if (await activeAway(target.userId, now)) return null
+  const dedupeKey = `agent-no-reply:${target.id}`
+  if (await prisma.motivationEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return null
+  const assignment = await assignmentAt(target.userId, now)
+  const type = assignment?.profile?.eventTypes.find((t) => t.systemKey === NO_REPLY_KEY && t.enabled)
+  if (!type) return null
+  let event
+  try {
+    event = await prisma.motivationEvent.create({
+      data: {
+        userId: target.userId,
+        profileId: assignment.profileId,
+        eventTypeId: type.id,
+        kind: 'event',
+        mode: 'auto',
+        title: type.title,
+        prizePoints: type.prizePoints,
+        levelPoints: type.levelPoints,
+        comment: `Агент написал в ${hm(target.sentAt)}, ответа не было 45 минут`,
+        occurredAt: now,
+        dedupeKey,
+      },
+    })
+  } catch (e) {
+    // Тот же штраф уже поставил другой проход тикера одновременно.
+    if (e.code === 'P2002') return null
+    throw e
+  }
+  const user = await prisma.user.findUnique({ where: { id: target.userId }, select: { id: true, name: true, department: { select: { name: true } } } })
+  await tellOwners(`<b>${escapeHtml(labelOf(user))}</b> не ответил агенту 45 минут без предупреждения — автоматически ${points(type.prizePoints)}\n«${escapeHtml(cut(plain(target.text), 160))}»`)
+  return event
+}
+
+/**
  * Раз в минуту: напомнить молчащим на середине срока и прислать отчёт к
  * сроку — или раньше, когда ответили все. Отчёт, застрявший из-за
  * перезапуска, — взять снова.
@@ -913,7 +960,7 @@ export async function tickRounds(now = new Date()) {
     include: {
       targets: {
         select: {
-          id: true, userId: true, status: true, answeredAt: true,
+          id: true, userId: true, status: true, answeredAt: true, sentAt: true, text: true,
           _count: { select: { messages: { where: { direction: { in: IN } } } } },
         },
       },
@@ -926,6 +973,11 @@ export async function tickRounds(now = new Date()) {
       continue
     }
     const live = r.targets.filter((t) => t.status === 'sent' || t.status === 'answered')
+    // Молчит больше 45 минут — автоматический штраф, независимо от срока
+    // отчёта по поручению (он может быть и больше часа).
+    for (const t of live.filter((x) => x.status === 'sent' && x.sentAt && now.getTime() - x.sentAt.getTime() >= NO_REPLY_MS)) {
+      penalizeNoReply(t, now).catch((e) => console.error(`[агент] штраф за молчание: ${e.name}`))
+    }
     const lastAnswer = Math.max(0, ...live.map((t) => t.answeredAt?.getTime() ?? 0))
     const allDone = live.length > 0 && live.every((t) => t.status === 'answered') && now.getTime() - lastAnswer >= ALL_DONE_GRACE_MS
     if (r.deadlineAt <= now || allDone) {
