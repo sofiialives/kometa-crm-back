@@ -212,20 +212,21 @@ describe('текст сообщения', () => {
     }
     await runMorningRound(NOW, { ask: failing, eachMs: 40, totalMs: 4000 })
     const text = toUser(h, 'roman')[0].text
-    assert.equal(text, 'Доброе утро, Роман\nНа сегодня у тебя 2 задачи\nПросрочено 1\nОткрыто по Иерархии 3\nМожет, возьмёшь «Баннер для Румикс», она просрочена\nРасставь, пожалуйста, задачи на день')
+    // Иерархию утром не считаем, только личные задачи (Ян, 13.11).
+    assert.equal(text, 'Доброе утро, Роман\nНа сегодня у тебя 2 задачи\nПросрочено 1\nМожет, возьмёшь «Баннер для Румикс», она просрочена\nРасставь, пожалуйста, задачи на день')
     assert.equal(toUser(h, 'oleg')[0].text, 'Доброе утро, Олег\nНа сегодня в CRM пока нет задач\nРасставь, пожалуйста, задачи на день')
     assert.equal(toUser(h, 'nina').length, 1)
     for (const m of h.sent) assert.doesNotMatch(m.text, /10:00|штраф|балл/i)
   })
 
   test('ответ агента уходит как есть, предложенная задача запоминается в цели', async (t) => {
-    const hierTask = { id: 'h1', title: 'Лендинг', deadline: new Date('2026-11-10T09:00:00Z'), work: { title: 'Сайт', client: { name: 'Румикс' } } }
-    const { h, db } = world(t, { users: [roman, yan], hier: { roman: hierTask } })
+    const late = { id: 'x1', title: 'Обложка', deadline: new Date('2026-11-02T09:00:00Z'), work: null }
+    const { h, db } = world(t, { users: [roman, yan], overdue: { roman: late } })
     const seen = []
-    await runMorningRound(NOW, { ask: async (a) => { seen.push(a.offer); return 'Роман, доброе утро, возьмёшь «Лендинг»' } })
-    assert.equal(toUser(h, 'roman')[0].text, 'Роман, доброе утро, возьмёшь «Лендинг»')
-    assert.equal(seen[0].why, 'hierarchy')
-    assert.equal(db.targets[0].offeredTaskId, 'h1')
+    await runMorningRound(NOW, { ask: async (a) => { seen.push(a.offer); return 'Роман, доброе утро, возьмёшь «Обложку»' } })
+    assert.equal(toUser(h, 'roman')[0].text, 'Роман, доброе утро, возьмёшь «Обложку»')
+    assert.equal(seen[0].why, 'overdue')
+    assert.equal(db.targets[0].offeredTaskId, 'x1')
     // Источник и привязка к цели: ответ человека потом уйдёт в отчёт.
     assert.ok(h.logged.every((m) => m.source === 'round' && m.roundTargetId === db.targets[0].id))
   })
@@ -250,16 +251,16 @@ describe('текст сообщения', () => {
 })
 
 describe('какую задачу предлагает', () => {
-  test('сначала просроченная не начатая, потом открытая из Иерархии; нет ни той, ни другой, нет предложения', async (t) => {
+  test('предлагает только свою просроченную личную задачу, Иерархию не предлагает', async (t) => {
     const calls = []
-    patch(t, prisma.task, 'findFirst', async (q) => { calls.push(q); return calls.length === 1 ? null : { id: 'h', title: 'Лендинг', deadline: new Date(), work: { title: 'Сайт', client: { name: 'К' } } } })
+    patch(t, prisma.task, 'findFirst', async (q) => { calls.push(q); return { id: 'p', title: 'Обложка', deadline: new Date(), work: null } })
     const offer = await offerFor('roman', NOW)
-    assert.equal(offer.why, 'hierarchy')
-    assert.equal(offer.client, 'К')
-    const [first, second] = calls.map((c) => c.where.AND)
+    assert.equal(offer.why, 'overdue')
+    assert.equal(calls.length, 1)
+    const [first] = calls.map((c) => c.where.AND)
     assert.equal(first[1].status, 'today')
+    assert.equal(first[1].origin, 'personal')
     assert.ok(first[2].deadline.lt)
-    assert.equal(second[1].origin, 'hierarchy')
     patch(t, prisma.task, 'findFirst', async () => null)
     assert.equal(await offerFor('roman', NOW), null)
   })

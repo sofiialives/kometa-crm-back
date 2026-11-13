@@ -27,39 +27,6 @@ import { isWorkday, mskDayKey } from '../../bot/plan.js'
 
 const RETURNED_REASON = 'Задачу вернули из «Готово»'
 
-/**
- * Отчёт владельцу о том, что бот начислил или снял автоматически (без
- * решения, review: false) — по заданию такие отчёты должны приходить сами,
- * а не ждать, пока владелец ответит. Сервис мотивации не должен
- * зависеть от слоя бота (см. выше), поэтому саму отправку внедряет бот
- * при старте через setAutoNotifier (src/bot/index.js); до этого — молча
- * копим в лог. Падение отправки никогда не должно портить начисление баллов.
- */
-let notifyOwnersFn = null
-export function setAutoNotifier(fn) {
-  notifyOwnersFn = typeof fn === 'function' ? fn : null
-}
-async function notifyAuto(text) {
-  if (!notifyOwnersFn) return
-  try {
-    await notifyOwnersFn(text)
-  } catch (e) {
-    console.error('[motivation] отчёт владельцу не ушёл:', e.message)
-  }
-}
-
-/**
- * Простой текст отчёта: имя, знак баллов, название правила и повод. Без
- * html-разметки и форматирования под телеграм-бот — это дело бота: сервис
- * мотивации отдаёт только факт, оформляет его notifyOwnersFn на стороне бота.
- */
-async function autoLine(userId, pts, ruleTitle, about) {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } })
-  const who = user?.name?.trim() || user?.email || 'Сотрудник'
-  const sign = pts > 0 ? '+' : ''
-  return `${who}: ${sign}${pts} баллов — ${ruleTitle}${about ? ` (${about})` : ''}`
-}
-
 // Запись занимает место, если она живая или её отменил человек — см.
 // holdsSlot в taskRules.js. Отменённая системой место освобождает.
 const HOLDS_SLOT = { OR: [{ cancelledAt: null }, { cancelledById: { not: null } }] }
@@ -201,11 +168,6 @@ export async function awardOnTime(task, settings) {
       data: autoEventData({ task, rule, type, profile, prizePoints, levelPoints, at, key: at.getTime() }),
     })
   })
-  // review:true ушло заявкой в «Ждут решения» — её и так увидит владелец
-  // там; отчёт отдельно нужен только тому, что списалось/начислилось сразу.
-  if (result && !type.review) {
-    await notifyAuto(await autoLine(task.ownerId, result.prizePoints, type.title, `задача «${task.title}»`))
-  }
   return result
 }
 
@@ -362,23 +324,26 @@ async function chargeTask(task, settings, now, open = () => true) {
     if (outcome === 'capped') break
     if (outcome === 'created') {
       charged += 1
-      // review:false — списалось сразу, без решения владельца: по заданию
-      // такое должно отправляться ему отчётом, а не ждать, пока он ответит.
-      if (!found.type.review) {
-        await notifyAuto(await autoLine(task.ownerId, found.type.prizePoints, found.type.title, `задача «${task.title}»`))
-      }
     }
   }
   return charged
 }
 
 /** Штраф за одну ночь просрочки сразу в журнал. */
-function chargeNight(task, rule, night, { type, profile }, settings) {
+export function chargeNight(task, rule, night, { type, profile }, settings) {
   const key = rule === 'personal_task_overdue' || rule === 'task_overdue' ? 'once' : night.dayKey
   return prisma.$transaction(async (tx) => {
     await lockUser(tx, task.ownerId)
     const dedupeKey = autoKey(rule, task.id, key)
     if (await tx.motivationEvent.findUnique({ where: { dedupeKey }, select: { id: true } })) return 'exists'
+    // Штраф за эту задачу уже был: раньше ключ был по ночи, потом стал «once»,
+    // и смена ключа сняла бы второй раз (13.11). Отменённый тоже считается:
+    // отменили, значит снимать не надо.
+    if (await tx.motivationEvent.findFirst({ where: { dedupeKey: { startsWith: autoKeyPrefix(rule, task.id) } }, select: { id: true } })) return 'exists'
+    // По задаче уже была заявка владельцу. Ждёт решения, начислена или он
+    // нажал «Не снимать» — решает он, бот сам больше не снимает (13.11 бот
+    // снял по задачам, где Ян просрочку уже отклонил).
+    if (await tx.motivationReview.findFirst({ where: { taskId: task.id, rule, status: { not: 'withdrawn' } }, select: { id: true } })) return 'capped'
 
     // В лимит идут и штрафы, прощённые владельцем, и начисленные по
     // заявкам: иначе следующая ночь молча вернула бы то, что он простил,
@@ -573,10 +538,7 @@ export async function chargeTasksNotSet(now = new Date()) {
         }
         return true
       })
-      if (created) {
-        charged += 1
-        if (!found.type.review) await notifyAuto(await autoLine(person.id, found.type.prizePoints, found.type.title, null))
-      }
+      if (created) charged += 1
     } catch (e) {
       // Один сломанный человек не должен оставить без проверки остальных.
       console.error('[motivation] штраф «не расставил задачи» не записался', person.id, e)

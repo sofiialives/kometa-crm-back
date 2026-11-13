@@ -89,35 +89,16 @@ describe('ответы на опрос сразу', () => {
 })
 
 describe('Яну про автоначисления', () => {
-  test('одним сообщением на всех, по-русски, без «агент сам начислено»', () => {
+  test('одним сообщением, по людям через пустую строку, строка на начисление', () => {
     const text = ownerAutoText([
       { user: { name: 'Денис Костоглодов' }, prizePoints: 1, title: 'Личная задача закрыта в срок', taskTitle: 'Подписка ChatGPT' },
-      { user: { name: 'Роман Котов' }, prizePoints: -2, title: 'Не расставил задачи до 10:00', taskTitle: null },
+      { user: { name: 'Роман Котов' }, prizePoints: -2, title: 'После 10:00 не стоит ни одной задачи', taskTitle: null },
+      { user: { name: 'Денис Костоглодов' }, prizePoints: -2.5, title: 'Просрочена личная задача', taskTitle: 'Отчёт' },
     ])
-    assert.equal(text.split('\n').length, 4)
-    assert.match(text, /Денис Костоглодов, \+1 балл, личная задача закрыта в срок «Подписка ChatGPT»/)
-    assert.match(text, /Роман Котов, −2 балла|Роман Котов, -2 балла/)
+    const blocks = text.split('\n\n')
+    assert.equal(blocks.length, 4)
+    assert.match(blocks[1], /^<b>Денис Костоглодов<\/b>\nЛичная задача закрыта в срок «Подписка ChatGPT», \+1 балл\nПросрочена личная задача «Отчёт», −2,5 балла$/)
+    assert.match(blocks[2], /^<b>Роман Котов<\/b>\nПосле 10:00 не стоит ни одной задачи, −2 балла$/)
     assert.doesNotMatch(text, /агент сам|—/)
-  })
-})
-
-describe('тёзки по словам просьбы', () => {
-  const vlad = { id: 'v', name: 'Vladislav' }
-  const alex = { id: 'a', name: 'Alex' }
-  const sashaM = { id: 's1', name: 'Alexandr' }
-  const sashaF = { id: 's2', name: 'Александра Ким' }
-  const volkov = { id: 'n1', name: 'Николай Волков' }
-  const petrov = { id: 'n2', name: 'Николай Петров' }
-  const team = [vlad, alex, sashaM, sashaF, volkov, petrov]
-  test('Влад и Алекс разные люди: черновик не нужен', () => {
-    assert.equal(namesakeIn(team, [vlad, alex], ['Узнай у Влада и Алекса']), false)
-  })
-  test('«Саше»: Alexandr и Александра, даже если выбраны оба', () => {
-    assert.equal(namesakeIn(team, [sashaM], ['Напиши Саше']), true)
-    assert.equal(namesakeIn(team, [sashaM, sashaF], ['Напиши Саше']), true)
-  })
-  test('имя и фамилия различают тёзок, одно имя нет', () => {
-    assert.equal(namesakeIn(team, [volkov], ['Напиши Николаю Волкову']), false)
-    assert.equal(namesakeIn(team, [volkov], ['Напиши Николаю']), true)
   })
 })

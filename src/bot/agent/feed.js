@@ -237,14 +237,23 @@ async function ownerFeed() {
  */
 export function ownerAutoLine(e) {
   const taskPart = e.taskTitle ? ` «${escapeHtml(short(e.taskTitle, 80))}»` : ''
-  return `${nameOf(e.user)}, ${points(e.prizePoints)}, ${escapeHtml(lowerFirst(e.title))}${taskPart}`
+  return `${escapeHtml(e.title)}${taskPart}, ${points(e.prizePoints)}`
 }
 
-const lowerFirst = (t) => String(t ?? '').replace(/^\p{Lu}(?!\p{Lu})/u, (c) => c.toLowerCase())
-
-/** Все автоначисления прохода одним сообщением, а не по одному на человека. */
+/**
+ * Все автоначисления прохода одним сообщением: по людям, у каждого свои
+ * строки, между людьми пустая строка. Одна строка на одно начисление, без
+ * запятых подряд: Ян просил, чтобы читалось с первого раза (13.11).
+ */
 export function ownerAutoText(events) {
-  return [`<b>Бот сам начислил по правилам из профилей</b>`, ...events.map(ownerAutoLine), 'Отменить можно в карточке человека в CRM'].join('\n')
+  const byPerson = new Map()
+  for (const e of events) {
+    const name = nameOf(e.user)
+    if (!byPerson.has(name)) byPerson.set(name, [])
+    byPerson.get(name).push(ownerAutoLine(e))
+  }
+  const blocks = [...byPerson].map(([name, lines]) => [`<b>${name}</b>`, ...lines].join('\n'))
+  return ['<b>Бот сам начислил по правилам из профилей</b>', ...blocks, 'Отменить можно в карточке человека в CRM'].join('\n\n')
 }
 
 /**
