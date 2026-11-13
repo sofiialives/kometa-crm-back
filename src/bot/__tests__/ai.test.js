@@ -409,9 +409,9 @@ describe('стиль ответов', () => {
   })
 
   test('двоеточие остаётся только во времени и ссылках', () => {
-    assert.equal(plainStyle('Встреча в 15:30: берём ноутбук'), 'Встреча в 15:30, берём ноутбук')
+    assert.equal(plainStyle('Встреча в 15:30: берём ноутбук'), 'Встреча в 15:30\nБерём ноутбук')
     assert.equal(plainStyle('Итог:\nВсё готово'), 'Итог\nВсё готово')
-    assert.equal(plainStyle('Ответ: да'), 'Ответ, да')
+    assert.equal(plainStyle('Ответ: да'), 'Ответ\nДа')
     assert.equal(plainStyle('Смотри https://example.com/a и скажи'), 'Смотри https://example.com/a и скажи')
   })
 
@@ -441,7 +441,8 @@ describe('стиль ответов', () => {
     for (const text of [ownerSystem(), staffSystem()]) {
       assert.match(text, /как живой человек в телеграме/)
       assert.match(text, /Примеры живого тона/)
-      assert.match(text, /баннер почти готов, осталось шрифт подобрать/)
+      assert.match(text, /Баннер почти готов\nОсталось подобрать шрифт/)
+      assert.match(text, /не больше одной запятой/)
       assert.doesNotMatch(text, /ютуб|гугл|главной, позавчера|Антон|всё выполнит/)
       assert.doesNotMatch(text, /• /)
     }
@@ -499,7 +500,7 @@ describe('поручения', () => {
     })
     assert.match(text, /^<b>Отчёт по опросу<\/b>/)
     assert.match(text, /Ответили 1 из 2, написал в 15:30\n/)
-    assert.match(text, /<b>Александр, дизайн<\/b>\nБаннер для Румикс, Цепляющая главная, готов наполовину\nПричина, ждал правки\n<i>«Всё получается»<\/i>\nПрислал файлов 1/)
+    assert.match(text, /<b>Александр, дизайн<\/b>\nБаннер для Румикс, Цепляющая главная, готов наполовину\nПричина\nЖдал правки\n<i>«Всё получается»<\/i>\nПрислал файлов 1/)
     assert.match(text, /<b>Не ответили<\/b> Настя, SEO/)
   })
 

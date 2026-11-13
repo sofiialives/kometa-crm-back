@@ -49,16 +49,15 @@ export function plural(n, one, few, many) {
   return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many
 }
 
-// Иерархия расписана на месяцы вперёд, в том числе по услугам, которые клиент
-// ещё не купил: утром говорим только о том, что на этой неделе.
-const SOON_DAYS = 7
-const soon = (end) => new Date(end.getTime() + SOON_DAYS * 24 * 60 * 60 * 1000)
 // Ответы на утро считаем с 9:30: человек мог ответить на опрос Яна или чек-ин
 // чуть раньше обхода, это тоже «на связи».
 const ANSWER_FROM_MIN = 9 * 60 + 30
 // Опрос Яна, отправленный человеку за это время до обхода, заменяет утреннее
 // сообщение: второе подряд только раздражает.
 const BUSY_MS = 60 * 60 * 1000
+
+// Утренний обход говорит только о личных задачах на день (Ян, 13.11).
+const PERSONAL = { origin: 'personal' }
 
 const mskMinutes = (now) => mskHour(now) * 60 + new Date(now).getUTCMinutes()
 
@@ -103,15 +102,12 @@ export async function morningOwner() {
 export async function offerFor(userId, now = new Date()) {
   const { end } = dayBounds(now)
   const overdue = await prisma.task.findFirst({
-    where: { AND: [VISIBLE, { ownerId: userId, status: 'today' }, metricWhere('overdue', now)] },
+    where: { AND: [VISIBLE, { ...PERSONAL, ownerId: userId, status: 'today' }, metricWhere('overdue', now)] },
     orderBy: { deadline: 'desc' },
     select: TASK_SELECT,
   })
-  const found = overdue ?? await prisma.task.findFirst({
-    where: { AND: [VISIBLE, { ownerId: userId, origin: 'hierarchy', status: 'today', deadline: { gte: end, lt: soon(end) } }] },
-    orderBy: { deadline: 'asc' },
-    select: TASK_SELECT,
-  })
+  // Утром только личные задачи, Иерархию не предлагаем (Ян, 13.11).
+  const found = overdue
   if (!found) return null
   return {
     id: found.id,
@@ -131,9 +127,10 @@ export async function offerFor(userId, now = new Date()) {
 export async function morningFacts(userId, now = new Date()) {
   const { start, end } = dayBounds(now)
   const [today, overdue, hierarchy] = await Promise.all([
-    prisma.task.count({ where: { AND: [VISIBLE, { ownerId: userId, deadline: { gte: start, lt: end } }] } }),
-    prisma.task.count({ where: { AND: [VISIBLE, { ownerId: userId }, metricWhere('overdue', now)] } }),
-    prisma.task.count({ where: { AND: [VISIBLE, { ownerId: userId, origin: 'hierarchy', status: 'today', deadline: { lt: soon(end) } }] } }),
+    prisma.task.count({ where: { AND: [VISIBLE, { ...PERSONAL, ownerId: userId, deadline: { gte: start, lt: end } }] } }),
+    prisma.task.count({ where: { AND: [VISIBLE, { ...PERSONAL, ownerId: userId }, metricWhere('overdue', now)] } }),
+    // Иерархию утром не считаем: Ян просит говорить только о личных задачах.
+    0,
   ])
   return { today, overdue, hierarchy }
 }
@@ -331,7 +328,7 @@ export async function gatherMorning(round, now = new Date()) {
       select: { userId: true, direction: true, text: true, createdAt: true, fileId: true, fileKind: true, fileMime: true, source: true },
     })
     : []
-  const today = { AND: [VISIBLE, { ownerId: { in: ids }, deadline: { gte: start, lt: end } }] }
+  const today = { AND: [VISIBLE, { ...PERSONAL, ownerId: { in: ids }, deadline: { gte: start, lt: end } }] }
   const offerIds = targets.map((t) => t.offeredTaskId).filter(Boolean)
   const [totals, freshs, titles, offered] = await Promise.all([
     ids.length ? prisma.task.groupBy({ by: ['ownerId'], where: today, _count: true }) : [],
@@ -339,10 +336,10 @@ export async function gatherMorning(round, now = new Date()) {
     // (догнанным в 9:55 не засчитываем задачи 9:41–9:55).
     Promise.all(targets.filter((t) => ids.includes(t.userId)).map(async (t) => ({
       ownerId: t.userId,
-      _count: await prisma.task.count({ where: { AND: [VISIBLE, { ownerId: t.userId, deadline: { gte: start, lt: end }, createdAt: { gte: t.sentAt ?? sentAt } }] } }),
+      _count: await prisma.task.count({ where: { AND: [VISIBLE, { ...PERSONAL, ownerId: t.userId, deadline: { gte: start, lt: end }, createdAt: { gte: t.sentAt ?? sentAt } }] } }),
     }))),
     Promise.all(ids.map(async (id) => [id, await prisma.task.findMany({
-      where: { AND: [VISIBLE, { ownerId: id, deadline: { gte: start, lt: end } }] },
+      where: { AND: [VISIBLE, { ...PERSONAL, ownerId: id, deadline: { gte: start, lt: end } }] },
       orderBy: { deadline: 'asc' },
       take: TITLES_IN_REPORT,
       select: { title: true, createdAt: true },

@@ -52,8 +52,11 @@ export function short(text, max = 40) {
 
 /** «балл», «балла», «баллов». */
 export function points(n) {
-  const a = Math.abs(n) % 100
+  const abs = Math.abs(n)
+  // Дробные баллы с 12.11: «2,5 балла», через запятую, не больше двух знаков.
+  if (!Number.isInteger(abs)) return `${n > 0 ? '+' : '−'}${abs.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} балла`
+  const a = abs % 100
   const b = a % 10
   const word = a > 10 && a < 20 ? 'баллов' : b === 1 ? 'балл' : b >= 2 && b <= 4 ? 'балла' : 'баллов'
-  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n)} ${word}`
+  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${abs} ${word}`
 }
